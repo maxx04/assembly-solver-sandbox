@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=FreeCAD Sandbox (Agent-Tests)
+Type=Application
+Exec=/home/maxx/freecad/run-freecad-sandbox.sh %f
+Icon=/home/maxx/freecad/logo-freecad-sandbox.svg
+Terminal=false
+Categories=Graphics;Engineering;
+MimeType=application/x-extension-fcstd;

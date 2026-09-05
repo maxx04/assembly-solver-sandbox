@@ -1,0 +1,708 @@
+<title>Assembly Solve Sequence</title>
+<style>
+  :root {
+    --paper: #eeefe8;
+    --paper-raised: #e3e5da;
+    --paper-line: #cdd0c2;
+    --ink: #23262b;
+    --ink-dim: #5b6067;
+    --line: #b9bcae;
+    --accent: #2b5c8a;
+    --accent-soft: #dbe6ef;
+    --good: #4b7a5e;
+    --good-soft: #dde8df;
+    --critical: #a8462c;
+    --critical-soft: #f1ddd3;
+    --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    --sans: 'Public Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --display: 'Big Shoulders Display', 'Arial Narrow', sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #14181b;
+      --paper-raised: #1b2124;
+      --paper-line: #2c3438;
+      --ink: #e7e6df;
+      --ink-dim: #9aa0a0;
+      --line: #3a4246;
+      --accent: #7bb0dc;
+      --accent-soft: #1f3140;
+      --good: #86bb98;
+      --good-soft: #1f2c22;
+      --critical: #e2916f;
+      --critical-soft: #392620;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #14181b;
+    --paper-raised: #1b2124;
+    --paper-line: #2c3438;
+    --ink: #e7e6df;
+    --ink-dim: #9aa0a0;
+    --line: #3a4246;
+    --accent: #7bb0dc;
+    --accent-soft: #1f3140;
+    --good: #86bb98;
+    --good-soft: #1f2c22;
+    --critical: #e2916f;
+    --critical-soft: #392620;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.55;
+  }
+  .page {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 3.5rem 1.5rem 6rem;
+  }
+
+  /* ---- title block ---- */
+  .titleblock {
+    border-top: 2px solid var(--ink);
+    border-bottom: 1px solid var(--line);
+    padding: 1.5rem 0 1rem;
+    margin-bottom: 2.5rem;
+  }
+  .titleblock h1 {
+    font-family: var(--display);
+    font-weight: 700;
+    font-size: clamp(2.2rem, 5vw, 3.1rem);
+    letter-spacing: 0.01em;
+    text-wrap: balance;
+    margin: 0 0 0.15em;
+    line-height: 0.95;
+  }
+  .titleblock .subtitle {
+    color: var(--ink-dim);
+    font-size: 1.05rem;
+    max-width: 60ch;
+    margin: 0 0 1.1rem;
+  }
+  .meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.75rem;
+    padding-top: 0.9rem;
+    border-top: 1px solid var(--paper-line);
+  }
+  .meta-item .k {
+    display: block;
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: var(--ink-dim);
+    margin-bottom: 0.2em;
+  }
+  .meta-item .v {
+    font-family: var(--mono);
+    font-size: 0.83rem;
+  }
+  .meta-item .v.status-open { color: var(--critical); }
+  .meta-item .v.status-fixed { color: var(--good); }
+
+  /* ---- prose ---- */
+  .intro p, .callout p {
+    max-width: 66ch;
+    font-size: 1.02rem;
+  }
+  .intro code, p code, li code {
+    font-family: var(--mono);
+    font-size: 0.88em;
+    background: var(--paper-raised);
+    border-radius: 3px;
+    padding: 0.08em 0.35em;
+  }
+
+  /* ---- figure sections ---- */
+  .fig-section {
+    margin: 3.2rem 0;
+    padding-top: 2.4rem;
+    border-top: 1px solid var(--paper-line);
+  }
+  .fig-tag {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 0.35em;
+  }
+  .fig-section.critical .fig-tag { color: var(--critical); }
+  .fig-section h2 {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 1.7rem;
+    margin: 0 0 0.6em;
+    letter-spacing: 0.005em;
+  }
+  .fig-section > p {
+    max-width: 66ch;
+    margin: 0 0 1.3rem;
+    color: var(--ink);
+  }
+  figure {
+    margin: 0;
+  }
+  .diagram-frame {
+    background: var(--paper-raised);
+    border: 1px solid var(--paper-line);
+    border-radius: 6px;
+    padding: 1rem 1rem 0.4rem;
+    overflow-x: auto;
+  }
+  .fig-section.critical .diagram-frame {
+    border-color: var(--critical);
+    border-width: 1.5px;
+  }
+  figure svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+  figcaption {
+    font-size: 0.88rem;
+    color: var(--ink-dim);
+    max-width: 66ch;
+    margin: 0.9rem 0 0;
+    padding-bottom: 0.6rem;
+  }
+  figcaption strong { color: var(--ink); font-weight: 600; }
+
+  svg text { font-family: var(--sans); fill: var(--ink); }
+  svg .mono { font-family: var(--mono); }
+  svg .dim { fill: var(--ink-dim); }
+  svg .lbl { font-size: 11.5px; }
+  svg .lbl-sm { font-size: 10.5px; }
+  svg .box-fill { fill: var(--paper); }
+  svg .box-stroke { stroke: var(--ink); }
+  svg .ext-fill { fill: var(--accent-soft); }
+  svg .ext-stroke { stroke: var(--accent); }
+  svg .good-fill { fill: var(--good-soft); }
+  svg .good-stroke { stroke: var(--good); }
+  svg .crit-fill { fill: var(--critical-soft); }
+  svg .crit-stroke { stroke: var(--critical); }
+  svg .arrow-line { stroke: var(--ink); stroke-width: 1.5; fill: none; }
+  svg .arrow-line-return { stroke: var(--ink-dim); stroke-width: 1.3; stroke-dasharray: 3 3; fill: none; }
+  svg .arrow-accent { stroke: var(--accent); stroke-width: 1.6; fill: none; }
+  svg .arrow-good { stroke: var(--good); stroke-width: 1.8; fill: none; }
+  svg .arrow-crit { stroke: var(--critical); stroke-width: 1.8; fill: none; }
+  svg .arrow-ghost { stroke: var(--ink-dim); stroke-width: 1.2; stroke-dasharray: 2 4; fill: none; opacity: 0.6; }
+  svg .tag-pill { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1; }
+  svg .tag-text { fill: var(--accent); font-family: var(--mono); font-size: 10.5px; }
+
+  /* ---- closing callout ---- */
+  .callout {
+    margin-top: 3.2rem;
+    padding: 1.6rem 1.8rem;
+    background: var(--paper-raised);
+    border-left: 3px solid var(--critical);
+    border-radius: 0 6px 6px 0;
+  }
+  .callout h2 {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 1.4rem;
+    margin: 0 0 0.5em;
+  }
+  .qlist {
+    list-style: none;
+    margin: 1rem 0 0;
+    padding: 0;
+    display: grid;
+    gap: 0.9rem;
+  }
+  .qlist li {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.7rem;
+    align-items: baseline;
+  }
+  .qlist .qnum {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    color: var(--critical);
+    border: 1px solid var(--critical);
+    border-radius: 999px;
+    padding: 0.1em 0.55em;
+    white-space: nowrap;
+  }
+  .qlist .qtext strong { display: block; margin-bottom: 0.15em; }
+  .qlist .qtext span { color: var(--ink-dim); font-size: 0.92rem; }
+
+  footer.pagefoot {
+    margin-top: 3rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--paper-line);
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    color: var(--ink-dim);
+    letter-spacing: 0.03em;
+  }
+
+  @media (max-width: 600px) {
+    .meta-row { gap: 1.1rem 1.6rem; }
+  }
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;700&family=Public+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+
+<div class="page">
+
+  <div class="titleblock">
+    <h1>Assembly Solve Sequence</h1>
+    <p class="subtitle">How <code>AssemblyObject::solve()</code> talks to the OndselSolver (MbD) multibody
+      library, and how that call repeats once a flexible sub‑assembly is nested inside another.</p>
+    <div class="meta-row">
+      <div class="meta-item"><span class="k">Scope</span><span class="v">solve() call path · nested flexible AssemblyLink case</span></div>
+      <div class="meta-item"><span class="k">Source</span><span class="v">AssemblyObject.cpp / AssemblyUtils.cpp</span></div>
+      <div class="meta-item"><span class="k">Reachability</span><span class="v status-fixed">fixed 2026‑09‑02</span></div>
+      <div class="meta-item"><span class="k">Propagation</span><span class="v status-open">still open — Fig. 5</span></div>
+    </div>
+  </div>
+
+  <div class="intro">
+    <p>Every <code>Assembly::AssemblyObject</code> is a document object like any other — FreeCAD's recompute
+      engine calls its <code>execute()</code>, which calls <code>solve()</code>. Fig. 1 walks that one call,
+      top to bottom. Three steps inside it fan out into their own mechanism, each pulled out below: how
+      <code>getJoints()</code> reaches into a nested sub‑assembly (Fig. 2), how <code>getGroundedParts()</code>
+      does the same for grounding (Fig. 3), and how <code>canonicalizeForMbD()</code> reconciles the two
+      different pointers a single real part can have (Fig. 4). Fig. 5 is the reason this diagram exists:
+      what actually happens when two of these solves cover the same physical sub‑tree.</p>
+  </div>
+
+  <!-- ============================================================ FIG 1 -->
+  <section class="fig-section">
+    <p class="fig-tag">Fig. 1 — main sequence</p>
+    <h2>One solve() call, one document</h2>
+    <p>Triggered by a recompute on a single <code>AssemblyObject</code>. Three steps here each have their
+      own mechanism, cross‑referenced to the right.</p>
+    <figure>
+      <div class="diagram-frame">
+<svg viewBox="0 0 700 1010" role="img" aria-label="Sequence of AssemblyObject::solve(): from Document::recompute() through execute(), eleven internal steps including fixGroundedParts, getJoints and removeUnconnectedJoints, a call out to the external OndselSolver MbD library, and finally setNewPlacements writing results back.">
+  <defs>
+    <marker id="f1-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="currentColor" />
+    </marker>
+    <marker id="f1-arrow-accent" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="var(--accent)" />
+    </marker>
+  </defs>
+
+  <!-- solve() bracket -->
+  <path d="M 40,150 L 26,150 L 26,908 L 40,908" class="arrow-line" stroke="var(--ink-dim)" stroke-dasharray="1 0" fill="none"/>
+  <text x="16" y="529" class="mono lbl dim" text-anchor="middle" transform="rotate(-90 16 529)">solve()</text>
+
+  <!-- 0: trigger -->
+  <rect x="130" y="12" width="380" height="36" rx="4" class="box-fill" stroke="var(--ink-dim)" stroke-width="1.2" stroke-dasharray="4 3"/>
+  <text x="320" y="35" text-anchor="middle" class="mono lbl dim">Document::recompute()</text>
+  <line x1="320" y1="48" x2="320" y2="74" class="arrow-line" marker-end="url(#f1-arrow)"/>
+
+  <!-- 1: execute -->
+  <rect x="130" y="76" width="380" height="36" rx="4" class="box-fill box-stroke" stroke-width="1.3"/>
+  <text x="320" y="99" text-anchor="middle" class="mono lbl">AssemblyObject::execute()</text>
+  <text x="320" y="126" text-anchor="middle" class="lbl-sm dim">SolveOnRecompute = true</text>
+  <line x1="320" y1="112" x2="320" y2="150" class="arrow-line" marker-end="url(#f1-arrow)"/>
+
+  <!-- internal steps, pitch 74, start y=150 -->
+  <!-- i0 ensureIdentityPlacements -->
+  <rect x="60" y="150" width="380" height="36" rx="4" class="box-fill box-stroke"/>
+  <text x="250" y="173" text-anchor="middle" class="mono lbl">ensureIdentityPlacements()</text>
+  <line x1="250" y1="186" x2="250" y2="224" class="arrow-line" marker-end="url(#f1-arrow)"/>
+
+  <!-- i1 syncGroundedJoints -->
+  <rect x="60" y="224" width="380" height="36" rx="4" class="box-fill box-stroke"/>
+  <text x="250" y="247" text-anchor="middle" class="mono lbl">syncGroundedJoints()</text>
+  <line x1="250" y1="260" x2="250" y2="298" class="arrow-line" marker-end="url(#f1-arrow)"/>
+
+  <!-- i2 rebuildRigidClusters -->
+  <rect x="60" y="298" width="380" height="36" rx="4" class="box-fill box-stroke"/>
+  <text x="250" y="317" text-anchor="middle" class="mono lbl">rebuildRigidClusters()</text>
+  <text x="250" y="330" text-anchor="middle" class="mono lbl-sm dim">+ syncActiveRigidGroupPlacements()</text>
+  <line x1="250" y1="334" x2="250" y2="372" class="arrow-line" marker-end="url(#f1-arrow)"/>
+
+  <!-- i3 fixGroundedParts -> FIG 3 -->
+  <rect x="60" y="372" width="380" height="36" rx="4" class="box-fill box-stroke"/>
+  <text x="250" y="395" text-anchor="middle" class="mono lbl">fixGroundedParts()</text>
+  <line x1="440" y1="390" x2="486" y2="390" class="arrow-accent" marker-end="url(#f1-arrow-accent)"/>
+  <rect x="490" y="374" width="66" height="32" rx="14" class="tag-pill"/>
+  <text x="523" y="394" text-anchor="middle" class="tag-text">FIG. 3</text>
+  <line x1="250" y1="408" x2="250" y2="446" class="arrow-line" marker-end="url(#f1-arrow)"/>
+  <text x="246" y="431" text-anchor="end" class="lbl-sm dim">groundedObjs</text>
+
+  <!-- i4 getJoints -> FIG 2 -->
+  <rect x="60" y="446" width="380" height="36" rx="4" class="box-fill box-stroke"/>
+  <text x="250" y="465" text-anchor="middle" class="mono lbl">getJoints(subJoints=true)</text>
+  <text x="250" y="478" text-anchor="middle" class="lbl-sm dim">verboseLog=true</text>
+  <line x1="440" y1="464" x2="486" y2="464" class="arrow-accent" marker-end="url(#f1-arrow-accent)"/>
+  <rect x="490" y="448" width="66" height="32" rx="14" class="tag-pill"/>
+  <text x="523" y="468" text-anchor="middle" class="tag-text">FIG. 2</text>
+  <line x1="250" y1="482" x2="250" y2="520" class="arrow-line" marker-end="url(#f1-arrow)"/>
+  <text x="246" y="505" text-anchor="end" class="lbl-sm dim">joints[]</text>
+
+  <!-- i5 removeUnconnectedJoints -> FIG 4 -->
+  <rect x="60" y="520" width="380" height="36" rx="4" class="box-fill box-stroke"/>
+  <text x="250" y="539" text-anchor="middle" class="mono lbl">removeUnconnectedJoints()</text>
+  <text x="250" y="552" text-anchor="middle" class="lbl-sm dim">via canonicalizeForMbD()</text>
+  <line x1="440" y1="538" x2="486" y2="538" class="arrow-accent" marker-end="url(#f1-arrow-accent)"/>
+  <rect x="490" y="522" width="66" height="32" rx="14" class="tag-pill"/>
+  <text x="523" y="542" text-anchor="middle" class="tag-text">FIG. 4</text>
+  <line x1="250" y1="556" x2="250" y2="594" class="arrow-line" marker-end="url(#f1-arrow)"/>
+  <text x="246" y="579" text-anchor="end" class="lbl-sm dim">reachable joints</text>
+
+  <!-- i6 jointParts -> FIG 4 -->
+  <rect x="60" y="594" width="380" height="36" rx="4" class="box-fill box-stroke"/>
+  <text x="250" y="613" text-anchor="middle" class="mono lbl">jointParts()</text>
+  <text x="250" y="626" text-anchor="middle" class="lbl-sm dim">getMbDData() per part → objectPartMap</text>
+  <line x1="440" y1="612" x2="486" y2="612" class="arrow-accent" marker-end="url(#f1-arrow-accent)"/>
+  <rect x="490" y="596" width="66" height="32" rx="14" class="tag-pill"/>
+  <text x="523" y="616" text-anchor="middle" class="tag-text">FIG. 4</text>
+  <line x1="250" y1="630" x2="250" y2="668" class="arrow-line" marker-end="url(#f1-arrow)"/>
+  <text x="246" y="653" text-anchor="end" class="lbl-sm dim">ASMT parts + joints</text>
+
+  <!-- i7 runPreDrag - external -->
+  <rect x="40" y="668" width="420" height="46" rx="4" class="ext-fill ext-stroke" stroke-width="1.6" stroke-dasharray="0"/>
+  <rect x="46" y="674" width="408" height="34" rx="3" fill="none" stroke="var(--accent)" stroke-width="0.8"/>
+  <text x="250" y="686" text-anchor="middle" class="mono lbl" fill="var(--accent)">mbdAssembly-&gt;runPreDrag()</text>
+  <text x="250" y="702" text-anchor="middle" class="lbl-sm" fill="var(--accent)">external — OndselSolver (MbD), C++ multibody library</text>
+  <line x1="250" y1="714" x2="250" y2="752" class="arrow-line" marker-end="url(#f1-arrow)"/>
+  <text x="246" y="737" text-anchor="end" class="lbl-sm dim">solved positions</text>
+
+  <!-- i8 setNewPlacements -->
+  <rect x="60" y="752" width="380" height="36" rx="4" class="box-fill box-stroke"/>
+  <text x="250" y="771" text-anchor="middle" class="mono lbl">setNewPlacements()</text>
+  <text x="250" y="784" text-anchor="middle" class="lbl-sm dim">writes obj-&gt;Placement for every objectPartMap key</text>
+  <line x1="250" y1="788" x2="250" y2="826" class="arrow-line" marker-end="url(#f1-arrow)"/>
+
+  <!-- i9 updateRigidPlacementCache + redraw -->
+  <rect x="60" y="826" width="380" height="36" rx="4" class="box-fill box-stroke"/>
+  <text x="250" y="845" text-anchor="middle" class="mono lbl">updateRigidPlacementCache()</text>
+  <text x="250" y="858" text-anchor="middle" class="mono lbl-sm dim">+ redrawJointPlacements()</text>
+  <line x1="250" y1="862" x2="250" y2="900" class="arrow-line" marker-end="url(#f1-arrow)"/>
+
+  <!-- i10 updateSolveStatus -->
+  <rect x="60" y="900" width="380" height="36" rx="4" class="box-fill box-stroke"/>
+  <text x="250" y="923" text-anchor="middle" class="mono lbl">updateSolveStatus()</text>
+
+  <!-- closing note -->
+  <line x1="250" y1="936" x2="250" y2="964" class="arrow-line" marker-end="url(#f1-arrow)"/>
+  <rect x="60" y="966" width="380" height="34" rx="4" fill="none" stroke="var(--critical)" stroke-width="1.2" stroke-dasharray="3 3"/>
+  <text x="250" y="988" text-anchor="middle" class="lbl-sm" fill="var(--critical)">one AssemblyObject instance, one document — see Fig. 5</text>
+</svg>
+      </div>
+      <figcaption><strong>Fig. 1.</strong> The full body of one <code>solve()</code> call. Everything below
+        this figure is one of its steps, seen up close.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ============================================================ FIG 2 -->
+  <section class="fig-section">
+    <p class="fig-tag">Fig. 2 — getJoints(subJoints = true)</p>
+    <h2>Reaching a joint two nesting levels down</h2>
+    <p>A flexible <code>AssemblyLink</code> is not descended into by reading its own (copied) joint list —
+      the recursion steps into the <strong>real</strong>, linked <code>AssemblyObject</code> instance and
+      asks <em>it</em>. A rigid sub‑assembly is never entered; it counts as one solid part.</p>
+    <figure>
+      <div class="diagram-frame">
+<svg viewBox="0 0 660 420" role="img" aria-label="getJoints recursion: GrandTop's AssemblyObject calls Assembly001.getLinkedAssembly() to reach Top's real AssemblyObject, which calls unterAssambly.getLinkedAssembly() to reach Sub's real AssemblyObject. Sub returns its Joint with an empty prefix; Top prepends unterAssambly. and returns to GrandTop, which prepends Assembly001. A rigid sub-assembly branch off Top is not descended.">
+  <defs>
+    <marker id="f2-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="var(--ink)"/>
+    </marker>
+    <marker id="f2-arrow-ret" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="var(--ink-dim)"/>
+    </marker>
+  </defs>
+
+  <!-- GrandTop row -->
+  <rect x="20" y="16" width="220" height="46" rx="4" class="box-fill box-stroke"/>
+  <text x="130" y="36" text-anchor="middle" class="mono lbl">GrandTop#Assembly</text>
+  <text x="130" y="52" text-anchor="middle" class="lbl-sm dim">nestingPrefix = ""</text>
+
+  <!-- down arrow 1 -->
+  <path d="M 90,62 C 70,100 90,120 130,140" class="arrow-line" marker-end="url(#f2-arrow)"/>
+  <text x="60" y="98" class="mono lbl-sm">Assembly001</text>
+  <text x="60" y="111" class="lbl-sm dim">.getLinkedAssembly()</text>
+  <!-- return arrow 1 -->
+  <path d="M 300,140 C 340,110 320,80 260,62" class="arrow-line-return" marker-end="url(#f2-arrow-ret)"/>
+  <text x="345" y="98" class="lbl-sm dim">joints +</text>
+  <text x="345" y="111" class="mono lbl-sm" fill="var(--accent)">"Assembly001."</text>
+
+  <!-- Top row -->
+  <rect x="140" y="142" width="220" height="46" rx="4" class="box-fill box-stroke"/>
+  <text x="250" y="162" text-anchor="middle" class="mono lbl">Top#Assembly</text>
+  <text x="250" y="178" text-anchor="middle" class="lbl-sm dim">nestingPrefix = "Assembly001."</text>
+
+  <!-- rigid branch off Top -->
+  <path d="M 360,165 C 420,160 440,150 448,140" class="arrow-line" stroke-dasharray="2 3" marker-end="url(#f2-arrow)"/>
+  <rect x="452" y="118" width="150" height="42" rx="4" fill="none" stroke="var(--ink-dim)" stroke-width="1.2"/>
+  <text x="527" y="136" text-anchor="middle" class="mono lbl-sm dim">BoxE (rigid link)</text>
+  <text x="527" y="150" text-anchor="middle" class="lbl-sm dim">isRigid() → skipped</text>
+
+  <!-- down arrow 2 -->
+  <path d="M 210,188 C 190,226 210,246 250,266" class="arrow-line" marker-end="url(#f2-arrow)"/>
+  <text x="178" y="224" class="mono lbl-sm">unterAssambly</text>
+  <text x="178" y="237" class="lbl-sm dim">.getLinkedAssembly()</text>
+  <!-- return arrow 2 -->
+  <path d="M 420,266 C 460,236 440,206 380,188" class="arrow-line-return" marker-end="url(#f2-arrow-ret)"/>
+  <text x="465" y="224" class="lbl-sm dim">joints +</text>
+  <text x="465" y="237" class="mono lbl-sm" fill="var(--accent)">"Assembly001.</text>
+  <text x="465" y="249" class="mono lbl-sm" fill="var(--accent)">unterAssambly."</text>
+
+  <!-- Sub row -->
+  <rect x="260" y="268" width="220" height="46" rx="4" class="good-fill good-stroke" stroke-width="1.4"/>
+  <text x="370" y="288" text-anchor="middle" class="mono lbl">Sub#Assembly</text>
+  <text x="370" y="304" text-anchor="middle" class="lbl-sm dim">nestingPrefix = "Assembly001.unterAssambly."</text>
+
+  <!-- joint found -->
+  <line x1="370" y1="314" x2="370" y2="344" class="arrow-line" marker-end="url(#f2-arrow)"/>
+  <rect x="280" y="346" width="180" height="34" rx="4" class="good-fill good-stroke"/>
+  <text x="370" y="368" text-anchor="middle" class="mono lbl">Reference "Joint"</text>
+
+  <!-- merge note at bottom -->
+  <text x="130" y="400" class="lbl-sm dim">jointNestingPrefixMap[Joint] merged up, level by level,</text>
+  <text x="130" y="414" class="lbl-sm dim">into GrandTop's own map — read back by Fig. 4.</text>
+</svg>
+      </div>
+      <figcaption><strong>Fig. 2.</strong> Each level prepends its own <code>AssemblyLink</code> name and
+        hands the joint list up; the prefix is what lets <code>canonicalizeForMbD()</code> (Fig. 4) walk
+        the same path back down later.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ============================================================ FIG 3 -->
+  <section class="fig-section">
+    <p class="fig-tag">Fig. 3 — getGroundedParts()</p>
+    <h2>Grounding didn't reach past one level — until today</h2>
+    <p>A part's <code>Placement.isReadOnly()</code> flag is mirrored down through the copy pipeline, but
+      only reliably <strong>one level</strong>. A part grounded two levels down used to be structurally
+      invisible to the outer solve. The added call closes exactly that gap.</p>
+    <figure>
+      <div class="diagram-frame">
+<svg viewBox="0 0 660 340" role="img" aria-label="Before the 2026-09-02 fix, GrandTop only found grounded parts by checking isReadOnly on its own local mirror Group, which reached one level down at best and never saw Sub's own grounded BoxA. The fix adds a recursive call from GrandTop through Top to Sub's real getGroundedParts, closing the gap.">
+  <defs>
+    <marker id="f3-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="var(--ink)"/>
+    </marker>
+    <marker id="f3-arrow-good" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="var(--good)"/>
+    </marker>
+  </defs>
+
+  <rect x="20" y="18" width="200" height="46" rx="4" class="box-fill box-stroke"/>
+  <text x="120" y="38" text-anchor="middle" class="mono lbl">GrandTop#Assembly</text>
+  <text x="120" y="54" text-anchor="middle" class="lbl-sm dim">getGroundedParts()</text>
+
+  <rect x="230" y="18" width="200" height="46" rx="4" class="box-fill box-stroke"/>
+  <text x="330" y="38" text-anchor="middle" class="mono lbl">Top#Assembly</text>
+  <text x="330" y="54" text-anchor="middle" class="lbl-sm dim">local mirror copy</text>
+
+  <rect x="440" y="18" width="200" height="46" rx="4" class="box-fill box-stroke"/>
+  <text x="540" y="38" text-anchor="middle" class="mono lbl">Sub#Assembly</text>
+  <text x="540" y="54" text-anchor="middle" class="lbl-sm dim">real BoxA, grounded</text>
+
+  <!-- old: readonly flag, one hop, then dies -->
+  <path d="M 220,80 L 430,80" class="arrow-line" marker-end="url(#f3-arrow)"/>
+  <text x="325" y="74" text-anchor="middle" class="lbl-sm dim">Placement.isReadOnly() mirrored — one hop</text>
+  <path d="M 430,100 L 470,100" class="arrow-ghost"/>
+  <text x="500" y="104" class="lbl-sm dim" fill="var(--critical)">✕ never reaches Sub</text>
+
+  <!-- new: recursive real call -->
+  <path d="M 60,64 C 30,140 60,190 200,210" class="arrow-good" marker-end="url(#f3-arrow-good)"/>
+  <path d="M 200,210 C 340,225 420,200 470,64" class="arrow-good" marker-end="url(#f3-arrow-good)"/>
+  <text x="130" y="150" text-anchor="middle" class="mono lbl-sm" fill="var(--good)">getLinkedAssembly()</text>
+  <text x="130" y="163" text-anchor="middle" class="mono lbl-sm" fill="var(--good)">-&gt;getGroundedParts()</text>
+  <rect x="150" y="196" width="220" height="28" rx="14" class="good-fill good-stroke"/>
+  <text x="260" y="215" text-anchor="middle" class="mono lbl-sm" fill="var(--good)">recurses again into Sub</text>
+
+  <!-- result -->
+  <rect x="140" y="250" width="380" height="46" rx="4" class="good-fill good-stroke" stroke-width="1.4"/>
+  <text x="330" y="270" text-anchor="middle" class="mono lbl">groundedSet = { Origin, BoxC, real Sub#BoxA, … }</text>
+  <text x="330" y="286" text-anchor="middle" class="lbl-sm dim">real objects, merged straight into GrandTop's own set</text>
+  <line x1="330" y1="224" x2="330" y2="248" class="arrow-good" marker-end="url(#f3-arrow-good)"/>
+
+  <text x="20" y="330" class="lbl-sm" fill="var(--good)">— added 2026‑09‑02, skipped for isRigid() sub‑assemblies, same shape as Fig. 2 —</text>
+</svg>
+      </div>
+      <figcaption><strong>Fig. 3.</strong> Green is the fix: a real recursive call, not a longer chain of
+        mirrored flags. Confirmed live — GrandTop's grounded set went from 2 entries to 6, including
+        Sub's own grounded part.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ============================================================ FIG 4 -->
+  <section class="fig-section">
+    <p class="fig-tag">Fig. 4 — canonicalizeForMbD()</p>
+    <h2>The same part, two pointers — made one</h2>
+    <p>The copy pipeline keeps a local mirror of <code>BoxC</code> inside GrandTop's own document; the
+      joint machinery in Fig. 2 resolves straight to the real <code>BoxC</code> inside Top's document.
+      Both are legitimate ways to arrive at "BoxC" — but the multibody solver needs exactly one pointer
+      per real part, or it opens two disconnected bodies for it.</p>
+    <figure>
+      <div class="diagram-frame">
+<svg viewBox="0 0 660 400" role="img" aria-label="canonicalizeForMbD walk: starting from pathNames Assembly001, BoxC, the local mirror tree walk through GrandTop's own Group finds pointer alpha, while the real tree walk through Assembly001's getLinkedAssembly finds pointer beta inside Top's document. Both converge on beta as the single objectPartMap key.">
+  <defs>
+    <marker id="f4-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="var(--ink)"/>
+    </marker>
+    <marker id="f4-arrow-good" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="var(--good)"/>
+    </marker>
+  </defs>
+
+  <rect x="180" y="10" width="300" height="34" rx="4" fill="none" stroke="var(--ink-dim)" stroke-width="1.2" stroke-dasharray="3 3"/>
+  <text x="330" y="32" text-anchor="middle" class="mono lbl">pathNames = ["Assembly001", "BoxC"]</text>
+  <line x1="260" y1="44" x2="150" y2="72" class="arrow-line" marker-end="url(#f4-arrow)"/>
+  <line x1="400" y1="44" x2="500" y2="72" class="arrow-line" marker-end="url(#f4-arrow)"/>
+
+  <!-- left: local mirror tree -->
+  <text x="150" y="66" text-anchor="middle" class="lbl-sm dim">findLocalGroupPath()</text>
+  <rect x="40" y="74" width="220" height="36" rx="4" class="box-fill box-stroke"/>
+  <text x="150" y="97" text-anchor="middle" class="mono lbl">GrandTop.Group</text>
+  <line x1="150" y1="110" x2="150" y2="140" class="arrow-line" marker-end="url(#f4-arrow)"/>
+  <rect x="40" y="142" width="220" height="36" rx="4" class="box-fill box-stroke"/>
+  <text x="150" y="165" text-anchor="middle" class="mono lbl">"Assembly001".Group</text>
+  <text x="150" y="122" text-anchor="middle" class="lbl-sm dim">local mirror container</text>
+  <line x1="150" y1="178" x2="150" y2="208" class="arrow-line" marker-end="url(#f4-arrow)"/>
+  <rect x="40" y="210" width="220" height="40" rx="4" class="crit-fill crit-stroke"/>
+  <text x="150" y="230" text-anchor="middle" class="mono lbl" fill="var(--critical)">"BoxC" — pointer α</text>
+  <text x="150" y="244" text-anchor="middle" class="lbl-sm" fill="var(--critical)">local mirror copy</text>
+
+  <!-- right: real tree -->
+  <text x="500" y="66" text-anchor="middle" class="lbl-sm dim">getLinkedAssembly()</text>
+  <rect x="390" y="74" width="220" height="36" rx="4" class="box-fill box-stroke"/>
+  <text x="500" y="97" text-anchor="middle" class="mono lbl">GrandTop → Assembly001</text>
+  <line x1="500" y1="110" x2="500" y2="140" class="arrow-line" marker-end="url(#f4-arrow)"/>
+  <rect x="390" y="142" width="220" height="36" rx="4" class="box-fill box-stroke"/>
+  <text x="500" y="165" text-anchor="middle" class="mono lbl">Top#Assembly (real)</text>
+  <text x="500" y="122" text-anchor="middle" class="lbl-sm dim">a different document</text>
+  <line x1="500" y1="178" x2="500" y2="208" class="arrow-line" marker-end="url(#f4-arrow)"/>
+  <rect x="390" y="210" width="220" height="40" rx="4" class="good-fill good-stroke" stroke-width="1.4"/>
+  <text x="500" y="230" text-anchor="middle" class="mono lbl" fill="var(--good)">"BoxC" — pointer β</text>
+  <text x="500" y="244" text-anchor="middle" class="lbl-sm" fill="var(--good)">the real object</text>
+
+  <!-- converge -->
+  <path d="M 150,250 C 150,290 320,300 320,300" class="arrow-line-return"/>
+  <path d="M 500,250 C 500,290 320,300 320,300" class="arrow-good" marker-end="url(#f4-arrow-good)"/>
+  <rect x="150" y="308" width="340" height="52" rx="4" class="good-fill good-stroke" stroke-width="1.6"/>
+  <text x="320" y="330" text-anchor="middle" class="mono lbl" fill="var(--good)">objectPartMap[β] → one MbD part</text>
+  <text x="320" y="346" text-anchor="middle" class="lbl-sm" fill="var(--good)">α is only ever a lookup step, never the key</text>
+
+  <text x="330" y="385" text-anchor="middle" class="lbl-sm dim">used by getMbDData() (Fig. 1, step 6–7) and by removeUnconnectedJoints() (step 5)</text>
+</svg>
+      </div>
+      <figcaption><strong>Fig. 4.</strong> Whichever route reaches "BoxC" — grounding, a joint reference,
+        a rigid‑cluster representative — this walk sends it to the same key. Before this, α and β each got
+        their own <code>ASMTPart</code>, and a joint on one side could never see a grounding fixed to the
+        other.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ============================================================ FIG 5 -->
+  <section class="fig-section critical">
+    <p class="fig-tag">Fig. 5 — the open problem</p>
+    <h2>Two solves, one real object, no ownership rule</h2>
+    <p>Fig. 1–4 fixed how <em>one</em> solve reaches into nested assemblies. They didn't change how many
+      solves run. <code>Top#Assembly</code> and <code>GrandTop#Assembly</code> are two separate
+      <code>AssemblyObject</code> instances, each with its own <code>mbdAssembly</code> and
+      <code>objectPartMap</code> — and since Fig. 2, <em>both</em> now see the joint living inside
+      <code>Sub</code>. One document recompute calls <code>solve()</code> on both, in sequence, and both
+      are willing to write <code>Sub#BoxB.Placement</code>.</p>
+    <figure>
+      <div class="diagram-frame">
+<svg viewBox="0 0 720 460" role="img" aria-label="Sequence diagram: the single-threaded recompute engine calls solve on Top#Assembly first, which writes a Placement to the shared Sub#BoxB object; it then calls solve on GrandTop#Assembly, whose independently computed solve also writes to the same Sub#BoxB object, landing after Top's write. Neither call is aware of the other, and there is no rule for which one should be allowed to write.">
+  <defs>
+    <marker id="f5-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="var(--ink)"/>
+    </marker>
+    <marker id="f5-arrow-crit" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="var(--critical)"/>
+    </marker>
+  </defs>
+
+  <!-- lifelines -->
+  <text x="90" y="26" text-anchor="middle" class="mono lbl">Recompute engine</text>
+  <text x="90" y="40" text-anchor="middle" class="lbl-sm dim">(one call stack)</text>
+  <line x1="90" y1="48" x2="90" y2="440" class="arrow-line-return"/>
+
+  <text x="320" y="26" text-anchor="middle" class="mono lbl">Top#Assembly</text>
+  <text x="320" y="40" text-anchor="middle" class="lbl-sm dim">its own objectPartMap</text>
+  <line x1="320" y1="48" x2="320" y2="440" class="arrow-line-return"/>
+
+  <text x="550" y="26" text-anchor="middle" class="mono lbl">GrandTop#Assembly</text>
+  <text x="550" y="40" text-anchor="middle" class="lbl-sm dim">its own objectPartMap</text>
+  <line x1="550" y1="48" x2="550" y2="440" class="arrow-line-return"/>
+
+  <rect x="620" y="52" width="90" height="380" rx="3" fill="none" stroke="var(--ink-dim)" stroke-width="1" stroke-dasharray="2 3"/>
+  <text x="665" y="70" text-anchor="middle" class="mono lbl-sm dim">Sub#BoxB</text>
+  <text x="665" y="83" text-anchor="middle" class="lbl-sm dim">one real object,</text>
+  <text x="665" y="95" text-anchor="middle" class="lbl-sm dim">one Placement</text>
+
+  <!-- t1: engine calls Top.solve -->
+  <line x1="90" y1="120" x2="315" y2="120" class="arrow-line" marker-end="url(#f5-arrow)"/>
+  <text x="200" y="114" text-anchor="middle" class="mono lbl-sm">solve()</text>
+
+  <!-- Top computes and writes -->
+  <rect x="300" y="132" width="40" height="60" rx="3" class="box-fill box-stroke"/>
+  <path d="M 340,150 C 500,150 600,155 618,150" class="arrow-line" marker-end="url(#f5-arrow)"/>
+  <text x="480" y="144" text-anchor="middle" class="lbl-sm">write Placement</text>
+  <text x="480" y="166" text-anchor="middle" class="lbl-sm dim">Top's own view of the chain,</text>
+  <text x="480" y="178" text-anchor="middle" class="lbl-sm dim">doesn't include GrandTop's edit</text>
+
+  <!-- t2: engine calls GrandTop.solve, later -->
+  <line x1="90" y1="260" x2="545" y2="260" class="arrow-line" marker-end="url(#f5-arrow)"/>
+  <text x="320" y="254" text-anchor="middle" class="mono lbl-sm">solve()  —  later in the same recompute</text>
+
+  <!-- GrandTop computes and writes -->
+  <rect x="530" y="272" width="40" height="80" rx="3" class="crit-fill crit-stroke"/>
+  <path d="M 570,300 C 600,300 615,296 618,290" class="arrow-crit" marker-end="url(#f5-arrow-crit)"/>
+  <text x="600" y="280" text-anchor="middle" class="lbl-sm" fill="var(--critical)">write Placement</text>
+  <text x="330" y="330" text-anchor="middle" class="lbl-sm dim">GrandTop's combined view now reaches Sub's joint too (Fig. 1–4) —</text>
+  <text x="330" y="343" text-anchor="middle" class="lbl-sm dim">but arrives independently computed, after Top's write, unaware of it</text>
+
+  <!-- confirmed observation -->
+  <rect x="70" y="378" width="560" height="66" rx="4" class="crit-fill crit-stroke" stroke-width="1.4"/>
+  <text x="90" y="398" class="lbl-sm" fill="var(--critical)">Confirmed 2026‑09‑02 — 3‑box repro: moving GrandTop's own BoxB +20mm and recomputing left</text>
+  <text x="90" y="412" class="lbl-sm" fill="var(--critical)">Sub's real BoxB.Placement at its original (51.337, 0, 0) throughout. Both instances CAN write</text>
+  <text x="90" y="426" class="lbl-sm" fill="var(--critical)">the same real object; nothing decides which one's result is the one that should stick.</text>
+</svg>
+      </div>
+      <figcaption><strong>Fig. 5.</strong> The call order (Top, then GrandTop) comes from FreeCAD's normal
+        recompute. <strong>Confirmed 2026‑09‑03</strong> by reading the binding, not just the log:
+        <code>assembly.recompute(True)</code> — what the Z shortcut and every explicit solve in this
+        codebase calls — resolves to <code>DocumentObjectPy::recompute()</code> →
+        <code>DocumentObject::recomputeFeature()</code> → <code>Document::_recomputeFeature()</code>,
+        entirely synchronous on the calling thread. FreeCAD does have a real background recompute worker
+        (<code>Application::recomputeWorker()</code>, on by default), but it's only reached through
+        <code>Gui::Command</code>'s "Refresh document" action — a separate, GUI‑toolbar‑only path this
+        codebase's own solve trigger never takes. The problem here is ownership, not concurrency: no rule
+        says which of two solves covering the same sub‑tree gets to win.</figcaption>
+    </figure>
+  </section>
+
+  <div class="callout">
+    <h2>Before the next fix</h2>
+    <p>Fig. 5 is the actual shape of Befund 3. A real fix means deciding who owns a shared sub‑tree's
+      solve — which turns on two things neither of us has pinned down yet:</p>
+    <ul class="qlist">
+      <li>
+        <span class="qnum">1</span>
+        <span class="qtext"><strong>Sequential, or genuinely concurrent?</strong>
+          <span>Fig. 5 draws one call stack because that's what the log shows — Top finishes before
+          GrandTop starts, every time. If that's reliably true, this is an ordering problem. If solves
+          can ever overlap across documents, it's a locking problem too, and needs a different fix.</span>
+        </span>
+      </li>
+      <li>
+        <span class="qnum">2</span>
+        <span class="qtext"><strong>Outermost wins, or innermost wins?</strong>
+          <span>Either the outermost assembly should be the one true solve and inner levels should just
+          take its result (top‑down), or the level the user is actually editing should solve and hand its
+          result outward (bottom‑up). Fig. 5 shows neither happening reliably today.</span>
+        </span>
+      </li>
+    </ul>
+  </div>
+
+  <footer class="pagefoot">assembly-architecture-overview.md · solver-root-cause-fix · 2026-09-02</footer>
+</div>

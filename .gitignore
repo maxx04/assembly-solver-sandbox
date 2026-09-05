@@ -1,0 +1,30 @@
+# Eigene .gitignore fuer diese Sandbox - ersetzt die per Sparse-Checkout automatisch
+# mitgekommene FreeCAD-Upstream-.gitignore (die u.a. /.vscode/ pauschal ausschloss,
+# obwohl VS-Code-Tasks/Settings hier bewusst mitversioniert werden sollen - siehe
+# .vscode/tasks.json "sandboxfreecad"). Deckt nur ab, was in DIESEM Sparse-Checkout
+# (src/Mod/Assembly, src/3rdParty/OndselSolver) und den eigenen Sandbox-Tools
+# (standalone-check/, patches/, update-sandbox.sh) tatsaechlich anfallen kann - nicht
+# den riesigen Rest des FreeCAD-Monorepos (Mod/, doc/, contrib/ etc.), den es hier
+# gar nicht gibt.
+
+# Build-Ausgaben
+build/
+standalone-check/build/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+Makefile
+
+# Compiler-/Editor-Artefakte
+*.o
+*.obj
+*.pyc
+__pycache__/
+*.orig
+*~
+*.clangd
+.DS_Store
+
+# Logs von update-sandbox.sh (falls spaeter analog zu FCProjects update-logs/ angelegt)
+patches/update-logs/

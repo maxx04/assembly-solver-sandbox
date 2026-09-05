@@ -1,0 +1,271 @@
+diff --git a/src/Mod/Assembly/App/AssemblyUtils.cpp b/src/Mod/Assembly/App/AssemblyUtils.cpp
+index efc921c067..c92662c583 100644
+--- a/src/Mod/Assembly/App/AssemblyUtils.cpp
++++ b/src/Mod/Assembly/App/AssemblyUtils.cpp
+@@ -674,14 +674,45 @@ App::DocumentObject* getMovingPartFromSel(
+ 
+     bool assemblyPassed = false;
+ 
++    // FCPROJECT-DEBUG (temporaer, Befund-3-Live-Diagnose 2026-09-03): zeigt jeden Schritt des
++    // Namens-Walks - wieder entfernen, sobald der Drag-Pfad nachvollzogen ist.
++    Base::Console().log(
++        "FCPROJECT-DEBUG getMovingPartFromSel: assemblyObject='%s', selRoot='%s', sub='%s', "
++        "names=[%s]\n",
++        assemblyObject ? assemblyObject->getFullName().c_str() : "<null>",
++        obj->getFullName().c_str(),
++        sub.c_str(),
++        [&names]() {
++            std::string joined;
++            for (const auto& n : names) {
++                if (!joined.empty()) {
++                    joined += ", ";
++                }
++                joined += n;
++            }
++            return joined;
++        }()
++            .c_str()
++    );
++
+     for (const auto& objName : names) {
+         obj = doc->getObject(objName.c_str());
++        Base::Console().log(
++            "FCPROJECT-DEBUG   step name='%s' in doc='%s' -> obj='%s'\n",
++            objName.c_str(),
++            doc->getName(),
++            obj ? obj->getFullName().c_str() : "<not found>"
++        );
+         if (!obj) {
+             continue;
+         }
+ 
+         if (obj->isLink()) {  // update the document if necessary for next object
+             doc = obj->getLinkedObject()->getDocument();
++            Base::Console().log(
++                "FCPROJECT-DEBUG     isLink() -> doc switched to '%s'\n",
++                doc->getName()
++            );
+         }
+ 
+         if (obj == assemblyObject) {
+@@ -705,12 +736,42 @@ App::DocumentObject* getMovingPartFromSel(
+         if (obj->isDerivedFrom<Assembly::AssemblyLink>()) {
+             const auto* pRigid = obj->getPropertyByName<App::PropertyBool>("Rigid");
+             if (pRigid && !pRigid->getValue()) {
++                // FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix,
++                // 2026-09-03, live durch Nutzer-Maus-Drag aufgedeckt): derselbe Fehler wie in
++                // resolveJointReference() (siehe dortiger Kommentar) - Assembly::AssemblyLink
++                // erbt von App::Part, NICHT von App::Link, der obj->isLink()-Zweig weiter oben
++                // schaltet 'doc' fuer eine verschachtelte FLEXIBLE AssemblyLink deshalb NIE um.
++                // Ohne diesen Fix sucht der naechste Namens-Schritt des Walks weiterhin im
++                // AEUSSEREN Dokument statt im echten, verlinkten - liefert entweder nullptr
++                // (Klick/Zug bewegt gar nichts) oder trifft zufaellig eine gleichnamige lokale
++                // Spiegel-Kopie (Klick/Zug bewegt das FALSCHE Objekt, keine Joint-Einschraenkung
++                // greift - beobachtet als frei in jede Richtung ziehbare Box, 2 Ebenen tief
++                // verschachtelt).
++                if (auto* asmLink = freecad_cast<Assembly::AssemblyLink*>(obj)) {
++                    if (auto* linkedAssembly = asmLink->getLinkedAssembly()) {
++                        doc = linkedAssembly->getDocument();
++                        Base::Console().log(
++                            "FCPROJECT-DEBUG     flexible AssemblyLink -> doc switched to '%s'\n",
++                            doc->getName()
++                        );
++                    }
++                    else {
++                        Base::Console().log(
++                            "FCPROJECT-DEBUG     flexible AssemblyLink but getLinkedAssembly()==null!\n"
++                        );
++                    }
++                }
+                 continue;
+             }
+         }
+ 
++        Base::Console().log(
++            "FCPROJECT-DEBUG   -> RETURN '%s'\n",
++            obj->getFullName().c_str()
++        );
+         return obj;
+     }
++    Base::Console().log("FCPROJECT-DEBUG   -> RETURN nullptr\n");
+     return nullptr;
+ }
+ 
+@@ -733,6 +794,128 @@ App::DocumentObject* getMovingPartFromRef(App::DocumentObject* joint, const char
+     return getMovingPartFromRef(prop);
+ }
+ 
++// FCPROJECT-PATCH (Teilschritt 2 "adressieren statt kopieren", solver-root-cause-fix): siehe
++// ausfuehrliche Erklaerung am Deklarationsort in AssemblyUtils.h. Rein diagnostisch/
++// adressierungsbewusst, aendert fuer sich genommen nichts am Solver-Verhalten - genutzt von
++// AssemblyObject::resolvePartForMbD().
++ResolvedJointRef resolveJointReference(
++    const AssemblyObject* solvingAssembly,
++    App::DocumentObject* joint,
++    const char* pName,
++    const std::string& nestingPrefix
++)
++{
++    if (!solvingAssembly || !joint || !pName) {
++        return {};
++    }
++
++    const auto* prop = joint->getPropertyByName<App::PropertyXLinkSub>(pName);
++    if (!prop) {
++        return {};
++    }
++
++    App::DocumentObject* refObj = prop->getValue();
++    if (!refObj) {
++        return {};
++    }
++
++    const std::vector<std::string> subs = prop->getSubValues();
++    const std::string localSub = subs.empty() ? std::string() : subs[0];
++
++    // Full address, constructed so that it already starts "inside" solvingAssembly - see the
++    // header comment for why no assemblyPassed-style gate is needed here, unlike
++    // getMovingPartFromSel().
++    std::string fullAddress = nestingPrefix + refObj->getNameInDocument();
++    if (!localSub.empty()) {
++        fullAddress += "." + localSub;
++    }
++
++    const auto names = Base::Tools::splitSubName(fullAddress);
++    if (names.empty()) {
++        return {};
++    }
++
++    App::Document* doc = solvingAssembly->getDocument();
++    if (!doc) {
++        return {};
++    }
++
++    for (size_t i = 0; i < names.size(); ++i) {
++        const std::string& objName = names[i];
++        if (objName.empty()) {
++            // Trailing empty segment from a trailing '.' (e.g. an empty element name) - nothing
++            // left to resolve as an object.
++            break;
++        }
++
++        App::DocumentObject* obj = doc->getObject(objName.c_str());
++        if (!obj) {
++            // Defensive: unlike getMovingPartFromSel() (which silently skips an unresolved
++            // segment and keeps walking), resolveJointReference() must never guess - a segment
++            // that cannot be found means the nestingPrefix/reference combination does not
++            // actually address anything, and the caller falls back to getMovingPartFromRef().
++            return {};
++        }
++
++        if (obj->isLink()) {
++            // Cross-document boundary (e.g. a PDM-style App::Link to a part's own .FCStd file) -
++            // subsequent segments must be looked up in the linked document.
++            if (auto* linkedObj = obj->getLinkedObject()) {
++                doc = linkedObj->getDocument();
++            }
++        }
++
++        // FCPROJECT-PATCH (Root-Cause-Fix "Befund 3", solver-root-cause-fix, siehe
++        // patches/bugreport-nested-flex-placement-divergence/Questions.md): Assembly::AssemblyLink
++        // erbt von App::Part, NICHT von App::Link - der obj->isLink()-Zweig oben (kopiert aus dem
++        // bestehenden Vorbild getMovingPartFromSel(), das denselben Fehler traegt) greift daher
++        // fuer eine verschachtelte AssemblyLink NIE, und 'doc' bleibt faelschlich beim
++        // AUFRUFENDEN Dokument stehen. Ohne diesen Zweig findet der naechste Pfadabschnitt (z.B.
++        // "unterAssembly" oder das eigentliche Zielteil) ein GLEICHNAMIGES Objekt im FALSCHEN,
++        // AEUSSEREN Dokument (die vom alten Kopier-Mechanismus dort gespiegelte Kopie) statt im
++        // tatsaechlich verlinkten, tiefer liegenden Dokument - genau das war die Root Cause hinter
++        // Befund 3 (mehrere Verschachtelungsebenen loesen unabhaengig und liefern dauerhaft
++        // widerspruechliche Placement-Werte fuer dasselbe logische Teil).
++        if (auto* assemblyLink = freecad_cast<Assembly::AssemblyLink*>(obj)) {
++            if (auto* linkedAssembly = assemblyLink->getLinkedAssembly()) {
++                doc = linkedAssembly->getDocument();
++            }
++        }
++
++        if (obj->isDerivedFrom<App::DocumentObjectGroup>()) {
++            continue;  // we ignore groups, same as getMovingPartFromSel().
++        }
++
++        if (obj->isLinkGroup()) {
++            continue;
++        }
++
++        // We ignore dynamic (flexible) sub-assemblies - transparently walk through them, exactly
++        // like getMovingPartFromSel() does.
++        if (obj->isDerivedFrom<Assembly::AssemblyLink>()) {
++            const auto* pRigid = obj->getPropertyByName<App::PropertyBool>("Rigid");
++            if (pRigid && !pRigid->getValue()) {
++                continue;
++            }
++        }
++
++        // Found the actual moving part - whatever names are left over becomes the resolved
++        // sub-path (the piece of information getMovingPartFromSel() does not need to report, but
++        // that a solver-identity fix needs).
++        ResolvedJointRef result;
++        result.obj = obj;
++        for (size_t j = i + 1; j < names.size(); ++j) {
++            if (!result.subPath.empty()) {
++                result.subPath += ".";
++            }
++            result.subPath += names[j];
++        }
++        return result;
++    }
++
++    return {};
++}
++
+ void syncPlacements(App::DocumentObject* src, App::DocumentObject* to)
+ {
+     auto* plcPropSource = dynamic_cast<App::PropertyPlacement*>(src->getPropertyByName("Placement"));
+diff --git a/src/Mod/Assembly/App/AssemblyUtils.h b/src/Mod/Assembly/App/AssemblyUtils.h
+index bd6eba0ee5..85498065a8 100644
+--- a/src/Mod/Assembly/App/AssemblyUtils.h
++++ b/src/Mod/Assembly/App/AssemblyUtils.h
+@@ -182,6 +182,44 @@ AssemblyExport App::DocumentObject* getMovingPartFromSel(
+ );
+ AssemblyExport App::DocumentObject* getMovingPartFromRef(const App::PropertyXLinkSub* prop);
+ AssemblyExport App::DocumentObject* getMovingPartFromRef(App::DocumentObject* joint, const char* pName);
++
++// FCPROJECT-PATCH (Teilschritt 2 "adressieren statt kopieren", solver-root-cause-fix, siehe
++// patches/assembly-architecture-overview.md, Abschnitt "2. Wiederverwendung von
++// getMovingPartFromSel()"): rein diagnostische/adressierungsbewusste Erweiterung, aendert fuer
++// sich genommen nichts am Solver-Verhalten - genutzt von AssemblyObject::resolvePartForMbD().
++//
++// ResolvedJointRef ist das Ergebnis, ein Reference1/Reference2 einer (ggf. bereits mehrfach
++// verschachtelten) Joint-Referenz nicht nur bis zum blossen Top-Level-Objekt aufzuloesen (wie
++// getMovingPartFromRef()), sondern - analog zu getMovingPartFromSel()s Segment-fuer-Segment-Walk,
++// der transparent durch flexible AssemblyLink-Zwischenstufen hindurchlaeuft - bis zum tatsaechlich
++// individuellen Teil samt des dabei noch nicht konsumierten Rest-Sub-Pfads.
++struct ResolvedJointRef
++{
++    App::DocumentObject* obj = nullptr;
++    std::string subPath;
++};
++
++// Loest Reference1/Reference2 (die pName-Property, ein App::PropertyXLinkSub) des uebergebenen
++// Joint-Objekts auf - relativ zu solvingAssembly, unter der Annahme, dass 'joint' unter dem Pfad
++// 'nestingPrefix' (eine Punkt-getrennte Kette von AssemblyLink-Namen, jeweils mit
++// abschliessendem Punkt, z.B. "Assembly001.unterAssembly.") innerhalb von solvingAssembly liegt -
++// dieser Pfad wird VOR dem eigentlichen Objektnamen der Referenz eingefuegt, sodass der
++// entstehende Adress-String bereits relativ "innerhalb" von solvingAssembly beginnt (anders als
++// getMovingPartFromSel(), das einen kompletten, ab Dokumentwurzel beginnenden Pfad bekommt und
++// deshalb ein zusaetzliches assemblyPassed-Gate braucht - hier nicht noetig, weil nestingPrefix so
++// konstruiert wird, dass der Walk schon "dahinter" beginnt).
++//
++// Liefert bei jedem Fehler (nullptr-Parameter, leere/fehlende Referenz, ein Pfadsegment laesst
++// sich nicht als Dokumentobjekt in solvingAssembly finden) ein leeres ResolvedJointRef{} zurueck -
++// bewusst defensiv, der Aufrufer (resolvePartForMbD()) faellt in diesem Fall auf die alte
++// getMovingPartFromRef() zurueck.
++AssemblyExport ResolvedJointRef resolveJointReference(
++    const AssemblyObject* solvingAssembly,
++    App::DocumentObject* joint,
++    const char* pName,
++    const std::string& nestingPrefix
++);
++
+ AssemblyExport std::vector<std::string> getSubAsList(const App::PropertyXLinkSub* prop);
+ AssemblyExport std::vector<std::string> getSubAsList(
+     const App::DocumentObject* joint,

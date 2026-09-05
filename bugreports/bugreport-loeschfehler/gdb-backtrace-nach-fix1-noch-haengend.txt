@@ -1,0 +1,391 @@
+[New LWP 10969]
+[New LWP 10968]
+[New LWP 10967]
+[New LWP 10966]
+[New LWP 10965]
+[New LWP 10964]
+[New LWP 10963]
+[New LWP 10962]
+[New LWP 10961]
+[New LWP 10960]
+[New LWP 10959]
+[New LWP 10947]
+[New LWP 10946]
+[New LWP 10944]
+[New LWP 10943]
+[New LWP 10942]
+[New LWP 10941]
+[New LWP 10929]
+[New LWP 10928]
+[New LWP 10927]
+[New LWP 10926]
+[New LWP 10925]
+[New LWP 10923]
+[New LWP 10922]
+[New LWP 10921]
+[New LWP 10920]
+[New LWP 10919]
+[New LWP 10918]
+
+This GDB supports auto-downloading debuginfo from the following URLs:
+  <https://debuginfod.ubuntu.com>
+Enable debuginfod for this session? (y or [n]) [answered N; input not from terminal]
+Debuginfod has been disabled.
+To make this setting permanent, add 'set debuginfod enabled off' to .gdbinit.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+0x0000702e264a7c50 in ?? () from /lib/x86_64-linux-gnu/libCoin.so.80c
+
+Thread 29 (Thread 0x702e1fabc6c0 (LWP 10918) "FreeCAD"):
+#0  0x0000702e26c98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x5a1bf2aea380) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x5a1bf2aea380) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a1bf2aea380, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x0000702e26c9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x5a1bf2aea2b0, cond=0x5a1bf2aea358) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x5a1bf2aea358, mutex=0x5a1bf2aea2b0) at ./nptl/pthread_cond_wait.c:627
+#5  0x0000702e2a138343 in App::Application::recomputeWorker() () at /home/maxx/freecad/install/lib/libFreeCADApp.so
+#6  0x0000702e270ecdb4 in ??? () at /lib/x86_64-linux-gnu/libstdc++.so.6
+#7  0x0000702e26c9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#8  0x0000702e26d29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 28 (Thread 0x702e1ed606c0 (LWP 10919) "QDBusConnection"):
+#0  0x0000702e26d1b5fd in __GI___poll (fds=0x702e180169a0, nfds=4, timeout=-1) at ../sysdeps/unix/sysv/linux/poll.c:29
+#1  0x0000702e255738ce in ??? () at /lib/x86_64-linux-gnu/libglib-2.0.so.0
+#2  0x0000702e25513a23 in g_main_context_iteration () at /lib/x86_64-linux-gnu/libglib-2.0.so.0
+#3  0x0000702e278046da in QEventDispatcherGlib::processEvents(QFlags<QEventLoop::ProcessEventsFlag>) () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Core.so.6
+#4  0x0000702e27569023 in QEventLoop::exec(QFlags<QEventLoop::ProcessEventsFlag>) () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Core.so.6
+#5  0x0000702e2765d0dc in QThread::exec() () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Core.so.6
+#6  0x0000702e26b6cfda in ??? () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6DBus.so.6
+#7  0x0000702e276f270d in ??? () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Core.so.6
+#8  0x0000702e26c9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#9  0x0000702e26d29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 27 (Thread 0x702e1e55f6c0 (LWP 10920) "QXcbEventQueue"):
+#0  0x0000702e26d1b5fd in __GI___poll (fds=0x702e1e55e5b8, nfds=1, timeout=-1) at ../sysdeps/unix/sysv/linux/poll.c:29
+#1  0x0000702e26e3a8ca in ??? () at /lib/x86_64-linux-gnu/libxcb.so.1
+#2  0x0000702e26e3c28c in xcb_wait_for_event () at /lib/x86_64-linux-gnu/libxcb.so.1
+#3  0x0000702e1ee21270 in ??? () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6XcbQpa.so.6
+#4  0x0000702e276f270d in ??? () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Core.so.6
+#5  0x0000702e26c9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#6  0x0000702e26d29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 26 (Thread 0x702e17fff6c0 (LWP 10921) "pool-spawner"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x0000702e2556d52d in g_cond_wait () at /lib/x86_64-linux-gnu/libglib-2.0.so.0
+#2  0x0000702e254de58b in ??? () at /lib/x86_64-linux-gnu/libglib-2.0.so.0
+#3  0x0000702e25543c43 in ??? () at /lib/x86_64-linux-gnu/libglib-2.0.so.0
+#4  0x0000702e25542e62 in ??? () at /lib/x86_64-linux-gnu/libglib-2.0.so.0
+#5  0x0000702e26c9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#6  0x0000702e26d29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 25 (Thread 0x702e177fe6c0 (LWP 10922) "gmain"):
+#0  0x0000702e26d1b5fd in __GI___poll (fds=0x5a1bf2daac30, nfds=1, timeout=-1) at ../sysdeps/unix/sysv/linux/poll.c:29
+#1  0x0000702e255738ce in ??? () at /lib/x86_64-linux-gnu/libglib-2.0.so.0
+#2  0x0000702e25513a23 in g_main_context_iteration () at /lib/x86_64-linux-gnu/libglib-2.0.so.0
+#3  0x0000702e25513a79 in ??? () at /lib/x86_64-linux-gnu/libglib-2.0.so.0
+#4  0x0000702e25542e62 in ??? () at /lib/x86_64-linux-gnu/libglib-2.0.so.0
+#5  0x0000702e26c9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#6  0x0000702e26d29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 24 (Thread 0x702e16ffd6c0 (LWP 10923) "gdbus"):
+#0  0x0000702e26d1b5fd in __GI___poll (fds=0x702e08000b90, nfds=2, timeout=-1) at ../sysdeps/unix/sysv/linux/poll.c:29
+#1  0x0000702e255738ce in ??? () at /lib/x86_64-linux-gnu/libglib-2.0.so.0
+#2  0x0000702e25514f47 in g_main_loop_run () at /lib/x86_64-linux-gnu/libglib-2.0.so.0
+#3  0x0000702e1d16d582 in ??? () at /lib/x86_64-linux-gnu/libgio-2.0.so.0
+#4  0x0000702e25542e62 in ??? () at /lib/x86_64-linux-gnu/libglib-2.0.so.0
+#5  0x0000702e26c9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#6  0x0000702e26d29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 23 (Thread 0x702e167fc6c0 (LWP 10925) "FreeCAD"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x0000702e2556d52d in g_cond_wait () at /lib/x86_64-linux-gnu/libglib-2.0.so.0
+#2  0x0000702e254de58b in ??? () at /lib/x86_64-linux-gnu/libglib-2.0.so.0
+#3  0x0000702e254de5ec in g_async_queue_pop () at /lib/x86_64-linux-gnu/libglib-2.0.so.0
+#4  0x0000702e1ced40fb in ??? () at /lib/x86_64-linux-gnu/libpangoft2-1.0.so.0
+#5  0x0000702e25542e62 in ??? () at /lib/x86_64-linux-gnu/libglib-2.0.so.0
+#6  0x0000702e26c9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x0000702e26d29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 22 (Thread 0x702e15e0c6c0 (LWP 10926) "FreeCAD:disk$0"):
+#0  0x0000702e26c98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x5a1bf2c646a8) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x5a1bf2c646a8) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a1bf2c646a8, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x0000702e26c9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x5a1bf2c64650, cond=0x5a1bf2c64680) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x5a1bf2c64680, mutex=0x5a1bf2c64650) at ./nptl/pthread_cond_wait.c:627
+#5  0x0000702e01999edd in ??? () at /lib/x86_64-linux-gnu/libgallium-25.2.8-0ubuntu0.24.04.2.so
+#6  0x0000702e01965fbb in ??? () at /lib/x86_64-linux-gnu/libgallium-25.2.8-0ubuntu0.24.04.2.so
+#7  0x0000702e01999e0c in ??? () at /lib/x86_64-linux-gnu/libgallium-25.2.8-0ubuntu0.24.04.2.so
+#8  0x0000702e26c9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#9  0x0000702e26d29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 21 (Thread 0x702e1560b6c0 (LWP 10927) "FreeCAD:sh0"):
+#0  0x0000702e26c98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x5a1bf31d4c58) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x5a1bf31d4c58) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a1bf31d4c58, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x0000702e26c9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x5a1bf31d4c00, cond=0x5a1bf31d4c30) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x5a1bf31d4c30, mutex=0x5a1bf31d4c00) at ./nptl/pthread_cond_wait.c:627
+#5  0x0000702e01999edd in ??? () at /lib/x86_64-linux-gnu/libgallium-25.2.8-0ubuntu0.24.04.2.so
+#6  0x0000702e01965fbb in ??? () at /lib/x86_64-linux-gnu/libgallium-25.2.8-0ubuntu0.24.04.2.so
+#7  0x0000702e01999e0c in ??? () at /lib/x86_64-linux-gnu/libgallium-25.2.8-0ubuntu0.24.04.2.so
+#8  0x0000702e26c9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#9  0x0000702e26d29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 20 (Thread 0x702e14e0a6c0 (LWP 10928) "FreeCA:traceq0"):
+#0  0x0000702e26c98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x5a1bf303a3b0) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x5a1bf303a3b0) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a1bf303a3b0, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x0000702e26c9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x5a1bf303a358, cond=0x5a1bf303a388) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x5a1bf303a388, mutex=0x5a1bf303a358) at ./nptl/pthread_cond_wait.c:627
+#5  0x0000702e01999edd in ??? () at /lib/x86_64-linux-gnu/libgallium-25.2.8-0ubuntu0.24.04.2.so
+#6  0x0000702e01965fbb in ??? () at /lib/x86_64-linux-gnu/libgallium-25.2.8-0ubuntu0.24.04.2.so
+#7  0x0000702e01999e0c in ??? () at /lib/x86_64-linux-gnu/libgallium-25.2.8-0ubuntu0.24.04.2.so
+#8  0x0000702e26c9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#9  0x0000702e26d29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 19 (Thread 0x702e013ff6c0 (LWP 10929) "FreeCAD:gdrv0"):
+#0  0x0000702e26c98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x5a1bf2f8d7e8) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x5a1bf2f8d7e8) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a1bf2f8d7e8, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x0000702e26c9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x5a1bf2f8d790, cond=0x5a1bf2f8d7c0) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x5a1bf2f8d7c0, mutex=0x5a1bf2f8d790) at ./nptl/pthread_cond_wait.c:627
+#5  0x0000702e01999edd in ??? () at /lib/x86_64-linux-gnu/libgallium-25.2.8-0ubuntu0.24.04.2.so
+#6  0x0000702e01965fbb in ??? () at /lib/x86_64-linux-gnu/libgallium-25.2.8-0ubuntu0.24.04.2.so
+#7  0x0000702e01999e0c in ??? () at /lib/x86_64-linux-gnu/libgallium-25.2.8-0ubuntu0.24.04.2.so
+#8  0x0000702e26c9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#9  0x0000702e26d29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 18 (Thread 0x702ddb7fe6c0 (LWP 10941) "FreeCA:traceq0"):
+#0  0x0000702e26c98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x5a1bf5ff5410) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x5a1bf5ff5410) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a1bf5ff5410, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x0000702e26c9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x5a1bf5ff53b8, cond=0x5a1bf5ff53e8) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x5a1bf5ff53e8, mutex=0x5a1bf5ff53b8) at ./nptl/pthread_cond_wait.c:627
+#5  0x0000702e01999edd in ??? () at /lib/x86_64-linux-gnu/libgallium-25.2.8-0ubuntu0.24.04.2.so
+#6  0x0000702e01965fbb in ??? () at /lib/x86_64-linux-gnu/libgallium-25.2.8-0ubuntu0.24.04.2.so
+#7  0x0000702e01999e0c in ??? () at /lib/x86_64-linux-gnu/libgallium-25.2.8-0ubuntu0.24.04.2.so
+#8  0x0000702e26c9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#9  0x0000702e26d29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 17 (Thread 0x702dae3ff6c0 (LWP 10942) "FreeCAD:gdrv0"):
+#0  0x0000702e26c98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x5a1bf6003178) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x5a1bf6003178) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a1bf6003178, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x0000702e26c9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x5a1bf6003120, cond=0x5a1bf6003150) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x5a1bf6003150, mutex=0x5a1bf6003120) at ./nptl/pthread_cond_wait.c:627
+#5  0x0000702e01999edd in ??? () at /lib/x86_64-linux-gnu/libgallium-25.2.8-0ubuntu0.24.04.2.so
+#6  0x0000702e01965fbb in ??? () at /lib/x86_64-linux-gnu/libgallium-25.2.8-0ubuntu0.24.04.2.so
+#7  0x0000702e01999e0c in ??? () at /lib/x86_64-linux-gnu/libgallium-25.2.8-0ubuntu0.24.04.2.so
+#8  0x0000702e26c9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#9  0x0000702e26d29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 16 (Thread 0x702dadbfe6c0 (LWP 10943) "FreeCA:traceq0"):
+#0  0x0000702e26c98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x5a1bf62407a0) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x5a1bf62407a0) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a1bf62407a0, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x0000702e26c9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x5a1bf6240748, cond=0x5a1bf6240778) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x5a1bf6240778, mutex=0x5a1bf6240748) at ./nptl/pthread_cond_wait.c:627
+#5  0x0000702e01999edd in ??? () at /lib/x86_64-linux-gnu/libgallium-25.2.8-0ubuntu0.24.04.2.so
+#6  0x0000702e01965fbb in ??? () at /lib/x86_64-linux-gnu/libgallium-25.2.8-0ubuntu0.24.04.2.so
+#7  0x0000702e01999e0c in ??? () at /lib/x86_64-linux-gnu/libgallium-25.2.8-0ubuntu0.24.04.2.so
+#8  0x0000702e26c9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#9  0x0000702e26d29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 15 (Thread 0x702dad3fd6c0 (LWP 10944) "FreeCAD:gdrv0"):
+#0  0x0000702e26c98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x5a1bf6254ed8) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x5a1bf6254ed8) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a1bf6254ed8, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x0000702e26c9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x5a1bf6254e80, cond=0x5a1bf6254eb0) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x5a1bf6254eb0, mutex=0x5a1bf6254e80) at ./nptl/pthread_cond_wait.c:627
+#5  0x0000702e01999edd in ??? () at /lib/x86_64-linux-gnu/libgallium-25.2.8-0ubuntu0.24.04.2.so
+#6  0x0000702e01965fbb in ??? () at /lib/x86_64-linux-gnu/libgallium-25.2.8-0ubuntu0.24.04.2.so
+#7  0x0000702e01999e0c in ??? () at /lib/x86_64-linux-gnu/libgallium-25.2.8-0ubuntu0.24.04.2.so
+#8  0x0000702e26c9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#9  0x0000702e26d29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 14 (Thread 0x702d8cf9e6c0 (LWP 10946) "FreeCA:traceq0"):
+#0  0x0000702e26c98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x5a1bfabdf750) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x5a1bfabdf750) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a1bfabdf750, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x0000702e26c9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x5a1bfabdf6f8, cond=0x5a1bfabdf728) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x5a1bfabdf728, mutex=0x5a1bfabdf6f8) at ./nptl/pthread_cond_wait.c:627
+#5  0x0000702e01999edd in ??? () at /lib/x86_64-linux-gnu/libgallium-25.2.8-0ubuntu0.24.04.2.so
+#6  0x0000702e01965fbb in ??? () at /lib/x86_64-linux-gnu/libgallium-25.2.8-0ubuntu0.24.04.2.so
+#7  0x0000702e01999e0c in ??? () at /lib/x86_64-linux-gnu/libgallium-25.2.8-0ubuntu0.24.04.2.so
+#8  0x0000702e26c9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#9  0x0000702e26d29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 13 (Thread 0x702d87fff6c0 (LWP 10947) "FreeCAD:gdrv0"):
+#0  0x0000702e26c98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x5a1bfabed0ac) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x5a1bfabed0ac) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5a1bfabed0ac, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x0000702e26c9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x5a1bfabed050, cond=0x5a1bfabed080) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x5a1bfabed080, mutex=0x5a1bfabed050) at ./nptl/pthread_cond_wait.c:627
+#5  0x0000702e01999edd in ??? () at /lib/x86_64-linux-gnu/libgallium-25.2.8-0ubuntu0.24.04.2.so
+#6  0x0000702e01965fbb in ??? () at /lib/x86_64-linux-gnu/libgallium-25.2.8-0ubuntu0.24.04.2.so
+#7  0x0000702e01999e0c in ??? () at /lib/x86_64-linux-gnu/libgallium-25.2.8-0ubuntu0.24.04.2.so
+#8  0x0000702e26c9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#9  0x0000702e26d29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 12 (Thread 0x702d526ad6c0 (LWP 10959) "FreeCAD"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x0000702dda4fbfdc in ??? () at /lib/x86_64-linux-gnu/libtbb.so.12
+#2  0x0000702e26c9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#3  0x0000702e26d29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 11 (Thread 0x702d522ac6c0 (LWP 10960) "FreeCAD"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x0000702dda4fbfdc in ??? () at /lib/x86_64-linux-gnu/libtbb.so.12
+#2  0x0000702e26c9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#3  0x0000702e26d29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 10 (Thread 0x702d51eab6c0 (LWP 10961) "FreeCAD"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x0000702dda4fbfdc in ??? () at /lib/x86_64-linux-gnu/libtbb.so.12
+#2  0x0000702e26c9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#3  0x0000702e26d29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 9 (Thread 0x702d51aaa6c0 (LWP 10962) "FreeCAD"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x0000702dda4fbfdc in ??? () at /lib/x86_64-linux-gnu/libtbb.so.12
+#2  0x0000702e26c9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#3  0x0000702e26d29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 8 (Thread 0x702d516a96c0 (LWP 10963) "FreeCAD"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x0000702dda4fbfdc in ??? () at /lib/x86_64-linux-gnu/libtbb.so.12
+#2  0x0000702e26c9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#3  0x0000702e26d29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 7 (Thread 0x702d512a86c0 (LWP 10964) "FreeCAD"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x0000702dda4fbfdc in ??? () at /lib/x86_64-linux-gnu/libtbb.so.12
+#2  0x0000702e26c9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#3  0x0000702e26d29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 6 (Thread 0x702d50ea76c0 (LWP 10965) "FreeCAD"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x0000702dda4fbfdc in ??? () at /lib/x86_64-linux-gnu/libtbb.so.12
+#2  0x0000702e26c9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#3  0x0000702e26d29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 5 (Thread 0x702d50aa66c0 (LWP 10966) "FreeCAD"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x0000702dda4fbfdc in ??? () at /lib/x86_64-linux-gnu/libtbb.so.12
+#2  0x0000702e26c9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#3  0x0000702e26d29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 4 (Thread 0x702d506a56c0 (LWP 10967) "FreeCAD"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x0000702dda4fbfdc in ??? () at /lib/x86_64-linux-gnu/libtbb.so.12
+#2  0x0000702e26c9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#3  0x0000702e26d29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 3 (Thread 0x702d3bfff6c0 (LWP 10968) "FreeCAD"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x0000702dda4fbfdc in ??? () at /lib/x86_64-linux-gnu/libtbb.so.12
+#2  0x0000702e26c9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#3  0x0000702e26d29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 2 (Thread 0x702d3bbfe6c0 (LWP 10969) "FreeCAD"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x0000702dda4fbfdc in ??? () at /lib/x86_64-linux-gnu/libtbb.so.12
+#2  0x0000702e26c9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#3  0x0000702e26d29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 1 (Thread 0x702e25c0de80 (LWP 10911) "FreeCAD"):
+#0  0x0000702e264a7c50 in ??? () at /lib/x86_64-linux-gnu/libCoin.so.80c
+#1  0x0000702e264be7dd in SbName::SbName(char const*) () at /lib/x86_64-linux-gnu/libCoin.so.80c
+#2  0x0000702e265ae89d in SoFieldData::hasEnumValue(char const*, char const*) () at /lib/x86_64-linux-gnu/libCoin.so.80c
+#3  0x0000702e265a5877 in SoFieldData::addEnumValue(char const*, char const*, int) () at /lib/x86_64-linux-gnu/libCoin.so.80c
+#4  0x0000702e2676dd1d in SoCylinder::SoCylinder() () at /lib/x86_64-linux-gnu/libCoin.so.80c
+#5  0x0000702e2b106912 in Gui::SoFCPlacementIndicatorKit::createAxes()::{lambda(char const*, Base::Vector3<double>, unsigned int, double)#1}::operator()(char const*, Base::Vector3<double>, unsigned int, double) const () at /home/maxx/freecad/install/lib/libFreeCADGui.so
+#6  0x0000702e2b106e70 in Gui::SoFCPlacementIndicatorKit::createAxes() () at /home/maxx/freecad/install/lib/libFreeCADGui.so
+#7  0x0000702e2b107631 in Gui::SoFCPlacementIndicatorKit::createGeometry() () at /home/maxx/freecad/install/lib/libFreeCADGui.so
+#8  0x0000702e2b1076ec in Gui::SoFCPlacementIndicatorKit::recomputeGeometry() () at /home/maxx/freecad/install/lib/libFreeCADGui.so
+#9  0x0000702e2b107d55 in Gui::SoFCPlacementIndicatorKit::SoFCPlacementIndicatorKit() () at /home/maxx/freecad/install/lib/libFreeCADGui.so
+#10 0x0000702e2b31b0a0 in Gui::ViewProviderDragger::attach(App::DocumentObject*) () at /home/maxx/freecad/install/lib/libFreeCADGui.so
+#11 0x0000702e2b37b797 in Gui::ViewProviderLink::attach(App::DocumentObject*) () at /home/maxx/freecad/install/lib/libFreeCADGui.so
+#12 0x0000702e2acb41d5 in Gui::Document::slotNewObject(App::DocumentObject const&) () at /home/maxx/freecad/install/lib/libFreeCADGui.so
+#13 0x0000702e29eebf19 in void App::MainThreadSignal<void (App::DocumentObject const&), fastsignals::optional_last_value>::emitImpl<App::MainThreadSignal<void (App::DocumentObject const&), fastsignals::optional_last_value> >(App::MainThreadSignal<void (App::DocumentObject const&), fastsignals::optional_last_value>*, App::DocumentObject const&) () at /home/maxx/freecad/install/lib/libFreeCADApp.so
+#14 0x0000702e29ed0829 in App::Document::_addObject(App::DocumentObject*, char const*, Base::Flags<App::AddObjectOption>, char const*) () at /home/maxx/freecad/install/lib/libFreeCADApp.so
+#15 0x0000702e29ed0d67 in App::Document::addObject(std::basic_string_view<char, std::char_traits<char> >, char const*, bool, char const*, bool) () at /home/maxx/freecad/install/lib/libFreeCADApp.so
+#16 0x0000702dafec681b in Assembly::AssemblyLink::synchronizeComponents() () at /home/maxx/freecad/install/lib/AssemblyApp.so
+#17 0x0000702dafec79d3 in Assembly::AssemblyLink::updateContents() () at /home/maxx/freecad/install/lib/AssemblyApp.so
+#18 0x0000702dafec7d5b in Assembly::AssemblyLink::onChanged(App::Property const*) () at /home/maxx/freecad/install/lib/AssemblyApp.so
+#19 0x0000702e2a06a17e in App::Property::hasSetValue() () at /home/maxx/freecad/install/lib/libFreeCADApp.so
+#20 0x0000702dafec6745 in Assembly::AssemblyLink::synchronizeComponents() () at /home/maxx/freecad/install/lib/AssemblyApp.so
+#21 0x0000702dafec79d3 in Assembly::AssemblyLink::updateContents() () at /home/maxx/freecad/install/lib/AssemblyApp.so
+#22 0x0000702dafec7eee in Assembly::AssemblyLink::onChanged(App::Property const*) () at /home/maxx/freecad/install/lib/AssemblyApp.so
+#23 0x0000702e2a06a17e in App::Property::hasSetValue() () at /home/maxx/freecad/install/lib/libFreeCADApp.so
+#24 0x0000702e2a0aeca5 in App::PropertyLinkList::setValues(std::vector<App::DocumentObject*, std::allocator<App::DocumentObject*> > const&) () at /home/maxx/freecad/install/lib/libFreeCADApp.so
+#25 0x0000702e2a0a52b2 in App::PropertyLinkList::breakLink(App::DocumentObject*, bool) () at /home/maxx/freecad/install/lib/libFreeCADApp.so
+#26 0x0000702e2a0a1870 in App::PropertyLinkBase::breakLinks(App::DocumentObject*, std::vector<App::DocumentObject*, std::allocator<App::DocumentObject*> > const&, bool) () at /home/maxx/freecad/install/lib/libFreeCADApp.so
+#27 0x0000702e29ed3c77 in App::Document::_removeObject(App::DocumentObject*, Base::Flags<App::RemoveObjectOption>) () at /home/maxx/freecad/install/lib/libFreeCADApp.so
+#28 0x0000702e29f44cdb in App::GroupExtension::removeObjectFromDocument(App::DocumentObject*) () at /home/maxx/freecad/install/lib/libFreeCADApp.so
+#29 0x0000702e29f44d53 in App::GroupExtension::removeObjectsFromDocument() () at /home/maxx/freecad/install/lib/libFreeCADApp.so
+#30 0x0000702e29f49b85 in App::GroupExtensionPy::removeObjectsFromDocument(_object*) () at /home/maxx/freecad/install/lib/libFreeCADApp.so
+#31 0x0000702e29f49bc7 in App::GroupExtensionPy::staticCallback_removeObjectsFromDocument(_object*, _object*) () at /home/maxx/freecad/install/lib/libFreeCADApp.so
+#32 0x0000702e28fdf498 in ??? () at /lib/x86_64-linux-gnu/libpython3.12.so.1.0
+#33 0x0000702e28f827df in _PyObject_MakeTpCall () at /lib/x86_64-linux-gnu/libpython3.12.so.1.0
+#34 0x0000702e28f1d5ee in _PyEval_EvalFrameDefault () at /lib/x86_64-linux-gnu/libpython3.12.so.1.0
+#35 0x0000702e290a091f in PyEval_EvalCode () at /lib/x86_64-linux-gnu/libpython3.12.so.1.0
+#36 0x0000702e290fb228 in ??? () at /lib/x86_64-linux-gnu/libpython3.12.so.1.0
+#37 0x0000702e290fb34c in ??? () at /lib/x86_64-linux-gnu/libpython3.12.so.1.0
+#38 0x0000702e290fe964 in PyRun_StringFlags () at /lib/x86_64-linux-gnu/libpython3.12.so.1.0
+#39 0x0000702e29a003d8 in Base::InterpreterSingleton::runString[abi:cxx11](char const*) () at /home/maxx/freecad/install/lib/libFreeCADBase.so
+#40 0x0000702e2ad9db31 in Gui::Command::_runCommand(char const*, int, Gui::Command::DoCmd_Type, char const*) () at /home/maxx/freecad/install/lib/libFreeCADGui.so
+#41 0x0000702e2ad9dcd0 in Gui::Command::_doCommand(char const*, int, Gui::Command::DoCmd_Type, char const*, ...) () at /home/maxx/freecad/install/lib/libFreeCADGui.so
+#42 0x0000702daf5f9bd3 in AssemblyGui::ViewProviderAssemblyLink::onDelete(std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&) () at /home/maxx/freecad/install/lib/AssemblyGui.so
+#43 0x0000702e2adbed80 in StdCmdDelete::activated(int) () at /home/maxx/freecad/install/lib/libFreeCADGui.so
+#44 0x0000702e2ada1730 in Gui::Command::_invoke(int, bool) () at /home/maxx/freecad/install/lib/libFreeCADGui.so
+#45 0x0000702e2ada1ad6 in Gui::Command::invoke(int, Gui::Command::TriggerSource) () at /home/maxx/freecad/install/lib/libFreeCADGui.so
+#46 0x0000702e275b9cd2 in ??? () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Core.so.6
+#47 0x0000702e2819a7b2 in QAction::triggered(bool) () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Gui.so.6
+#48 0x0000702e2819d409 in QAction::activate(QAction::ActionEvent) () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Gui.so.6
+#49 0x0000702e2893d815 in ??? () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Widgets.so.6
+#50 0x0000702e289452bb in ??? () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Widgets.so.6
+#51 0x0000702e287d5c1e in QWidget::event(QEvent*) () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Widgets.so.6
+#52 0x0000702e28782012 in QApplicationPrivate::notify_helper(QObject*, QEvent*) () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Widgets.so.6
+#53 0x0000702e2878a940 in QApplication::notify(QObject*, QEvent*) () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Widgets.so.6
+#54 0x0000702e2ad084f8 in Gui::GUIApplication::notify(QObject*, QEvent*) () at /home/maxx/freecad/install/lib/libFreeCADGui.so
+#55 0x0000702e2755d6da in QCoreApplication::notifyInternal2(QObject*, QEvent*) () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Core.so.6
+#56 0x0000702e28789c90 in QApplicationPrivate::sendMouseEvent(QWidget*, QMouseEvent*, QWidget*, QWidget*, QWidget**, QPointer<QWidget>&, bool, bool) () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Widgets.so.6
+#57 0x0000702e287e85af in ??? () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Widgets.so.6
+#58 0x0000702e287ea74b in ??? () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Widgets.so.6
+#59 0x0000702e28782012 in QApplicationPrivate::notify_helper(QObject*, QEvent*) () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Widgets.so.6
+#60 0x0000702e2ad084f8 in Gui::GUIApplication::notify(QObject*, QEvent*) () at /home/maxx/freecad/install/lib/libFreeCADGui.so
+#61 0x0000702e2755d6da in QCoreApplication::notifyInternal2(QObject*, QEvent*) () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Core.so.6
+#62 0x0000702e27dc5670 in QGuiApplicationPrivate::processMouseEvent(QWindowSystemInterfacePrivate::MouseEvent*) () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Gui.so.6
+#63 0x0000702e27e1d20c in QWindowSystemInterface::sendWindowSystemEvents(QFlags<QEventLoop::ProcessEventsFlag>) () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Gui.so.6
+#64 0x0000702e1ee207fa in ??? () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6XcbQpa.so.6
+#65 0x0000702e25514585 in ??? () at /lib/x86_64-linux-gnu/libglib-2.0.so.0
+#66 0x0000702e25573977 in ??? () at /lib/x86_64-linux-gnu/libglib-2.0.so.0
+#67 0x0000702e25513a23 in g_main_context_iteration () at /lib/x86_64-linux-gnu/libglib-2.0.so.0
+#68 0x0000702e278046da in QEventDispatcherGlib::processEvents(QFlags<QEventLoop::ProcessEventsFlag>) () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Core.so.6
+#69 0x0000702e27569023 in QEventLoop::exec(QFlags<QEventLoop::ProcessEventsFlag>) () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Core.so.6
+#70 0x0000702e28942e94 in ??? () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Widgets.so.6
+#71 0x0000702e28942f9f in QMenu::exec(QPoint const&, QAction*) () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Widgets.so.6
+#72 0x0000702e2b0878d0 in Gui::TreeWidget::contextMenuEvent(QContextMenuEvent*) () at /home/maxx/freecad/install/lib/libFreeCADGui.so
+#73 0x0000702e287d5c1e in QWidget::event(QEvent*) () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Widgets.so.6
+#74 0x0000702e28869452 in QFrame::event(QEvent*) () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Widgets.so.6
+#75 0x0000702e2755d47a in QCoreApplicationPrivate::sendThroughObjectEventFilters(QObject*, QEvent*) () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Core.so.6
+#76 0x0000702e28782001 in QApplicationPrivate::notify_helper(QObject*, QEvent*) () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Widgets.so.6
+#77 0x0000702e2878b401 in QApplication::notify(QObject*, QEvent*) () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Widgets.so.6
+#78 0x0000702e2ad084f8 in Gui::GUIApplication::notify(QObject*, QEvent*) () at /home/maxx/freecad/install/lib/libFreeCADGui.so
+#79 0x0000702e2755d6da in QCoreApplication::notifyInternal2(QObject*, QEvent*) () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Core.so.6
+#80 0x0000702e287e8213 in ??? () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Widgets.so.6
+#81 0x0000702e287ea74b in ??? () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Widgets.so.6
+#82 0x0000702e28782012 in QApplicationPrivate::notify_helper(QObject*, QEvent*) () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Widgets.so.6
+#83 0x0000702e2ad084f8 in Gui::GUIApplication::notify(QObject*, QEvent*) () at /home/maxx/freecad/install/lib/libFreeCADGui.so
+#84 0x0000702e2755d6da in QCoreApplication::notifyInternal2(QObject*, QEvent*) () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Core.so.6
+#85 0x0000702e27dc5670 in QGuiApplicationPrivate::processMouseEvent(QWindowSystemInterfacePrivate::MouseEvent*) () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Gui.so.6
+#86 0x0000702e27e1d20c in QWindowSystemInterface::sendWindowSystemEvents(QFlags<QEventLoop::ProcessEventsFlag>) () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Gui.so.6
+#87 0x0000702e1ee207fa in ??? () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6XcbQpa.so.6
+#88 0x0000702e25514585 in ??? () at /lib/x86_64-linux-gnu/libglib-2.0.so.0
+#89 0x0000702e25573977 in ??? () at /lib/x86_64-linux-gnu/libglib-2.0.so.0
+#90 0x0000702e25513a23 in g_main_context_iteration () at /lib/x86_64-linux-gnu/libglib-2.0.so.0
+#91 0x0000702e278046da in QEventDispatcherGlib::processEvents(QFlags<QEventLoop::ProcessEventsFlag>) () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Core.so.6
+#92 0x0000702e27569023 in QEventLoop::exec(QFlags<QEventLoop::ProcessEventsFlag>) () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Core.so.6
+#93 0x0000702e27565aee in QCoreApplication::exec() () at /home/maxx/Dokumente/FreeCAD-Development/.venv/lib/python3.12/site-packages/PySide6/Qt/lib/libQt6Core.so.6
+#94 0x0000702e2ac47658 in Gui::Application::runApplication() () at /home/maxx/freecad/install/lib/libFreeCADGui.so
+#95 0x00005a1bc2e7d7ee in main ()
+[Inferior 1 (process 10911) detached]
