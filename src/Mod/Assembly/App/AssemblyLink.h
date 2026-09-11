@@ -74,38 +74,12 @@ public:
     void updateParentJoints();
 
     void synchronizeComponents();
-    void synchronizeJoints();
-    void handleJointReference(
-        App::DocumentObject* joint,
-        App::DocumentObject* lJoint,
-        const char* refName
-    );
-    // FCPROJECT-PATCH: siehe patches/bugreport-rigid-nested-joint-reference/README.md.
-    // handleJointReference()'s objLinkMap-Lookup kennt nur direkte Kinder der gespiegelten
-    // Baugruppe. Zeigt eine Referenz auf ein Enkelkind (moeglich, wenn eine verschachtelte
-    // Unterbaugruppe Rigid=False ist - siehe UtilsAssembly.getComponentReference()), laeuft
-    // diese Hilfsfunktion die Eltern-Kette hoch, bis sie einen in objLinkMap bekannten
-    // Vorfahren findet, und liefert den dabei durchlaufenen Pfad als Sub-Praefix zurueck -
-    // exakt das Gegenstueck zu getComponentReference()s eigener Kodierung beim Joint-Anlegen.
-    App::DocumentObject* findLocalAncestor(App::DocumentObject* obj, std::string& outSubPrefix);
-    // FCPROJECT-PATCH: siehe patches/README.md ("GroundedJoint/RigidGroupJoint verschwindet
-    // bei verschachtelter flexibler Baugruppe"). synchronizeJoints() spiegelt nur Joints mit
-    // Reference1/Reference2 (echte Assembly::JointObject-Typen, gefiltert ueber getJoints()).
-    // GroundedJoint (Property "ObjectToGround") und RigidGroupJoint (Property
-    // "ObjectsToRigidGroup") werden dabei absichtlich ausgeschlossen (siehe Kommentar "Filter
-    // grounded joints..." in AssemblyObject::getJoints()) und daher NIE in verschachtelte
-    // AssemblyLink-Kopien uebernommen - die Erdung/Starrkoerper-Zugehoerigkeit geht dadurch
-    // beim Verschachteln verloren, betroffene Teile bleiben im Solve komplett unbeschraenkt.
-    // Diese Funktion spiegelt beide Jointtypen zusaetzlich, unabhaengig von synchronizeJoints()s
-    // positionsbasiertem Abgleich (der fuer diese Typen nicht anwendbar ist, da sie keine
-    // Reference1/2 haben).
-    //
-    // AKTUELL DEAKTIVIERT (Aufruf in updateContents() auskommentiert, siehe dort) - hat live
-    // einen FreeCAD-Absturz ausgeloest (Reentrancy-Kaskade beim Loeschen einer verschachtelten
-    // AssemblyLink). Bleibt als toter Code stehen, bis das Reentrancy-Problem geloest ist -
-    // siehe patches/README.md fuer den vollen Befund.
-    void synchronizeGroundedAndRigidJoints();
-    App::DocumentObject* mapToLocalComponent(App::DocumentObject* externalComponent);
+    // FCPROJECT-PATCH (Migrationsschritt 4.5 "Adressieren statt Kopieren", siehe
+    // docs/ARCHITECTURE.md Abschnitt 5): synchronizeJoints(), handleJointReference(),
+    // findLocalAncestor(), synchronizeGroundedAndRigidJoints() und mapToLocalComponent() (die
+    // alte Joint-Kopier-Pipeline samt GroundedJoint/RigidGroupJoint-Spiegelung) standen hier bis
+    // 2026-09-11 - seit Migrationsschritt 4.3 ohne verbleibende Aufrufer, nach Stabilisierung
+    // entfernt. Volle Fassung samt Herleitung im Git-Verlauf und in docs/JOURNAL.md.
     void ensureNoJointGroup();
     JointGroup* ensureJointGroup();
     std::vector<App::DocumentObject*> getJoints();

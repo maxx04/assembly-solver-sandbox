@@ -1832,15 +1832,14 @@ std::unordered_set<App::DocumentObject*> AssemblyObject::getGroundedParts()
     // Eintrag, keine Redundanz). Nur wenn ein verschachteltes Teil auf KEINE andere Weise
     // erreichbar waere, zaehlt seine eigene Erdung weiterhin (z.B. wenn die betroffene
     // Unterbaugruppe gar nicht an die aeussere Kette angebunden ist).
-    std::vector<App::DocumentObject*> reachabilityJoints = extractJointObjects(getJoints());
-    std::vector<ObjRef> reachableFromLocalGrounding;
-    for (auto* g : groundedSet) {
-        reachableFromLocalGrounding.push_back({g, nullptr});
-    }
-    for (auto* g : groundedSet) {
-        traverseAndMarkConnectedParts(g, reachableFromLocalGrounding, reachabilityJoints);
-    }
-
+    //
+    // FCPROJECT-PATCH (Migrationsschritt 4.5 "Adressieren statt Kopieren", siehe
+    // docs/ARCHITECTURE.md Abschnitt 5): die Berechnung von reachableFromLocalGrounding/
+    // reachabilityJoints, die hier bis 2026-09-11 stand, war bereits seit der 2026-09-09-
+    // Entscheidung direkt darunter (s.u., "ENTFERNT statt weiter ausgeflickt") toter Code -
+    // berechnet, aber nie gelesen (die Funktion gibt weiter unten unveraendert groundedSet
+    // zurueck). Als Aufraeum-Rest jetzt entfernt.
+    //
     // FCPROJECT-PATCH (2026-09-09, ENTFERNT statt weiter ausgeflickt - siehe Befund-3-Kommentar
     // oben fuer die Vorgeschichte dieses Blocks): die rekursive Uebernahme einer verschachtelten
     // Unterbaugruppe eigener interner Erdung (nestedAssembly->getGroundedParts()) erwies sich
@@ -1866,9 +1865,10 @@ std::unordered_set<App::DocumentObject*> AssemblyObject::getGroundedParts()
     // Joint-Graph-Sicht identisch aus ("Teil X ist ueber keinen Reference1/2-Joint-Pfad von der
     // lokalen Erdung dieser Ebene aus erreichbar"). Nutzerentscheidung (2026-09-09): diesen
     // gesamten Rekursionsblock ERSATZLOS entfernen, um die BEIDEN reproduzierten, aktuellen
-    // Regressionsfaelle zu beheben - reine Joint-Graph-Erreichbarkeit (reachableFromLocalGrounding
-    // oben, die dank getJoints()' eigener subJoints-Rekursion bereits echte, tief verschachtelte
-    // Joint-Ketten korrekt mit einschliesst) reicht als alleinige Grundlage. Falls die
+    // Regressionsfaelle zu beheben - reine Joint-Graph-Erreichbarkeit (die dank getJoints()'
+    // eigener subJoints-Rekursion bereits echte, tief verschachtelte Joint-Ketten korrekt mit
+    // einschliesst, siehe removeUnconnectedJoints()/getConnectedParts()) reicht als alleinige
+    // Grundlage. Falls die
     // urspruengliche Befund-3-Situation (Sync-Bug der alten Kopier-Pipeline bei isReadOnly())
     // dadurch wieder auftritt, ist das ein bekanntes, akzeptiertes Risiko dieser Entscheidung -
     // noch nicht erneut getestet, siehe [[reference-nested-grounding-leak-bugfix]].
