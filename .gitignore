@@ -10,7 +10,13 @@
 # Build-Ausgaben
 build/
 standalone-check/build/
-standalone-check/kinematic-tests/fcstd-output/
+# FCPROJECT-PATCH (2026-09-11): seit der Ordner-Umstrukturierung 2026-09-09 liegt fcstd-output/
+# nicht mehr zentral, sondern je Testfall im eigenen Unterordner
+# (standalone-check/kinematic-tests/test_*/fcstd-output/) - die alte, nur den zentralen Pfad
+# treffende Regel darunter war dadurch stillschweigend wirkungslos geworden. "**" matcht
+# beliebig viele Verzeichnisebenen dazwischen, deckt also auch kuenftige, noch tiefer
+# verschachtelte Testfaelle ab.
+standalone-check/kinematic-tests/**/fcstd-output/
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
