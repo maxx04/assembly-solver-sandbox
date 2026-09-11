@@ -73,6 +73,16 @@ public:
     };
 
     void setupContextMenu(QMenu*, QObject*, const char*) override;
+
+    // FCPROJECT-PATCH (Migrationsschritt 4.2 "Adressieren statt Kopieren", siehe
+    // docs/ARCHITECTURE.md Abschnitt 5): zeigt fuer eine FLEXIBLE AssemblyLink die ECHTE
+    // JointGroup der verlinkten AssemblyObject-Instanz als zusaetzliches Baum-Kind an (kein
+    // Klon/keine Kopie - FreeCAD unterstuetzt bereits, dass ein Objekt unter mehreren
+    // Elternknoten erscheint). Rein additiv: solange die alte Kopier-Pipeline noch eine eigene
+    // lokale JointGroup anlegt (Migrationsschritt 4.3 steht noch aus), greift ein
+    // Doppel-Anzeige-Schutz und diese Methode gibt unveraendert nur die Basisklassen-Kinder
+    // zurueck - damit ist dieser Schritt unabhaengig VOR der Pipeline-Abschaltung landbar.
+    std::vector<App::DocumentObject*> claimChildren() const override;
 };
 
 }  // namespace AssemblyGui

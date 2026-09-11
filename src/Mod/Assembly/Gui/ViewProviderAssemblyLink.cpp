@@ -43,6 +43,8 @@
 
 #include <Mod/Assembly/App/AssemblyObject.h>
 #include <Mod/Assembly/App/AssemblyLink.h>
+#include <Mod/Assembly/App/AssemblyUtils.h>
+#include <Mod/Assembly/App/Groups.h>
 
 #include "ViewProviderAssembly.h"
 #include "ViewProviderAssemblyLink.h"
@@ -187,4 +189,29 @@ void ViewProviderAssemblyLink::setupContextMenu(QMenu* menu, QObject* receiver, 
 
     Q_UNUSED(receiver)
     Q_UNUSED(member)
+}
+
+std::vector<App::DocumentObject*> ViewProviderAssemblyLink::claimChildren() const
+{
+    std::vector<App::DocumentObject*> children = ViewProviderPart::claimChildren();
+
+    auto* assemblyLink = freecad_cast<Assembly::AssemblyLink*>(getObject());
+    if (!assemblyLink || assemblyLink->isRigid()) {
+        // Rigid: keine eigenen Joints, unveraendert.
+        return children;
+    }
+
+    if (Assembly::getJointGroup(assemblyLink)) {
+        // Uebergangsphase (vor Migrationsschritt 4.3): die alte Kopier-Pipeline hat noch eine
+        // eigene lokale JointGroup angelegt - die erscheint bereits ganz normal ueber die
+        // Basisklassen-claimChildren()-Iteration von Group. Nicht zusaetzlich claimen, sonst
+        // taucht sie doppelt im Baum auf.
+        return children;
+    }
+
+    Assembly::AssemblyObject* linked = assemblyLink->getLinkedAssembly();
+    if (Assembly::JointGroup* realGroup = linked ? linked->getJointGroup() : nullptr) {
+        children.push_back(realGroup);
+    }
+    return children;
 }
