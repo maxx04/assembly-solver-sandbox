@@ -19,6 +19,7 @@
 2026.09.04-freecad-assembly-jointobject.patch
 2026.09.04-freecad-assembly-viewprovider-null-crash.patch
 2026.09.06-freecad-assembly-link-subjoints-revert.patch
+2026.09.11-freecad-assembly-addressing-copy-pipeline.patch
 
 # NICHT in obiger Liste, weil nicht auf DIESE Sandbox anwendbar (betrifft src/App/*, hier
 # per Sparse-Checkout gar nicht ausgecheckt - nur src/Mod/Assembly + src/3rdParty/
