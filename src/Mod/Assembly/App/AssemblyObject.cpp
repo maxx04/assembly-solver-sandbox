@@ -170,7 +170,8 @@ bool findRotationCarrierForGearSide(
     bool foundCarrier = false;
     bool ambiguousCarrier = false;
 
-    for (auto* joint : assembly->getJoints(false, true)) {
+    for (auto& jr : assembly->getJoints(false, true)) {
+        auto* joint = jr.joint;
         if (!joint || joint == gearJoint || !getJointActivated(joint)) {
             continue;
         }
@@ -425,7 +426,14 @@ int AssemblyObject::solve(bool enableRedo)
     // verboseLog=true nur hier: dies ist der EINE echte, seltene solve()-Aufruf - nicht die
     // haeufigen internen getJoints()-Aufrufe aus isPartConnected()/getJointsOfPart() waehrend
     // einer interaktiven Zieh-Bewegung (siehe FCPROJECT-PATCH 16 in getJoints()).
-    std::vector<App::DocumentObject*> joints = getJoints(false, true, true);
+    auto jointRefs = getJoints(false, true, true);
+    // FCPROJECT-PATCH (Migrationsschritt 3 "Adressieren statt Kopieren"): jointNestingPrefixMap
+    // wird jetzt hier, aus dem JointRef-Rueckgabewert, befuellt - nicht mehr innerhalb von
+    // getJoints() selbst (siehe Deklarationsort in AssemblyObject.h).
+    for (auto& jr : jointRefs) {
+        jointNestingPrefixMap[jr.joint] = jr.nestingPrefix;
+    }
+    std::vector<App::DocumentObject*> joints = extractJointObjects(jointRefs);
 
     removeUnconnectedJoints(joints, groundedObjs);
 
@@ -616,7 +624,11 @@ int AssemblyObject::generateSimulation(App::DocumentObject* sim)
         return -6;
     }
 
-    std::vector<App::DocumentObject*> joints = getJoints();
+    auto jointRefs = getJoints();
+    for (auto& jr : jointRefs) {
+        jointNestingPrefixMap[jr.joint] = jr.nestingPrefix;
+    }
+    std::vector<App::DocumentObject*> joints = extractJointObjects(jointRefs);
 
     removeUnconnectedJoints(joints, groundedObjs);
 
@@ -665,7 +677,7 @@ int Assembly::AssemblyObject::updateForFrame(size_t index)
 
     mbdAssembly->updateForFrame(index);
     setNewPlacements();
-    auto jointDocs = getJoints();
+    auto jointDocs = extractJointObjects(getJoints());
     redrawJointPlacements(jointDocs);
     return 0;
 }
@@ -779,7 +791,7 @@ void AssemblyObject::doDragStep()
             setNewPlacements();
             updateRigidPlacementCache();
 
-            auto joints = getJoints();
+            auto joints = extractJointObjects(getJoints());
             for (auto* joint : joints) {
                 if (joint->Visibility.getValue()) {
                     // redraw only the moving joint as its quite slow as its python code.
@@ -914,7 +926,11 @@ void AssemblyObject::exportAsASMT(std::string fileName)
     rebuildRigidClusters();
     fixGroundedParts();
 
-    std::vector<App::DocumentObject*> joints = getJoints();
+    auto jointRefs = getJoints();
+    for (auto& jr : jointRefs) {
+        jointNestingPrefixMap[jr.joint] = jr.nestingPrefix;
+    }
+    std::vector<App::DocumentObject*> joints = extractJointObjects(jointRefs);
 
     jointParts(joints);
 
@@ -1431,14 +1447,24 @@ ViewGroup* AssemblyObject::getExplodedViewGroup() const
     return nullptr;
 }
 
-std::vector<App::DocumentObject*> AssemblyObject::getJoints(
+std::vector<App::DocumentObject*> Assembly::extractJointObjects(const std::vector<JointRef>& refs)
+{
+    std::vector<App::DocumentObject*> result;
+    result.reserve(refs.size());
+    for (auto& r : refs) {
+        result.push_back(r.joint);
+    }
+    return result;
+}
+
+std::vector<JointRef> AssemblyObject::getJoints(
     bool delBadJoints,
     bool subJoints,
     bool verboseLog,
     const std::string& nestingPrefix
 )
 {
-    std::vector<App::DocumentObject*> joints = {};
+    std::vector<JointRef> joints = {};
 
     JointGroup* jointGroup = getJointGroup();
     if (!jointGroup) {
@@ -1530,14 +1556,12 @@ std::vector<App::DocumentObject*> AssemblyObject::getJoints(
                         part2->getFullName().c_str()
                     );
                 }
-                joints.push_back(joint);
-                // FCPROJECT-PATCH (Teilschritt 2 "adressieren statt kopieren", solver-root-cause-
-                // fix): merkt sich, unter welchem Verschachtelungs-Praefix DIESER Aufruf von
-                // getJoints() diesen Joint gefunden hat - siehe Lifecycle-Begruendung am
-                // Deklarationsort in AssemblyObject.h (jointNestingPrefixMap). Fuer einen Joint,
-                // der direkt in dieser Instanz liegt (der unveraenderte Normalfall), ist
-                // nestingPrefix "".
-                jointNestingPrefixMap[joint] = nestingPrefix;
+                // FCPROJECT-PATCH (Migrationsschritt 3 "Adressieren statt Kopieren"): das
+                // nestingPrefix wird jetzt direkt im JointRef mitgefuehrt (frueher zusaetzlich in
+                // jointNestingPrefixMap geschrieben, siehe Deklarationsort in AssemblyObject.h) -
+                // fuer einen Joint, der direkt in dieser Instanz liegt (der unveraenderte
+                // Normalfall), ist nestingPrefix "".
+                joints.push_back({joint, nestingPrefix});
             }
             else if (verboseLog) {
                 Base::Console().message(
@@ -1581,16 +1605,12 @@ std::vector<App::DocumentObject*> AssemblyObject::getJoints(
             std::string nestedPrefix = nestingPrefix + assembly->getNameInDocument() + ".";
             auto nestedJoints
                 = nestedAssembly->getJoints(delBadJoints, subJoints, verboseLog, nestedPrefix);
+            // FCPROJECT-PATCH (Migrationsschritt 3 "Adressieren statt Kopieren"): jedes
+            // zurueckgelieferte JointRef traegt sein nestingPrefix schon korrekt (voll
+            // akkumuliert, siehe nestedPrefix oben) direkt mit sich - das vorherige manuelle
+            // Nachziehen ueber die jointNestingPrefixMap der rekursiv aufgerufenen Instanz
+            // entfaellt ersatzlos.
             joints.insert(joints.end(), nestedJoints.begin(), nestedJoints.end());
-
-            // Die eben rekursiv aufgerufene getJoints()-Instanz hat die Praefixe fuer
-            // 'nestedJoints' bereits korrekt (voll akkumuliert, siehe nestedPrefix oben) in IHRER
-            // EIGENEN jointNestingPrefixMap (nestedAssembly->jointNestingPrefixMap) abgelegt - hier
-            // gezielt in die Map DIESER Instanz uebernehmen, damit jeder Eintrag Ebene fuer Ebene
-            // bis zur Wurzel hochgereicht wird.
-            for (auto* nestedJoint : nestedJoints) {
-                jointNestingPrefixMap[nestedJoint] = nestedAssembly->jointNestingPrefixMap[nestedJoint];
-            }
         }
     }
 
@@ -1690,7 +1710,7 @@ std::vector<App::DocumentObject*> AssemblyObject::getJointsOfObj(App::DocumentOb
         return {};
     }
 
-    std::vector<App::DocumentObject*> joints = getJoints();
+    std::vector<App::DocumentObject*> joints = extractJointObjects(getJoints());
     std::vector<App::DocumentObject*> jointsOf;
 
     for (auto joint : joints) {
@@ -1717,7 +1737,7 @@ std::vector<App::DocumentObject*> AssemblyObject::getJointsOfPart(App::DocumentO
     // Joint nie, selbst wenn beide dasselbe reale Teil meinen.
     App::DocumentObject* canonicalPart = canonicalizeForMbD(part);
 
-    std::vector<App::DocumentObject*> joints = getJoints();
+    std::vector<App::DocumentObject*> joints = extractJointObjects(getJoints());
     std::vector<App::DocumentObject*> jointsOf;
 
     for (auto joint : joints) {
@@ -1806,7 +1826,7 @@ std::unordered_set<App::DocumentObject*> AssemblyObject::getGroundedParts()
     // Eintrag, keine Redundanz). Nur wenn ein verschachteltes Teil auf KEINE andere Weise
     // erreichbar waere, zaehlt seine eigene Erdung weiterhin (z.B. wenn die betroffene
     // Unterbaugruppe gar nicht an die aeussere Kette angebunden ist).
-    std::vector<App::DocumentObject*> reachabilityJoints = getJoints();
+    std::vector<App::DocumentObject*> reachabilityJoints = extractJointObjects(getJoints());
     std::vector<ObjRef> reachableFromLocalGrounding;
     for (auto* g : groundedSet) {
         reachableFromLocalGrounding.push_back({g, nullptr});
@@ -2178,7 +2198,7 @@ bool AssemblyObject::isPartConnected(App::DocumentObject* obj)
     App::DocumentObject* canonicalObj = canonicalizeForMbD(obj);
 
     auto groundedObjs = getGroundedParts();
-    std::vector<App::DocumentObject*> joints = getJoints();
+    std::vector<App::DocumentObject*> joints = extractJointObjects(getJoints());
 
     std::vector<ObjRef> connectedParts;
 
@@ -2918,7 +2938,8 @@ int AssemblyObject::slidingPartIndex(App::DocumentObject* joint)
     Base::Placement plc2 = getPlacementFromProp(joint, "Placement2");
 
     int slidingFound = 0;
-    for (auto* jt : getJoints()) {
+    for (auto& jr : getJoints()) {
+        auto* jt = jr.joint;
         if (getJointType(jt) == JointType::Slider) {
             App::DocumentObject* jpart1 = getMovingPartFromRef(jt, "Reference1");
             App::DocumentObject* jpart2 = getMovingPartFromRef(jt, "Reference2");
@@ -3343,7 +3364,7 @@ std::vector<ObjRef> AssemblyObject::getDownstreamParts(
         setJointActivated(joint, false);
     }
 
-    std::vector<App::DocumentObject*> joints = getJoints();
+    std::vector<App::DocumentObject*> joints = extractJointObjects(getJoints());
 
     std::vector<ObjRef> connectedParts = {{part, nullptr}};
     traverseAndMarkConnectedParts(part, connectedParts, joints);

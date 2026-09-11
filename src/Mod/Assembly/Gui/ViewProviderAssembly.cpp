@@ -196,7 +196,7 @@ bool ViewProviderAssembly::canDragObjectToTarget(App::DocumentObject* obj, App::
     }
 
     // Combine the joints and groundedJoints vectors into one for simplicity.
-    std::vector<App::DocumentObject*> allJoints = assemblyPart->getJoints();
+    std::vector<App::DocumentObject*> allJoints = Assembly::extractJointObjects(assemblyPart->getJoints());
     std::vector<App::DocumentObject*> groundedJoints = assemblyPart->getGroundedJoints();
     allJoints.insert(allJoints.end(), groundedJoints.begin(), groundedJoints.end());
 
@@ -265,7 +265,7 @@ void ViewProviderAssembly::updateData(const App::Property* prop)
                 return;
             }
 
-            std::vector<App::DocumentObject*> joints = obj->getJoints();
+            std::vector<App::DocumentObject*> joints = Assembly::extractJointObjects(obj->getJoints());
             for (auto* joint : joints) {
                 Gui::ViewProvider* jointVp = Gui::Application::Instance->getViewProvider(joint);
                 if (jointVp) {
@@ -627,7 +627,7 @@ bool ViewProviderAssembly::tryMouseMove(const SbVec2s& cursorPos, Gui::View3DInv
             }
         }
         else {
-            assemblyPart->redrawJointPlacements(assemblyPart->getJoints());
+            assemblyPart->redrawJointPlacements(Assembly::extractJointObjects(assemblyPart->getJoints()));
         }
     }
     return false;
@@ -1062,7 +1062,7 @@ void ViewProviderAssembly::tryInitMove(const SbVec2s& cursorPos, Gui::View3DInve
     auto* assemblyPart = getObject<AssemblyObject>();
     // When the user drag parts, we switch off all joints visibility and only show the movingjoint
     jointVisibilitiesBackup.clear();
-    auto joints = assemblyPart->getJoints();
+    auto joints = Assembly::extractJointObjects(assemblyPart->getJoints());
     for (auto* joint : joints) {
         if (!joint) {
             continue;
@@ -1142,7 +1142,7 @@ void ViewProviderAssembly::tryInitMove(const SbVec2s& cursorPos, Gui::View3DInve
         assemblyPart->preDrag(dragParts);
     }
     else {
-        assemblyPart->redrawJointPlacements(assemblyPart->getJoints());
+        assemblyPart->redrawJointPlacements(Assembly::extractJointObjects(assemblyPart->getJoints()));
     }
 }
 

@@ -73,6 +73,27 @@ struct ObjRef
     App::PropertyXLinkSub* ref;
 };
 
+// FCPROJECT-PATCH (Migrationsschritt 3 "Adressieren statt Kopieren", siehe docs/ARCHITECTURE.md
+// Abschnitt 5): Ersatz fuer die bisherige, separate jointNestingPrefixMap - getJoints() liefert
+// das nestingPrefix jetzt direkt im Rueckgabewert, statt es parallel in einer Member-Map
+// nachzuschlagen. Bewusst KEIN Missbrauch von AssemblyUtils::ResolvedJointRef: dessen subPath
+// bedeutet etwas anderes (der nach der Teile-Aufloesung verbleibende Geometrie-Rest, z.B.
+// "Face1"), waehrend nestingPrefix eine Punkt-getrennte Kette von AssemblyLink-Namen ist (siehe
+// resolveJointReference()s eigener Kommentar). "" bedeutet: der Joint liegt direkt in der
+// AssemblyObject-Instanz, die getJoints() aufgerufen hat.
+struct JointRef
+{
+    App::DocumentObject* joint = nullptr;
+    std::string nestingPrefix;
+};
+
+// Kleine, gemeinsame Hilfsfunktion fuer alle Aufrufer, die (noch) nur die reine Joint-Liste
+// brauchen (Reihenfolge/Inhalt identisch zu getJoints()s vorherigem Rueckgabetyp) - haelt den
+// Migrationsschritt-3-Diff an den meisten Aufrufstellen auf eine einzige Zeile begrenzt.
+AssemblyExport std::vector<App::DocumentObject*> extractJointObjects(
+    const std::vector<JointRef>& refs
+);
+
 class AssemblyExport AssemblyObject: public App::Part
 {
     PROPERTY_HEADER_WITH_OVERRIDE(Assembly::AssemblyObject);
@@ -174,11 +195,19 @@ public:
     // JEDER bestehende Aufrufer, der ihn nicht angibt, ist dadurch unveraendert). Der subJoints-Zweig
     // (Implementierung) steigt damit rekursiv in die ECHTE verlinkte AssemblyObject-Instanz jeder
     // flexiblen Unter-AssemblyLink ab (AssemblyLink::getLinkedAssembly()) statt wie bisher nur die
-    // bereits KOPIERTEN Joints aus der AssemblyLink-eigenen JointGroup zu lesen - der Rueckgabetyp
-    // bleibt bewusst unveraendert (std::vector<App::DocumentObject*>, echte Original-Joint-Objekte);
-    // das dabei pro Joint rekursiv aufgebaute nestingPrefix wird NICHT im Rueckgabewert mitgefuehrt,
-    // sondern parallel in jointNestingPrefixMap (s.u.) abgelegt.
-    std::vector<App::DocumentObject*> getJoints(
+    // bereits KOPIERTEN Joints aus der AssemblyLink-eigenen JointGroup zu lesen.
+    //
+    // FCPROJECT-PATCH (Migrationsschritt 3 "Adressieren statt Kopieren", siehe
+    // docs/ARCHITECTURE.md Abschnitt 5): Rueckgabetyp von vector<DocumentObject*> auf
+    // vector<JointRef> umgestellt - jeder Joint traegt sein nestingPrefix jetzt direkt im
+    // Rueckgabewert mit, statt es (wie vorher) zusaetzlich in die Member-Map
+    // jointNestingPrefixMap zu schreiben. Reiner Typ-Umbau, KEINE Verhaltensaenderung: dieselben
+    // Joints, dieselbe Reihenfolge, dasselbe nestingPrefix pro Joint wie zuvor - nur anders
+    // transportiert. jointNestingPrefixMap selbst bleibt als Lookup-Struktur fuer
+    // resolvePartForMbD() bestehen, wird aber jetzt von den drei "obersten" Aufrufern
+    // (solve()/generateSimulation()/exportAsASMT()) direkt nach diesem Aufruf aus dem
+    // Rueckgabewert befuellt, statt tief in der Rekursion hier.
+    std::vector<JointRef> getJoints(
         bool delBadJoints = false,
         bool subJoints = true,
         bool verboseLog = false,
@@ -377,13 +406,18 @@ private:
     // FCPROJECT-PATCH (Teilschritt 2 "adressieren statt kopieren", solver-root-cause-fix): pro
     // Original-Joint (Pointer-Identitaet) das nestingPrefix, mit dem getJoints() ihn beim
     // rekursiven Abstieg in verschachtelte, flexible AssemblyLinks gefunden hat (leer "" fuer
-    // einen Joint, der direkt in dieser AssemblyObject-Instanz liegt). Wird ausschliesslich
-    // innerhalb von getJoints() befuellt und von resolvePartForMbD() gelesen. Lifecycle bewusst
-    // identisch zu objectPartMap gehalten - geleert an genau denselben Stellen wie
-    // objectPartMap.clear() (solve()/generateSimulation()/exportAsASMT()), NICHT bei jedem
-    // getJoints()-Aufruf selbst, weil ein waehrend des Draggens ausgeloester getJoints()-Aufruf
-    // (isPartConnected()/getJointsOfPart()) die fuer den GERADE LAUFENDEN solve() gueltigen
-    // Eintraege nicht loeschen darf.
+    // einen Joint, der direkt in dieser AssemblyObject-Instanz liegt). Wird von
+    // resolvePartForMbD() gelesen.
+    //
+    // FCPROJECT-PATCH (Migrationsschritt 3 "Adressieren statt Kopieren"): getJoints() selbst
+    // befuellt diese Map NICHT mehr (das nestingPrefix steckt jetzt direkt in deren
+    // JointRef-Rueckgabewert, s. Deklarationsort) - stattdessen befuellen die drei "obersten"
+    // Aufrufer (solve()/generateSimulation()/exportAsASMT()) sie direkt nach ihrem jeweiligen
+    // getJoints()-Aufruf aus dem Rueckgabewert. Lifecycle unveraendert identisch zu
+    // objectPartMap gehalten - geleert an genau denselben Stellen wie objectPartMap.clear(),
+    // NICHT bei jedem getJoints()-Aufruf selbst, weil ein waehrend des Draggens ausgeloester
+    // getJoints()-Aufruf (isPartConnected()/getJointsOfPart()) die fuer den GERADE LAUFENDEN
+    // solve() gueltigen Eintraege nicht loeschen darf.
     std::unordered_map<App::DocumentObject*, std::string> jointNestingPrefixMap;
     std::unordered_map<App::DocumentObject*, App::DocumentObject*> rigidRepByPart;
     std::unordered_map<App::DocumentObject*, std::vector<App::DocumentObject*>> rigidMembersByRep;

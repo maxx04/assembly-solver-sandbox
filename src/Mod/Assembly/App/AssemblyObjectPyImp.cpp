@@ -200,7 +200,12 @@ PyObject* AssemblyObjectPy::exportAsASMT(PyObject* args) const
 Py::List AssemblyObjectPy::getJoints() const
 {
     Py::List ret;
-    std::vector<App::DocumentObject*> list = getAssemblyObjectPtr()->getJoints();
+    // FCPROJECT-PATCH (Migrationsschritt 3 "Adressieren statt Kopieren", siehe
+    // docs/ARCHITECTURE.md Abschnitt 5): getJoints() liefert seit diesem Schritt vector<JointRef>
+    // statt vector<DocumentObject*> - die Python-Signatur bleibt unveraendert (Liste von
+    // Joint-Objekten), nestingPrefix wird hier (noch) nicht gebraucht.
+    std::vector<App::DocumentObject*> list
+        = Assembly::extractJointObjects(getAssemblyObjectPtr()->getJoints());
 
     for (auto It : list) {
         ret.append(Py::Object(It->getPyObject(), true));

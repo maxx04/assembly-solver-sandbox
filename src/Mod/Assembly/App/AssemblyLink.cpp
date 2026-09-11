@@ -254,7 +254,8 @@ void AssemblyLink::updateParentJoints()
 
     bool rigid = Rigid.getValue();
     // Iterate joints in the immediate parent assembly only (recursive=false)
-    for (auto* joint : parent->getJoints(false, false)) {
+    for (auto& jr : parent->getJoints(false, false)) {
+        auto* joint = jr.joint;
         for (const char* refName : {"Reference1", "Reference2"}) {
             auto* prop = dynamic_cast<App::PropertyXLinkSub*>(joint->getPropertyByName(refName));
             if (!prop) {
@@ -613,7 +614,13 @@ void AssemblyLink::synchronizeJoints()
     // (synchronizeJoints()/handleJointReference()/findLocalAncestor()) bleibt bewusst unangetastet
     // - sie ist fuer eine spaetere, separate Aufraeum-Sitzung vorgesehen, nicht Teil dieses
     // Teilschritts.
-    std::vector<App::DocumentObject*> assemblyJoints = assembly->getJoints(false, false);
+    // FCPROJECT-PATCH (Migrationsschritt 3 "Adressieren statt Kopieren", siehe
+    // docs/ARCHITECTURE.md Abschnitt 5): getJoints() liefert seit diesem Schritt vector<JointRef>
+    // statt vector<DocumentObject*> - hier reicht weiterhin die reine Joint-Liste
+    // (extractJointObjects()), diese Kopier-Pipeline selbst bleibt unangetastet (Migrationsschritt
+    // 4, noch nicht Teil dieser Aenderung).
+    std::vector<App::DocumentObject*> assemblyJoints
+        = extractJointObjects(assembly->getJoints(false, false));
     std::vector<App::DocumentObject*> assemblyLinkJoints = getJoints();
 
     // We delete the excess of joints if any
