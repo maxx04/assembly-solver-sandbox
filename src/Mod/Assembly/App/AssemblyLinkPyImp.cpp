@@ -22,6 +22,8 @@
  ***************************************************************************/
 
 
+#include "AssemblyObject.h"
+
 // inclusion of the generated files (generated out of AssemblyLink.xml)
 #include "AssemblyLinkPy.h"
 #include "AssemblyLinkPy.cpp"
@@ -47,10 +49,19 @@ int AssemblyLinkPy::setCustomAttributes(const char* /*attr*/, PyObject* /*obj*/)
 Py::List AssemblyLinkPy::getJoints() const
 {
     Py::List ret;
-    std::vector<App::DocumentObject*> list = getAssemblyLinkPtr()->getJoints();
-
-    for (auto It : list) {
-        ret.append(Py::Object(It->getPyObject(), true));
+    // FCPROJECT-PATCH (Migrationsschritt 4.4 "Adressieren statt Kopieren", siehe
+    // docs/ARCHITECTURE.md Abschnitt 5): getAssemblyLinkPtr()->getJoints() (AssemblyLink::
+    // getJoints(), liest die lokale Kopie) liefert seit Migrationsschritt 4.3 IMMER leer, weil
+    // updateContents() im Flexibel-Zweig keine lokale JointGroup mehr anlegt - ohne diesen Fix
+    // waere die Python-API hier still auf [] zurueckgefallen statt weiterhin eine sinnvolle
+    // (jetzt: echte statt kopierte) Liste zu liefern. Fuer eine RIGIDE AssemblyLink bleibt die
+    // Liste weiterhin leer (keine eigenen Joints, unveraendertes Verhalten).
+    AssemblyObject* linked = getAssemblyLinkPtr()->getLinkedAssembly();
+    if (linked) {
+        std::vector<App::DocumentObject*> list = extractJointObjects(linked->getJoints(false, false));
+        for (auto It : list) {
+            ret.append(Py::Object(It->getPyObject(), true));
+        }
     }
 
     return ret;
