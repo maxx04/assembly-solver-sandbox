@@ -224,7 +224,25 @@ void AssemblyLink::onChanged(const App::Property* prop)
                     }
                 }
 
-                AssemblyObject::redrawJointPlacements(getJoints());
+                // FCPROJECT-PATCH (Migrationsschritt 4.1+4.3 "Adressieren statt Kopieren", siehe
+                // docs/ARCHITECTURE.md Abschnitt 5): vorher redrawJointPlacements(getJoints())
+                // mit dem impliziten this->getJoints() = AssemblyLink::getJoints() - das las die
+                // LOKALEN Joint-KOPIEN, deren Reference1/2 auf genau die Spiegel-Kopien zeigen,
+                // die im Loop oben gerade verschoben wurden (Rigid->Flexibel-Uebergang). Seit
+                // Migrationsschritt 4.3 legt die flexible updateContents() keine lokalen
+                // Joint-Kopien mehr an (ensureNoJointGroup() statt synchronizeJoints()) -
+                // AssemblyLink::getJoints() liefert seitdem immer leer, dieser Aufruf waere
+                // sonst ein stiller, folgenloser No-Op geworden. Jetzt auf die ECHTEN Joints der
+                // verlinkten AssemblyObject umgestellt (redrawJointPlacement() liest pro Joint
+                // ohnehin unabhaengig die aktuellen Reference1/2-Platzierungen neu ein, ist also
+                // unabhaengig davon korrekt, ob die Referenz auf eine lokale Kopie oder das echte
+                // Objekt zeigt - der einzige Unterschied ist, WELCHE Joint-Menge ueberhaupt
+                // durchlaufen wird).
+                if (AssemblyObject* linked = getLinkedAssembly()) {
+                    AssemblyObject::redrawJointPlacements(
+                        extractJointObjects(linked->getJoints(false, false))
+                    );
+                }
             }
         }
         else {
@@ -330,20 +348,37 @@ void AssemblyLink::updateContents()
 
     synchronizeComponents();
 
-    if (isRigid()) {
-        ensureNoJointGroup();
-    }
-    else {
-        synchronizeJoints();
-        // FCPROJECT-PATCH: DEAKTIVIERT (2026-08-22) - hat beim Loeschen einer verschachtelten
-        // AssemblyLink einen FreeCAD-Absturz ausgeloest (Endlosschleife: Log zeigt hunderte
-        // abwechselnde "alreadyMirrored=1"/"Could not map..."-Zeilen kurz vor dem Crash).
-        // Vermutete Ursache: die Python-Aufrufe hier (Joint anlegen/loeschen) loesen beim
-        // Loeschen einer Baugruppe eine Reentrancy-Kaskade aus, die vom bestehenden
-        // updatingContents-Guard nicht abgefangen wird. Siehe patches/README.md fuer den vollen
-        // Befund - nicht wieder aktivieren, ohne das Reentrancy-Problem zuerst zu loesen.
-        // synchronizeGroundedAndRigidJoints();
-    }
+    // FCPROJECT-PATCH (Migrationsschritt 4.3 "Adressieren statt Kopieren", siehe
+    // docs/ARCHITECTURE.md Abschnitt 5, "Torwaechter-Schritt"): der Flexibel-Zweig rief hier
+    // bisher synchronizeJoints() auf - legte in der EIGENEN JointGroup Kopien der Joints der
+    // verlinkten Unterbaugruppe an (referenzierend auf die lokalen Spiegel-Objekte aus
+    // synchronizeComponents() oben). Seit Migrationsschritt 2 arbeitet der komplette
+    // Solve-/Drag-/Sichtbarkeits-Pfad (solve(), preDrag(), getJointsOfPart(), ...) bereits
+    // direkt mit den ECHTEN Joint-Objekten (AssemblyObject::getJoints()' subJoints-Rekursion via
+    // getLinkedAssembly(), siehe canonicalizeForMbD()) - die lokalen Kopien wurden vom Solver
+    // schon lange nicht mehr gelesen, nur noch fuer die Baumansicht angezeigt. Seit
+    // Migrationsschritt 4.2 zeigt ViewProviderAssemblyLink::claimChildren() bei fehlender
+    // lokaler JointGroup automatisch die ECHTE JointGroup der verlinkten AssemblyObject an -
+    // die Kopien sind damit auch fuer die Anzeige nicht mehr noetig. Jetzt wie im Rigid-Zweig
+    // ensureNoJointGroup() (raeumt eine ggf. aus einer aelteren Projektdatei noch vorhandene
+    // lokale JointGroup automatisch auf, siehe Migrationsschritt 5). Als Nebeneffekt entfaellt
+    // damit auch der Python-Aufrufpfad (Joint anlegen/loeschen), der fuer den unten dokumentierten
+    // Reentrancy-Absturz beim Loeschen einer verschachtelten AssemblyLink verantwortlich war -
+    // synchronizeGroundedAndRigidJoints() bleibt trotzdem vorsichtshalber deaktiviert, bis das
+    // explizit erneut untersucht wurde.
+    // Rigid- und Flexibel-Zweig tun jetzt dasselbe (vorher: nur Rigid). synchronizeJoints()
+    // bleibt als Funktion bestehen (Migrationsschritt 4.5 raeumt toten Code auf), wird hier
+    // nicht mehr aufgerufen.
+    ensureNoJointGroup();
+    //
+    // FCPROJECT-PATCH: DEAKTIVIERT (2026-08-22) - hat beim Loeschen einer verschachtelten
+    // AssemblyLink einen FreeCAD-Absturz ausgeloest (Endlosschleife: Log zeigt hunderte
+    // abwechselnde "alreadyMirrored=1"/"Could not map..."-Zeilen kurz vor dem Crash).
+    // Vermutete Ursache: die Python-Aufrufe hier (Joint anlegen/loeschen) loesen beim
+    // Loeschen einer Baugruppe eine Reentrancy-Kaskade aus, die vom bestehenden
+    // updatingContents-Guard nicht abgefangen wird. Siehe patches/README.md fuer den vollen
+    // Befund - nicht wieder aktivieren, ohne das Reentrancy-Problem zuerst zu loesen.
+    // synchronizeGroundedAndRigidJoints();
     purgeTouched();
 }
 
@@ -579,6 +614,11 @@ void copyPropertyIfDifferent(
 }
 };  // namespace
 
+// FCPROJECT-PATCH (Migrationsschritt 4.3 "Adressieren statt Kopieren", siehe
+// docs/ARCHITECTURE.md Abschnitt 5): seit 4.3 nicht mehr aufgerufen (updateContents() nutzt im
+// Flexibel-Zweig jetzt ensureNoJointGroup() statt dieser Funktion) - toter Code, bewusst noch
+// nicht geloescht (Migrationsschritt 4.5 raeumt das inkl. handleJointReference()/
+// findLocalAncestor() zusammen auf, nachdem sich 4.3 in der Praxis bestaetigt hat).
 void AssemblyLink::synchronizeJoints()
 {
     App::Document* doc = getDocument();
