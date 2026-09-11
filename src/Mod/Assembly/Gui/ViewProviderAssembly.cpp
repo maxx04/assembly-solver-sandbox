@@ -303,6 +303,14 @@ bool ViewProviderAssembly::setEdit(int mode)
         updateTaskPanel(true);
 
         auto* assembly = getObject<AssemblyObject>();
+        // FCPROJECT-PATCH (17, 2026-08-23): siehe UpdateSolverInformation() weiter unten fuer die
+        // volle Begruendung - getObject<AssemblyObject>() kann hier nullptr liefern (reproduzierbar
+        // beim Aktivieren direkt nach einem "Reload partial document"). Ohne diesen Guard stuerzt
+        // "assembly->signalSolverUpdate.connect(...)"/"assembly->recomputeFeature(true)" weiter
+        // unten sofort ab.
+        if (!assembly) {
+            return false;
+        }
         connectSolverUpdate = assembly->signalSolverUpdate.connect([this] {
             UpdateSolverInformation();
         });
@@ -712,15 +720,21 @@ bool ViewProviderAssembly::canDragObjectIn3d(App::DocumentObject* obj) const
 
     auto* assemblyPart = getObject<AssemblyObject>();
 
-    // Check if the selected object is a child of the assembly
-    if (!assemblyPart->hasObject(obj, true)) {
+    // FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix, 2026-09-03,
+    // live durch Nutzer-Maus-Drag aufgedeckt): auf hasRealObject() umgestellt statt des rohen
+    // hasObject() - das vergleicht nur lokale Pointer und findet ein ECHTES, ueber eine
+    // verschachtelte flexible AssemblyLink erreichtes Objekt nie (siehe ausfuehrliche
+    // Begruendung am Deklarationsort in AssemblyObject.h). Ohne diesen Fix wurde ein korrekt
+    // aufgeloestes, tief verschachteltes Objekt hier komplett vom Ziehen ausgeschlossen, obwohl
+    // es logisch zu dieser Baugruppe gehoert.
+    if (!assemblyPart->hasRealObject(obj)) {
         // hasObject does not detect LinkElements (see
         // https://github.com/FreeCAD/FreeCAD/issues/16113) the following block can be removed if
         // the issue is fixed :
         auto* linkEl = dynamic_cast<App::LinkElement*>(obj);
         if (linkEl) {
             auto* linkGroup = linkEl->getLinkGroup();
-            if (assemblyPart->hasObject(linkGroup, true)) {
+            if (assemblyPart->hasRealObject(linkGroup)) {
                 return true;
             }
         }
@@ -883,6 +897,15 @@ void ViewProviderAssembly::collectMovableObjects(
     }
 
     App::DocumentObject* part = getMovingPartFromSel(assemblyPart, selRoot, subNamePrefix);
+
+    Base::Console().message(
+        "FCPROJECT-DEBUG collectMovableObjects: part='%s' onlySolids=%d isPartConnected=%d "
+        "canDragObjectIn3d=%d\n",
+        part ? part->getFullName().c_str() : "<null>",
+        onlySolids ? 1 : 0,
+        part ? (assemblyPart->isPartConnected(part) ? 1 : 0) : -1,
+        part ? (canDragObjectIn3d(part) ? 1 : 0) : -1
+    );
 
     if (onlySolids && assemblyPart->isPartConnected(part)) {
         return;  // No dragger for connected parts.
@@ -1333,17 +1356,36 @@ bool ViewProviderAssembly::canDelete(App::DocumentObject* objBeingDeleted) const
             addSubComponents(asmLink, objsBeingDeleted);
         }
 
+        // FCPROJECT-PATCH (2026-09-09, Regression aus unserem eigenen "Adressieren statt
+        // Kopieren"-Patch, siehe getJointsOfPart()/getJointsOfObj() in AssemblyObject.cpp): diese
+        // beiden Funktionen kanonisieren ihre Vergleichsobjekte seit unserem Patch vom 2026-09-03
+        // ueber canonicalizeForMbD() - das war frueher NICHT so, sie fanden garantiert nur Joints
+        // aus DEMSELBEN Dokument wie 'obj'. Fuer den Solver ist das gewuenscht (ein GrandTop-
+        // lokaler Spiegel muss auf das reale, kanonische Original in der verschachtelten
+        // Unterbaugruppe aufgeloest werden koennen). Fuer DIESE Loesch-Aufraeum-Logik hier
+        // (unveraendertes Original-FreeCAD, nie fuer dokumentuebergreifende Treffer ausgelegt) ist
+        // es aber gefaehrlich: live reproduziert, dass das Loeschen einer verschachtelten,
+        // flexiblen AssemblyLink in GrandTop dabei den ECHTEN Joint im SEPARATEN, gerade selbst
+        // offenen Sub-Dokument mitloescht (via "App.getDocument(<Sub>).removeObject(<Joint>)"
+        // unten) - Datenverlust in einem Dokument, das der Nutzer gar nicht zu loeschen versucht
+        // hat. Fix: nur Joints/Erdungs-Joints aus DEMSELBEN Dokument wie das geloeschte Objekt
+        // automatisch mitloeschen - alles aus einem anderen (verlinkten) Dokument bleibt
+        // unangetastet, dessen Aufraeumen ist Sache des jeweils EIGENEN Dokuments/AssemblyLinks.
+        App::Document* ownDoc = objBeingDeleted->getDocument();
+
         for (auto* obj : objsBeingDeleted) {
             // List its joints
             std::vector<App::DocumentObject*> joints = assemblyPart->getJointsOfObj(obj);
             for (auto* joint : joints) {
-                if (std::ranges::find(objToDel, joint) == objToDel.end()) {
+                if (joint && joint->getDocument() == ownDoc
+                    && std::ranges::find(objToDel, joint) == objToDel.end()) {
                     objToDel.push_back(joint);
                 }
             }
             joints = assemblyPart->getJointsOfPart(obj);
             for (auto* joint : joints) {
-                if (std::ranges::find(objToDel, joint) == objToDel.end()) {
+                if (joint && joint->getDocument() == ownDoc
+                    && std::ranges::find(objToDel, joint) == objToDel.end()) {
                     objToDel.push_back(joint);
                 }
             }
@@ -1351,7 +1393,7 @@ bool ViewProviderAssembly::canDelete(App::DocumentObject* objBeingDeleted) const
             // List its grounded joints
             std::vector<App::DocumentObject*> inList = obj->getInList();
             for (auto* parent : inList) {
-                if (!parent) {
+                if (!parent || parent->getDocument() != ownDoc) {
                     continue;
                 }
 
@@ -1807,6 +1849,17 @@ void ViewProviderAssembly::UpdateSolverInformation()
     // Updates Solver Information with the Last solver execution at AssemblyObject level
     auto* assembly = getObject<AssemblyObject>();
 
+    // FCPROJECT-PATCH (17, 2026-08-23): getObject<AssemblyObject>() kann hier nullptr liefern -
+    // reproduzierbarer Absturz (SIGSEGV, freecad_cast schlaegt fehl) beim "Aktivieren" (setEdit())
+    // einer Baugruppe direkt nach einem "Reload partial document" (App::Document::afterRestore()),
+    // z.B. wenn eine per Link eingebundene Unter-Datei extern geaendert/gespeichert wurde. Der
+    // ViewProvider zeigt dabei kurzzeitig auf ein Objekt, das (noch) kein gueltiges AssemblyObject
+    // ist. objListHelper() (weiter unten in dieser Datei) prueft das bereits korrekt
+    // ("if (!assembly) return QString();") - hier fehlte der gleiche Guard.
+    if (!assembly) {
+        return;
+    }
+
     int dofs = assembly->getLastDoF();
     bool hasRedundancies = assembly->getLastHasRedundancies();
     bool hasMalformed = assembly->getLastHasMalformedConstraints();
@@ -1887,13 +1940,25 @@ void ViewProviderAssembly::updateTaskPanel(bool show)
         return;
     }
 
+    // FCPROJECT-FIX (2026-08-25): this->getObject() kann nullptr liefern, wenn dieser
+    // ViewProvider gerade auf ein bereits entferntes/noch nicht vollstaendig wiederhergestelltes
+    // Dokumentobjekt zeigt (z.B. beim Workbench-Wechsel waehrend/kurz nach dem Schliessen eines
+    // Dokuments) - onWorkbenchActivated() ruft diese Funktion fuer JEDEN offenen
+    // ViewProviderAssembly auf, unabhaengig davon, ob dessen Objekt noch gueltig ist. Ohne
+    // Pruefung SIGSEGV in DocumentObject::getDocument() (gleiches Muster wie bereits in
+    // UpdateSolverInformation()/setEdit() weiter oben in dieser Datei behoben).
+    App::DocumentObject* obj = this->getObject();
+    if (!obj) {
+        return;
+    }
+
     if (show && !taskSolver) {
         taskSolver = new TaskAssemblyMessages(this);
-        taskView->addContextualPanel(taskSolver, this->getObject()->getDocument());
+        taskView->addContextualPanel(taskSolver, obj->getDocument());
         UpdateSolverInformation();
     }
     else if (!show && taskSolver) {
-        taskView->removeContextualPanel(taskSolver, this->getObject()->getDocument());
+        taskView->removeContextualPanel(taskSolver, obj->getDocument());
         taskSolver = nullptr;
     }
 }

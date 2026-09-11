@@ -26,6 +26,7 @@
 
 #include <boost/signals2.hpp>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <Mod/Assembly/AssemblyGlobal.h>
@@ -160,7 +161,29 @@ public:
     template<typename T>
     T* getGroup();
 
-    std::vector<App::DocumentObject*> getJoints(bool delBadJoints = false, bool subJoints = true);
+    // FCPROJECT-PATCH (16, nachgebessert): verboseLog-Parameter ergaenzt, default false. Grund:
+    // getJoints() wird nicht nur von solve() aufgerufen, sondern auch von isPartConnected()/
+    // getJointsOfPart() - und DIE laufen waehrend einer interaktiven Zieh-Bewegung (preDrag())
+    // potenziell auf JEDEM Mausereignis. Das Debug-Logging aus Fix 16 lief zunaechst unbedingt mit
+    // und hat dadurch beim Draggen im 3D-Fenster massiv CPU gekostet (Report-View-Textausgabe ist
+    // pro Aufruf nicht billig). Jetzt nur noch fuer den direkten solve()-Aufruf aktiviert.
+    //
+    // FCPROJECT-PATCH (Teilschritt 2 "adressieren statt kopieren", solver-root-cause-fix, siehe
+    // patches/assembly-architecture-overview.md, Abschnitt "Teilschritt 2 - Konkreter
+    // Detailplan"/"Teilschritt 2 - Umsetzung"): nestingPrefix-Parameter ergaenzt, default "" (leer -
+    // JEDER bestehende Aufrufer, der ihn nicht angibt, ist dadurch unveraendert). Der subJoints-Zweig
+    // (Implementierung) steigt damit rekursiv in die ECHTE verlinkte AssemblyObject-Instanz jeder
+    // flexiblen Unter-AssemblyLink ab (AssemblyLink::getLinkedAssembly()) statt wie bisher nur die
+    // bereits KOPIERTEN Joints aus der AssemblyLink-eigenen JointGroup zu lesen - der Rueckgabetyp
+    // bleibt bewusst unveraendert (std::vector<App::DocumentObject*>, echte Original-Joint-Objekte);
+    // das dabei pro Joint rekursiv aufgebaute nestingPrefix wird NICHT im Rueckgabewert mitgefuehrt,
+    // sondern parallel in jointNestingPrefixMap (s.u.) abgelegt.
+    std::vector<App::DocumentObject*> getJoints(
+        bool delBadJoints = false,
+        bool subJoints = true,
+        bool verboseLog = false,
+        const std::string& nestingPrefix = std::string()
+    );
     std::vector<App::DocumentObject*> getGroundedJoints();
     std::vector<App::DocumentObject*> getRigidGroups();
     std::vector<App::DocumentObject*> getJointsOfObj(App::DocumentObject* obj);
@@ -209,6 +232,39 @@ public:
     void setObjMasses(std::vector<std::pair<App::DocumentObject*, double>> objectMasses);
 
     std::vector<AssemblyLink*> getSubAssemblies();
+
+    // FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix,
+    // 2026-09-03, Nutzerentscheidung "oben nach unten"): das Gegenstueck zu getSubAssemblies() -
+    // sucht ueber getInList() (funktioniert dank App::PropertyXLink dokumentuebergreifend) nach
+    // einer FLEXIBLEN AssemblyLink, die auf DIESE Instanz zeigt. Existiert eine, loest eine
+    // aeussere, umfassendere AssemblyObject-Instanz (via getJoints()/getGroundedParts()s
+    // subJoints-Rekursion, Teilschritt 2/2e) diese Baugruppe ohnehin komplett mit - der eigene
+    // solve()-Aufruf in execute() wird dann bewusst ausgelassen (siehe dort), damit nicht zwei
+    // voneinander unabhaengige Solves fuer denselben physischen Teilbaum um dieselben echten
+    // Placement-Properties konkurrieren (Befund 3s eigentliche Ursache, siehe
+    // assembly-architecture-overview.md, Abschnitt "NEUER, noch offener Befund"). Rigide
+    // AssemblyLinks zaehlen NICHT - eine rigide Unterbaugruppe loest sich weiterhin selbst, die
+    // aeussere Ebene behandelt sie nur als ein einziges starres Teil.
+    // Betrifft ausschliesslich den Recompute-Pfad (execute()); interaktives Ziehen
+    // (ViewProviderAssembly::preDrag()/doDragStep()) ruft solve() weiterhin direkt auf der gerade
+    // im Bearbeiten-Modus aktiven Instanz auf, unveraendert.
+    bool isNestedUnderFlexibleParent() const;
+
+    // FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix, 2026-09-03,
+    // live durch Nutzer-Maus-Drag aufgedeckt - dritte Baustelle nach getMovingPartFromSel()/
+    // isPartConnected()): App::Part::hasObject() (GroupExtension::hasObject()) vergleicht nur
+    // rohe Pointer innerhalb der eigenen, lokalen Group - findet ein ECHTES, ueber eine
+    // verschachtelte flexible AssemblyLink erreichtes Objekt (seit dem getMovingPartFromSel()-Fix
+    // das, was tatsaechlich aus der Selektion zurueckkommt) NIE, selbst wenn es logisch
+    // "innerhalb" dieser Baugruppe liegt. `ViewProviderAssembly::canDragObjectIn3d()` nutzte
+    // bisher genau diese lokale Pruefung als Zulassungs-Check fuer interaktives Ziehen - ein
+    // korrekt aufgeloestes, aber fremddokument-reales Objekt wurde dadurch komplett vom Ziehen
+    // ausgeschlossen (kein preDrag()/isPartConnected()-Aufruf mehr im Log sichtbar), obwohl
+    // Solver-seitig laengst alles korrekt verdrahtet ist. Diese Methode ergaenzt den lokalen
+    // Fast-Path um genau die Kandidatensuche, die auch syncLocalMirrorPlacement() nutzt: obj gilt
+    // als "enthalten", wenn ein lokaler Spiegel-Kandidat existiert, der ueber
+    // canonicalizeForMbD() auf exakt dieses obj abbildet.
+    bool hasRealObject(App::DocumentObject* obj);
 
     std::vector<App::DocumentObject*> getMotionsFromSimulation(App::DocumentObject* sim);
 
@@ -267,9 +323,68 @@ private:
     void syncActiveRigidGroupPlacements();
     void updateRigidPlacementCache();
 
+    // FCPROJECT-PATCH (Teilschritt 2 "adressieren statt kopieren", solver-root-cause-fix, siehe
+    // patches/assembly-architecture-overview.md, Abschnitt "Teilschritt 2 - Umsetzung"): loest die
+    // fuer den MbD-Solver relevante Teil-Identitaet einer Joint-Referenz adressierungsbewusst auf
+    // (AssemblyUtils::resolveJointReference(), mit dem in jointNestingPrefixMap fuer diesen Joint
+    // hinterlegten nestingPrefix), statt ueber die alte, sub-pfad-blinde
+    // AssemblyUtils::getMovingPartFromRef(). Faellt defensiv auf getMovingPartFromRef() zurueck,
+    // falls die Aufloesung fehlschlaegt (kein bekannter Eintrag in jointNestingPrefixMap, oder
+    // resolveJointReference() selbst liefert nullptr) - garantiert dadurch, dass jeder bisher
+    // funktionierende (nicht verschachtelte) Fall exakt sein bisheriges Verhalten behaelt.
+    App::DocumentObject* resolvePartForMbD(App::DocumentObject* joint, const char* propRefName);
+
+    // FCPROJECT-PATCH (Befund 3, Teilschritt 2e "adressieren statt kopieren", solver-root-cause-
+    // fix, siehe patches/assembly-architecture-overview.md): resolvePartForMbD() loest Joint-
+    // Referenzen bereits auf die ECHTEN, tief verschachtelten Objekte auf - aber
+    // getGroundedParts()/getAssemblyComponents() liefern weiterhin die LOKALEN Spiegel-Kopien
+    // (AssemblyLink::Group, synchronisiert ueber die alte Kopier-Pipeline). Fuer ein und dasselbe
+    // reale Teil existieren dadurch ZWEI verschiedene Pointer, je nachdem ueber welchen Weg man es
+    // erreicht - objectPartMap (pointer-keyed) legt fuer beide eigene, voneinander getrennte
+    // MbD-Teile an, wodurch ein geerdetes Teil und der Joint, der es eigentlich bewegen soll, NIE
+    // im selben MbD-Constraint-Graphen landen (vermutliche Kernursache von Befund 3: der Joint
+    // wird beim Ziehen komplett ignoriert). canonicalizeForMbD() macht daraus wieder EINEN
+    // Pointer: liegt 'obj' als lokale Spiegel-Kopie innerhalb dieser AssemblyObject-Instanz (Walk
+    // ueber InList bis 'this' erreicht wird), wird derselbe Namenspfad stattdessen durch die
+    // ECHTEN, ueber AssemblyLink::getLinkedAssembly() erreichten verschachtelten AssemblyObject-
+    // Instanzen aufgeloest (gleiches Funktionsprinzip wie getJoints()' subJoints-Rekursion). Liegt
+    // 'obj' NICHT in diesem lokalen Baum (z.B. schon ein von resolvePartForMbD() geliefertes
+    // echtes Objekt, oder bereits top-level lokal == real), wird 'obj' unveraendert
+    // zurueckgegeben - garantiert dadurch, dass jeder bisher funktionierende (nicht
+    // verschachtelte) Fall exakt sein bisheriges Verhalten behaelt. Bekannte Einschraenkung: eine
+    // Rigid Group, deren Mitglieder innerhalb einer verschachtelten flexiblen AssemblyLink liegen,
+    // wird dadurch nicht mehr ueber ihren lokalen Spiegel-Pointer gefunden (siehe
+    // getRigidRepresentative() in getMbDData()) - Rigid Group ist laut Nutzer ohnehin aktuell
+    // separat als buggy bekannt (project_fcproject_redundant_fixed_joint_rigidgroup_fix-Memory)
+    // und wird hier bewusst nicht mitgeloest.
+    App::DocumentObject* canonicalizeForMbD(App::DocumentObject* obj);
+
+    // FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix, 2026-09-03,
+    // live durch Nutzer-Maus-Drag aufgedeckt): AssemblyLink::synchronizeComponents() spiegelt die
+    // Placement eines lokalen Spiegel-Objekts (das, was tatsaechlich in der 3D-Ansicht gerendert
+    // und mit der Maus gezogen wird) nur bei Rigid=true vom echten Quellobjekt zurueck - bei
+    // flexiblen Unterbaugruppen fehlt dieser Ruecksync komplett, wodurch ein korrekt geloestes
+    // Solver-Ergebnis nie sichtbar wird. Ein Sync-Versuch direkt in AssemblyLink.cpp scheitert an
+    // der Ausfuehrungsreihenfolge (dessen execute() laeuft VOR dem solve() der Baugruppe, siehe
+    // ausfuehrliche Begruendung am Implementierungsort in AssemblyObject.cpp) - stattdessen hier,
+    // direkt im Anschluss an setNewPlacements()' Schreiben des kanonischen (echten) Werts, wo der
+    // frisch geloeste Wert garantiert aktuell ist.
+    void syncLocalMirrorPlacement(App::DocumentObject* realObj, const Base::Placement& plc);
+
     std::shared_ptr<MbD::ASMTAssembly> mbdAssembly;
 
     std::unordered_map<App::DocumentObject*, MbDPartData> objectPartMap;
+    // FCPROJECT-PATCH (Teilschritt 2 "adressieren statt kopieren", solver-root-cause-fix): pro
+    // Original-Joint (Pointer-Identitaet) das nestingPrefix, mit dem getJoints() ihn beim
+    // rekursiven Abstieg in verschachtelte, flexible AssemblyLinks gefunden hat (leer "" fuer
+    // einen Joint, der direkt in dieser AssemblyObject-Instanz liegt). Wird ausschliesslich
+    // innerhalb von getJoints() befuellt und von resolvePartForMbD() gelesen. Lifecycle bewusst
+    // identisch zu objectPartMap gehalten - geleert an genau denselben Stellen wie
+    // objectPartMap.clear() (solve()/generateSimulation()/exportAsASMT()), NICHT bei jedem
+    // getJoints()-Aufruf selbst, weil ein waehrend des Draggens ausgeloester getJoints()-Aufruf
+    // (isPartConnected()/getJointsOfPart()) die fuer den GERADE LAUFENDEN solve() gueltigen
+    // Eintraege nicht loeschen darf.
+    std::unordered_map<App::DocumentObject*, std::string> jointNestingPrefixMap;
     std::unordered_map<App::DocumentObject*, App::DocumentObject*> rigidRepByPart;
     std::unordered_map<App::DocumentObject*, std::vector<App::DocumentObject*>> rigidMembersByRep;
     std::unordered_map<App::DocumentObject*, Base::Placement> rigidPlacementCache;
@@ -278,6 +393,19 @@ private:
     std::vector<App::DocumentObject*> motions;
 
     std::vector<std::pair<App::DocumentObject*, Base::Placement>> previousPositions;
+
+    // FCPROJECT-PATCH (Root-Cause-Fix, solver-root-cause-fix): syncGroundedJoints() loeschte
+    // bisher ein GroundedJoint-Objekt sofort beim ERSTEN solve()-Aufruf, der ein
+    // nicht-ReadOnly Placement bei gleichzeitig noch existierendem GroundedJoint sieht. Das
+    // triff faelschlich zu, wenn der ganz frueh (waehrend/kurz nach dem Dokument-Restore per
+    // onChanged(&Group) ausgeloeste) solve()-Aufruf schneller laeuft als
+    // GroundedJoint.onDocumentRestored() (Python), das das ReadOnly-Flag neu setzt - eine
+    // echte Race Condition, siehe patches/bugreport-groundedjoint-deletion-race/Questions.md.
+    // Dieses Set verlangt eine ZWEITE Bestaetigung in einem SPAETEREN solve()-Aufruf, bevor
+    // tatsaechlich geloescht wird - harmlos fuer den echten Anwendungsfall (Nutzer hebt die
+    // Sperre manuell auf: der inkonsistente Zustand bleibt ueber mehrere solve()-Aufrufe
+    // hinweg bestehen), verhindert aber den einmaligen Race-Treffer beim Laden.
+    std::unordered_set<App::DocumentObject*> pendingGroundedJointRemoval;
 
     bool bundleFixed;
 

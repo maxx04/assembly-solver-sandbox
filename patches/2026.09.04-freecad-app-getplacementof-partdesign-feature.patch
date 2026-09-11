@@ -1,0 +1,60 @@
+diff --git a/src/App/DocumentObject.cpp b/src/App/DocumentObject.cpp
+index 2fc59e83d3..9c7f3ada0b 100644
+--- a/src/App/DocumentObject.cpp
++++ b/src/App/DocumentObject.cpp
+@@ -1912,6 +1912,19 @@ Base::Placement DocumentObject::getPlacementOf(const std::string& sub, DocumentO
+         return plc;
+     }
+ 
++    // FCPROJECT-PATCH (Root-Cause-Fix, solver-root-cause-fix): ein Sub-Pfad-Segment kann auf ein
++    // echtes Dokumentobjekt treffen, das trotzdem KEINE eigenstaendig platzierte Entitaet ist -
++    // insbesondere ein PartDesign-Feature (z.B. "Pocket" in "Body.Pocket.Face10", eine reine
++    // Historien-/TNP-Adressierung innerhalb EINES Bodies, kein verschachteltes Unterobjekt). Ohne
++    // diesen Guard rekursiert getPlacementOf() faelschlich in die (fuer die Positionierung
++    // bedeutungslose) eigene Placement-Property des Features hinein, statt bei der Placement des
++    // umgebenden Objekts (hier) zu bleiben - live nachgewiesen an Assembly::getGlobalPlacement()
++    // fuer einen Fixed-Joint auf einer PartDesign-Body-Flaeche mit mehrstufigem Sub-Pfad, siehe
++    // patches/bugreport-globalplacement-partdesign-feature-segment/Questions.md.
++    if (subObj->getTypeId().isDerivedFrom(Base::Type::fromName("PartDesign::Feature"))) {
++        return plc;
++    }
++
+     std::vector<std::string> newNames(names.begin() + 1, names.end());
+     std::string newSub = Base::Tools::joinList(newNames, ".");
+ 
+diff --git a/src/App/Link.cpp b/src/App/Link.cpp
+index 8d930f9b66..578883d39e 100644
+--- a/src/App/Link.cpp
++++ b/src/App/Link.cpp
+@@ -2666,6 +2666,13 @@ Base::Placement Link::getPlacementOf(const std::string& sub, DocumentObject* tar
+             return plc;
+         }
+ 
++        // FCPROJECT-PATCH (Root-Cause-Fix, solver-root-cause-fix): siehe ausfuehrlicher Kommentar
++        // in DocumentObject::getPlacementOf() - ein PartDesign-Feature im Sub-Pfad ist reine
++        // Historien-/TNP-Adressierung, keine eigenstaendig platzierte Entitaet.
++        if (subObj->getTypeId().isDerivedFrom(Base::Type::fromName("PartDesign::Feature"))) {
++            return plc;
++        }
++
+         std::vector<std::string> newNames(names.begin() + 2, names.end());
+         std::string newSub = Base::Tools::joinList(newNames, ".");
+ 
+@@ -2679,6 +2686,17 @@ Base::Placement Link::getPlacementOf(const std::string& sub, DocumentObject* tar
+         return plc;
+     }
+ 
++    // FCPROJECT-PATCH (Root-Cause-Fix, solver-root-cause-fix): siehe ausfuehrlicher Kommentar in
++    // DocumentObject::getPlacementOf() - ein PartDesign-Feature im Sub-Pfad ist reine Historien-/
++    // TNP-Adressierung, keine eigenstaendig platzierte Entitaet. Ohne diesen Guard rekursiert
++    // getPlacementOf() faelschlich in die (fuer die Positionierung bedeutungslose) eigene
++    // Placement-Property des Features, statt bei der Placement DIESES Links zu bleiben - live
++    // nachgewiesen an Assembly::getGlobalPlacement() fuer einen Fixed-Joint auf einer
++    // PartDesign-Body-Flaeche mit mehrstufigem Sub-Pfad wie "Body.Pocket.Face10".
++    if (subObj->getTypeId().isDerivedFrom(Base::Type::fromName("PartDesign::Feature"))) {
++        return plc;
++    }
++
+     std::vector<std::string> newNames(names.begin() + 1, names.end());
+     std::string newSub = Base::Tools::joinList(newNames, ".");
+ 

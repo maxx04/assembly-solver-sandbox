@@ -151,13 +151,22 @@ def solveIfAllowed(assembly, storePrev=False):
 
 
 def getContext(obj):
-    """Fetch the context of an object."""
+    """Fetch the context of an object.
+
+    FCPROJECT-PATCH (8): benutzt den internen, eindeutigen Object.Name statt
+    des Labels. Labels sind in vielen realen Baugruppen alles andere als
+    eindeutig (z.B. hat FreeCAD's eigener "Distance"-Joint-Standardtext das
+    Label "Abstand" fuer JEDEN so erzeugten Joint), wodurch Diagnose-Meldungen
+    wie "Assembly joint 'Baugruppe.Abstand' has an invalid Reference1..." den
+    betroffenen Joint unter mehreren gleich benannten nicht identifizieren
+    liessen - der eindeutige Name (z.B. "Joint013") laesst sich dagegen direkt
+    per getObject() im Python-Konsolen/Report-View wiederfinden.
+    """
     context = []
     current = obj
 
     while current:
-        # Add the object's Label at the beginning or the Name if label is empty
-        context.insert(0, current.Label if current.Label else current.Name)
+        context.insert(0, current.Name)
         # Get the immediate parent object
         parents = getattr(current, "InList", [])
         current = parents[0] if parents else None
@@ -973,7 +982,24 @@ class Joint:
         if not sameDir:
             moving_part_global_jcs = UtilsAssembly.flipPlacement(moving_part_global_jcs)
 
-        transform_plc = fixed_part_global_jcs * moving_part_global_jcs.inverse()
+        if joint.JointType == "Slider":
+            # A Slider joint has one free translational DOF along the JCS's local Z axis
+            # (see e.g. offsetSpinbox binding to Offset2.Base.z). Fully matching the JCS
+            # here - as done below for other joint types - would collapse that free DOF
+            # onto the fixed part's position instead of preserving the part's own position
+            # along the slide axis. This matters specifically because preSolve()/matchJCS()
+            # can run before the mbD solver considers this joint "connected" - e.g. on the
+            # very first recompute after loading a file, triggered indirectly by an
+            # ExpressionEngine-bound Offset property re-evaluating - in which case this used
+            # to snap the whole downstream chain onto the fixed part's slide position
+            # (issue: chained Slider joints collapse to the grounded part's position on a
+            # cold recompute).
+            local = fixed_part_global_jcs.inverse() * moving_part_global_jcs
+            correctedLocal = App.Placement(App.Vector(0, 0, local.Base.z), App.Rotation())
+            correctedMovingGlobalJcs = fixed_part_global_jcs * correctedLocal
+            transform_plc = correctedMovingGlobalJcs * moving_part_global_jcs.inverse()
+        else:
+            transform_plc = fixed_part_global_jcs * moving_part_global_jcs.inverse()
 
         for part in parts_to_move:
             part.Placement = transform_plc * part.Placement
@@ -1277,8 +1303,20 @@ class RigidGroupJoint:
 
         joint.addExtension("App::SuppressibleExtensionPython")
 
+        # FCPROJECT-PATCH (2026-09-09, "Starre Verbindung" ueber eine verschachtelte flexible
+        # Baugruppe hinweg wirkungslos): urspruenglich "App::PropertyLinkList" (normaler Scope) -
+        # live per Warnung gefunden ("RigidGroupJoint links are out of scope. Out of scope links
+        # to: BoxA"), wenn eines der Mitglieder (z.B. der Spiegel einer Unterbaugruppe innerhalb
+        # einer AssemblyLink::Group) aus einem anderen Gruppenzweig als das GRUPPIERENDE Joint
+        # selbst kommt - FreeCAD verwirft/markiert solche Links dann als ausserhalb des
+        # erlaubten Scopes. GroundedJoint's Pendant "ObjectToGround" (siehe unten in dieser
+        # Datei) nutzt fuer genau dieses Problem bereits "App::PropertyLinkGlobal" statt
+        # "App::PropertyLink" - "App::PropertyLinkListGlobal" ist dessen Listen-Pendant
+        # (existiert bereits in FreeCAD, siehe App/PropertyLinks.h) und behebt dasselbe Problem
+        # hier fuer mehrere Referenzen. Reine Property-TYP-Aenderung, kein neues Feature - die
+        # gespeicherte Werteliste bleibt kompatibel (beide sind PropertyLinkList-Ableitungen).
         joint.addProperty(
-            "App::PropertyLinkList",
+            "App::PropertyLinkListGlobal",
             "ObjectsToRigidGroup",
             "RigidGroup",
             QT_TRANSLATE_NOOP("App::Property", "List of references to compnents to group together"),
@@ -1695,7 +1733,15 @@ class MakeJointSelGate:
                 if parent.isDerivedFrom("App::LocalCoordinateSystem"):
                     datum = parent
 
-            if self.assembly.hasObject(datum) and hasattr(datum, "MapMode"):
+            # hasObject() cannot check objects belonging to another document (e.g. a datum
+            # reached through an App::Link into a different .FCStd file in multi-document
+            # assemblies) and raises FreeCADError in that case - skip the membership/MapMode
+            # check then and accept the datum, same as for empty links above.
+            if (
+                datum.Document is self.assembly.Document
+                and self.assembly.hasObject(datum)
+                and hasattr(datum, "MapMode")
+            ):
                 # accept only datum that are not attached
                 return datum.MapMode == "Deactivated"
 
@@ -1790,11 +1836,18 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
             self.createJointObject()
             self.visibilityBackup = False
 
-        self.jForm.angleSpinbox.valueChanged.connect(self.onAngleChanged)
-        self.jForm.distanceSpinbox.valueChanged.connect(self.onDistanceChanged)
-        self.jForm.distanceSpinbox2.valueChanged.connect(self.onDistance2Changed)
-        self.jForm.offsetSpinbox.valueChanged.connect(self.onOffsetChanged)
-        self.jForm.rotationSpinbox.valueChanged.connect(self.onRotationChanged)
+        # valueChanged is overloaded (double / Base::Quantity) in C++, but PySide6 only exposes
+        # the Base::Quantity variant to Python in this build, which it cannot marshal
+        # ("parameter 0 of type Base::Quantity cannot be converted") - the slot is never even
+        # invoked, so the typed value is silently lost. textChanged is emitted right after the
+        # same internal value update (see QuantitySpinBox::updateFromCache) and is a plain
+        # QString, so it connects safely; the handlers below ignore the argument anyway and
+        # re-read rawValue from the spinbox.
+        self.jForm.angleSpinbox.textChanged.connect(self.onAngleChanged)
+        self.jForm.distanceSpinbox.textChanged.connect(self.onDistanceChanged)
+        self.jForm.distanceSpinbox2.textChanged.connect(self.onDistance2Changed)
+        self.jForm.offsetSpinbox.textChanged.connect(self.onOffsetChanged)
+        self.jForm.rotationSpinbox.textChanged.connect(self.onRotationChanged)
         bind = Gui.ExpressionBinding(self.jForm.angleSpinbox).bind(self.joint, "Angle")
         bind = Gui.ExpressionBinding(self.jForm.distanceSpinbox).bind(self.joint, "Distance")
         bind = Gui.ExpressionBinding(self.jForm.distanceSpinbox2).bind(self.joint, "Distance2")
@@ -1818,10 +1871,12 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
         self.jForm.limitCheckbox3.stateChanged.connect(self.adaptUi)
         self.jForm.limitCheckbox4.stateChanged.connect(self.adaptUi)
 
-        self.jForm.limitLenMinSpinbox.valueChanged.connect(self.onLimitLenMinChanged)
-        self.jForm.limitLenMaxSpinbox.valueChanged.connect(self.onLimitLenMaxChanged)
-        self.jForm.limitRotMinSpinbox.valueChanged.connect(self.onLimitRotMinChanged)
-        self.jForm.limitRotMaxSpinbox.valueChanged.connect(self.onLimitRotMaxChanged)
+        # Gleicher valueChanged/Base::Quantity-Marshalling-Bug wie oben - textChanged statt
+        # valueChanged verwenden (siehe Kommentar weiter oben).
+        self.jForm.limitLenMinSpinbox.textChanged.connect(self.onLimitLenMinChanged)
+        self.jForm.limitLenMaxSpinbox.textChanged.connect(self.onLimitLenMaxChanged)
+        self.jForm.limitRotMinSpinbox.textChanged.connect(self.onLimitRotMinChanged)
+        self.jForm.limitRotMaxSpinbox.textChanged.connect(self.onLimitRotMaxChanged)
         bind = Gui.ExpressionBinding(self.jForm.limitLenMinSpinbox).bind(self.joint, "LengthMin")
         bind = Gui.ExpressionBinding(self.jForm.limitLenMaxSpinbox).bind(self.joint, "LengthMax")
         bind = Gui.ExpressionBinding(self.jForm.limitRotMinSpinbox).bind(self.joint, "AngleMin")
@@ -1871,13 +1926,65 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
 
         self.assembly.recompute(True)
 
+        # WORKAROUND (FCProject-Patch, siehe patches/freecad-assembly-jointobject.patch):
+        # bei Baugruppen mit dokumentuebergreifenden Referenzen (jedes Bauteil sein eigenes
+        # .FCStd-Dokument, per App::Link eingebunden) kann die persistente Element-Referenz
+        # (Reference1/Reference2) direkt nach dem ersten Recompute noch nicht aufloesbar sein
+        # ("?" im Elementnamen, siehe execute()s "Broken link"-Check oben) - der Joint faellt
+        # dadurch in execute() mit einer Exception in den Fehlerzustand und wird von
+        # AssemblyObject::getJoints() komplett aus dem Verbindungsgraphen entfernt, wodurch das
+        # zweite Bauteil sich danach lautlos nicht mehr ziehen laesst (kein Fehler in der UI).
+        # Ein Suppress/Unsuppress-Zyklus zwingt eine erneute Aufloesung, die im zweiten Anlauf
+        # i. d. R. gelingt (nur der zweite Recompute-Durchlauf ueber beide Dokumente hinweg
+        # scheint die Namensaufloesung "heilen" zu koennen).
+        # Bewusst KEIN stiller Fallback: nur ausfuehren, wenn der Fehlerfall tatsaechlich
+        # eingetreten ist, und immer eine Konsolen-Meldung dazu - damit das nicht unbemerkt
+        # durchlaeuft und man es im Log wiederfindet.
+        if self.activeType == "Assembly" and "Invalid" in self.joint.State:
+            App.Console.PrintWarning(
+                translate(
+                    "Assembly",
+                    "FCProject-Workaround: Joint '{}' war nach dem Erstellen ungueltig"
+                    " (vermutlich dokumentuebergreifende TNP-Referenz) - erzwinge Neuaufloesung"
+                    " via Suppress/Unsuppress.\n",
+                ).format(self.joint.Label)
+            )
+            self.joint.Suppressed = True
+            self.assembly.recompute(True)
+            self.joint.Suppressed = False
+            self.assembly.recompute(True)
+
+            if "Invalid" in self.joint.State:
+                App.Console.PrintError(
+                    translate(
+                        "Assembly",
+                        "FCProject-Workaround: Neuaufloesung von Joint '{}' fehlgeschlagen -"
+                        " bitte Referenzen manuell pruefen!\n",
+                    ).format(self.joint.Label)
+                )
+
         Gui.ActiveDocument.commitCommand()
+
+        # FCProject-Patch: Redraw erst hier, NACH dem finalen Commit/Recompute (siehe
+        # ausfuehrlicher Kommentar in deactivate()) - macht die von clearIsolate()
+        # zurueckgesetzten Bauteile sofort sichtbar, ohne den noch nicht fertig committeten
+        # Joint-Zwischenzustand zu zeichnen. Gleiches Muster bereits in
+        # CommandCreateSimulation.py verwendet ("Ensure the 3D view is redrawn").
+        if self.activeType == "Assembly":
+            Gui.updateGui()
+
         return True
 
     def reject(self):
         self.deactivate()
         Gui.ActiveDocument.abortCommand()
         self.assembly.recompute(True)
+
+        # FCProject-Patch: siehe Kommentar in accept() - Redraw erst nach dem finalen
+        # Recompute, nicht schon in deactivate().
+        if self.activeType == "Assembly":
+            Gui.updateGui()
+
         return True
 
     def autoClosedOnTransactionChange(self):
@@ -1899,6 +2006,25 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
             self.assembly.clearUndo()
             self.assembly.ViewObject.MoveOnlyPreselected = False
             self.assembly.ViewObject.MoveInCommand = True
+
+            # FCProject-Patch: Falls der Nutzer die "Isolate"-Anzeige (Transparent/Wireframe/
+            # Hidden) waehrend der Joint-Bearbeitung aktiv gelassen hat, statt sie manuell auf
+            # "Disabled" zurueckzustellen, blieb Selectable=False auf den nicht isolierten
+            # Bauteilen dauerhaft haengen - inklusive Speichern in die Datei, da der
+            # Wiederherstellungs-Backup nur im RAM existiert und mit dem Dokument verloren geht.
+            # clearIsolate() ist ein sicherer No-Op, wenn keine Isolation aktiv ist (iteriert nur
+            # ueber ein ggf. leeres Backup), daher hier unbedingt bei jedem Verlassen des
+            # Joint-Dialogs aufrufen statt nur beim manuellen Umschalten auf "Disabled".
+            if hasattr(self.assembly.ViewObject, "clearIsolate"):
+                self.assembly.ViewObject.clearIsolate()
+                # HINWEIS: Der noetige Gui.updateGui()-Redraw (siehe unten in accept()/reject())
+                # passiert bewusst NICHT hier, sondern erst ganz am Ende von accept()/reject() -
+                # deactivate() laeuft VOR der finalen Commit-/Recompute-Sequenz
+                # (generatePropertySettings/recompute in accept(), abortCommand/recompute in
+                # reject()). Ein Gui.updateGui() an dieser Stelle pumpt die Qt-Eventqueue sofort
+                # durch und kann so einen verfruehten Redraw/Recompute mit dem noch nicht
+                # fertig committeten Joint-Zwischenzustand ausloesen - beobachtet als Bauteile,
+                # die kurz auf Placement (0,0,0) zurueckspringen.
 
         Gui.Selection.removeSelectionGate()
         Gui.Selection.removeObserver(self)
@@ -2231,6 +2357,7 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
     def updateJointList(self):
         self.jForm.featureList.clear()
         simplified_names = []
+        tooltips = []
         for ref in self.refs:
 
             sname = UtilsAssembly.getObject(ref).Label
@@ -2239,7 +2366,24 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
             if element_name != "":
                 sname = sname + "." + element_name
             simplified_names.append(sname)
+
+            # FCPROJECT-PATCH (Nutzerwunsch, solver-root-cause-fix): der obige "sname" zeigt nur
+            # das Label des Teils + das LETZTE Sub-Element-Segment (z.B. "Halter.Face10" statt
+            # "Halter.Pocket.Face10") - bei mehrstufigen PartDesign-Feature-Pfaden oder tief
+            # verschachtelten Baugruppen geht dadurch Information verloren, die aber genau bei
+            # der Fehlersuche zu Referenz-Problemen wichtig ist (siehe
+            # patches/bugreport-fixed-joint-no-coincidence/). Tooltip zeigt deshalb den VOLLEN
+            # Pfad (Dokumentname + eindeutiger, Label-unabhaengiger Objekt-Kontext via
+            # getContext() + kompletter, nicht gekuerzter Sub-Element-Pfad), mit einem
+            # Zeilenumbruch nach jedem Punkt UND nach dem Dokumentnamen-Trenner "#", damit
+            # lange Pfade lesbar bleiben.
+            full_path = f"{ref[0].Document.Name}#{getContext(ref[0])}"
+            if ref[1][0]:
+                full_path += f".{ref[1][0]}"
+            tooltips.append(full_path.replace("#", "#\n").replace(".", ".\n"))
         self.jForm.featureList.addItems(simplified_names)
+        for i, tooltip in enumerate(tooltips):
+            self.jForm.featureList.item(i).setToolTip(tooltip)
 
     def updateLimits(self):
         needLengthLimits = self.jType in JointUsingLimitLength
@@ -2464,5 +2608,19 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
         self.presel_ref = [comp, [new_sub]]
 
     def clearSelection(self, doc_name):
+        # FCPROJECT-PATCH (9): Gui.Selection ruft diesen Observer-Callback bei JEDEM Leeren der
+        # globalen Auswahl auf - unabhaengig vom Grund (Klick auf leeren Raum in der 3D-Ansicht,
+        # ein anderes Tree-Element ausgewaehlt, ...). Ohne diese Absicherung wurde ein bereits
+        # vollstaendiger Joint (2 gueltige Referenzen, z.B. beim Oeffnen zum Bearbeiten aus
+        # updateTaskboxFromJoint() geladen und in der 3D-Ansicht markiert) durch einen einzigen,
+        # voellig harmlos wirkenden Klick daneben sofort zerstoert: self.refs wurde geleert und
+        # ueber updateJoint() -> setJointConnectors() SOFORT (noch vor OK/Accept) Reference1 und
+        # Reference2 auf None geschrieben - lautlos, ohne Bestaetigung. Ein bereits vollstaendiger
+        # Pick (>= 2 Referenzen) wird deshalb hier bewusst NICHT durch ein blosses Leeren der
+        # globalen Auswahl verworfen. Einzelne Referenzen lassen sich weiterhin gezielt durch
+        # erneutes Anklicken abwaehlen (removeSelection()); nur das komplette, unbeabsichtigte
+        # Leeren eines bereits fertigen Joints wird ignoriert.
+        if len(self.refs) >= 2:
+            return
         self.refs.clear()
         self.updateJoint()

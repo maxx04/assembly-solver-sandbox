@@ -182,6 +182,44 @@ AssemblyExport App::DocumentObject* getMovingPartFromSel(
 );
 AssemblyExport App::DocumentObject* getMovingPartFromRef(const App::PropertyXLinkSub* prop);
 AssemblyExport App::DocumentObject* getMovingPartFromRef(App::DocumentObject* joint, const char* pName);
+
+// FCPROJECT-PATCH (Teilschritt 2 "adressieren statt kopieren", solver-root-cause-fix, siehe
+// patches/assembly-architecture-overview.md, Abschnitt "2. Wiederverwendung von
+// getMovingPartFromSel()"): rein diagnostische/adressierungsbewusste Erweiterung, aendert fuer
+// sich genommen nichts am Solver-Verhalten - genutzt von AssemblyObject::resolvePartForMbD().
+//
+// ResolvedJointRef ist das Ergebnis, ein Reference1/Reference2 einer (ggf. bereits mehrfach
+// verschachtelten) Joint-Referenz nicht nur bis zum blossen Top-Level-Objekt aufzuloesen (wie
+// getMovingPartFromRef()), sondern - analog zu getMovingPartFromSel()s Segment-fuer-Segment-Walk,
+// der transparent durch flexible AssemblyLink-Zwischenstufen hindurchlaeuft - bis zum tatsaechlich
+// individuellen Teil samt des dabei noch nicht konsumierten Rest-Sub-Pfads.
+struct ResolvedJointRef
+{
+    App::DocumentObject* obj = nullptr;
+    std::string subPath;
+};
+
+// Loest Reference1/Reference2 (die pName-Property, ein App::PropertyXLinkSub) des uebergebenen
+// Joint-Objekts auf - relativ zu solvingAssembly, unter der Annahme, dass 'joint' unter dem Pfad
+// 'nestingPrefix' (eine Punkt-getrennte Kette von AssemblyLink-Namen, jeweils mit
+// abschliessendem Punkt, z.B. "Assembly001.unterAssembly.") innerhalb von solvingAssembly liegt -
+// dieser Pfad wird VOR dem eigentlichen Objektnamen der Referenz eingefuegt, sodass der
+// entstehende Adress-String bereits relativ "innerhalb" von solvingAssembly beginnt (anders als
+// getMovingPartFromSel(), das einen kompletten, ab Dokumentwurzel beginnenden Pfad bekommt und
+// deshalb ein zusaetzliches assemblyPassed-Gate braucht - hier nicht noetig, weil nestingPrefix so
+// konstruiert wird, dass der Walk schon "dahinter" beginnt).
+//
+// Liefert bei jedem Fehler (nullptr-Parameter, leere/fehlende Referenz, ein Pfadsegment laesst
+// sich nicht als Dokumentobjekt in solvingAssembly finden) ein leeres ResolvedJointRef{} zurueck -
+// bewusst defensiv, der Aufrufer (resolvePartForMbD()) faellt in diesem Fall auf die alte
+// getMovingPartFromRef() zurueck.
+AssemblyExport ResolvedJointRef resolveJointReference(
+    const AssemblyObject* solvingAssembly,
+    App::DocumentObject* joint,
+    const char* pName,
+    const std::string& nestingPrefix
+);
+
 AssemblyExport std::vector<std::string> getSubAsList(const App::PropertyXLinkSub* prop);
 AssemblyExport std::vector<std::string> getSubAsList(
     const App::DocumentObject* joint,

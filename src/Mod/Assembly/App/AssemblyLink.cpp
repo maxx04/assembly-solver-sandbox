@@ -21,7 +21,9 @@
  *                                                                          *
  ***************************************************************************/
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <vector>
 
 
@@ -30,6 +32,7 @@
 #include <App/DocumentObjectGroup.h>
 #include <App/FeaturePythonPyImp.h>
 #include <App/Link.h>
+#include <App/PropertyLinks.h>
 #include <App/PropertyPythonObject.h>
 #include <Base/Console.h>
 #include <Base/Placement.h>
@@ -56,6 +59,8 @@ using namespace Assembly;
 // ================================ Assembly Object ============================
 
 PROPERTY_SOURCE(Assembly::AssemblyLink, App::Part)
+
+bool AssemblyLink::updatingContents = false;
 
 AssemblyLink::AssemblyLink()
 {
@@ -315,6 +320,13 @@ void AssemblyLink::updateParentJoints()
 
 void AssemblyLink::updateContents()
 {
+    // See the `updatingContents` declaration in the header for why this guard is needed and
+    // why it has to be shared across all AssemblyLink instances rather than per-instance.
+    if (updatingContents) {
+        return;
+    }
+    Base::StateLocker guard(updatingContents, true);
+
     synchronizeComponents();
 
     if (isRigid()) {
@@ -322,6 +334,14 @@ void AssemblyLink::updateContents()
     }
     else {
         synchronizeJoints();
+        // FCPROJECT-PATCH: DEAKTIVIERT (2026-08-22) - hat beim Loeschen einer verschachtelten
+        // AssemblyLink einen FreeCAD-Absturz ausgeloest (Endlosschleife: Log zeigt hunderte
+        // abwechselnde "alreadyMirrored=1"/"Could not map..."-Zeilen kurz vor dem Crash).
+        // Vermutete Ursache: die Python-Aufrufe hier (Joint anlegen/loeschen) loesen beim
+        // Loeschen einer Baugruppe eine Reentrancy-Kaskade aus, die vom bestehenden
+        // updatingContents-Guard nicht abgefangen wird. Siehe patches/README.md fuer den vollen
+        // Befund - nicht wieder aktivieren, ohne das Reentrancy-Problem zuerst zu loesen.
+        // synchronizeGroundedAndRigidJoints();
     }
     purgeTouched();
 }
@@ -568,6 +588,31 @@ void AssemblyLink::synchronizeJoints()
 
     JointGroup* jGroup = ensureJointGroup();
 
+    // FCPROJECT-PATCH (2026-08-28, "kleiner erster Schritt" aus
+    // patches/assembly-architecture-overview.md, Abschnitt "Fix-Konzept: Adressieren statt
+    // Kopieren"): subJoints war hier zwischenzeitlich auf true gesetzt (statt false), damit ein
+    // Joint aus einer ENKEL-Baugruppe wenigstens strukturell sichtbar wurde (fuer die
+    // isMbDJointValid()-Diagnose in AssemblyObject.cpp) - OHNE ihn tatsaechlich solvebar zu
+    // machen.
+    //
+    // FCPROJECT-PATCH (Teilschritt 2 "adressieren statt kopieren", solver-root-cause-fix): auf
+    // false ZURUECKgesetzt - der urspruengliche, vor dem "kleinen ersten Schritt" jahrelang
+    // stabile Wert. Grund: AssemblyObject::getJoints()s subJoints-Zweig wurde in Teilschritt 2 von
+    // "liest die HIER (assembly-lokal) bereits kopierten Joints der eigenen Unter-AssemblyLinks"
+    // auf "steigt rekursiv in die ECHTE verlinkte AssemblyObject-Instanz jeder Unter-AssemblyLink
+    // ab, beliebig tief" umgestellt. Mit subJoints=true wuerde DIESER Aufruf hier jetzt beliebig
+    // tief in 'assembly's eigene Unter-Baugruppen hinabsteigen und deren ORIGINAL-Joints
+    // zurueckliefern - deren Reference1/2 zeigen auf Objekte in einem KOMPLETT ANDEREN Dokument
+    // (der jeweils tiefsten Unter-Baugruppe), fuer die findLocalAncestor() (das die Struktur-
+    // Eltern-Kette IM SELBEN Dokument hochlaeuft) prinzipiell nicht ausgelegt ist - ein neues,
+    // hier nie getestetes Fehlerbild in einer Codezone mit zweifacher Absturzhistorie, fuer keinen
+    // erkennbaren Nutzen: solve() erreicht tiefe Joints seit Teilschritt 2 bereits ueber einen
+    // komplett EIGENSTAENDIGEN Pfad (AssemblyObject::getJoints() direkt, nicht ueber diese
+    // Kopier-Pipeline) - der urspruengliche Grund fuer 'true' hier (Diagnose-Sichtbarkeit in
+    // isMbDJointValid()) ist damit gegenstandslos geworden. Diese Kopier-Pipeline
+    // (synchronizeJoints()/handleJointReference()/findLocalAncestor()) bleibt bewusst unangetastet
+    // - sie ist fuer eine spaetere, separate Aufraeum-Sitzung vorgesehen, nicht Teil dieses
+    // Teilschritts.
     std::vector<App::DocumentObject*> assemblyJoints = assembly->getJoints(false, false);
     std::vector<App::DocumentObject*> assemblyLinkJoints = getJoints();
 
@@ -624,6 +669,329 @@ void AssemblyLink::synchronizeJoints()
     }
 }
 
+// FCPROJECT-PATCH: siehe Header-Kommentar bei der Deklaration und
+// patches/README.md ("GroundedJoint/RigidGroupJoint verschwindet bei verschachtelter
+// flexibler Baugruppe"). Laeuft unabhaengig von synchronizeJoints() - GroundedJoint
+// ("ObjectToGround", App::PropertyLinkGlobal) und RigidGroupJoint ("ObjectsToRigidGroup",
+// App::PropertyLinkList) haben kein Reference1/Reference2 und damit keine sinnvolle
+// Positions-Korrespondenz zu synchronizeJoints()s index-basiertem Abgleich - stattdessen wird
+// hier ueber den jeweiligen ZIEL-Objekten (nicht ueber den Joint-Objekten selbst) abgeglichen:
+// fuer jedes Quell-Joint wird das/die Zielobjekt(e) auf die lokale Entsprechung abgebildet
+// (mapToLocalComponent(), gleiche objLinkMap/findLocalAncestor()-Technik wie
+// handleJointReference()); existiert lokal noch kein Joint mit exakt dieser Zielmenge, wird
+// einer neu angelegt (per Python-Interpreter-Aufruf, wie schon in
+// AssemblyObject::syncGroundedJoints() fuer GroundedJoint ueblich). Nicht mehr benoetigte
+// lokale Joints (Ziel nicht mehr unter den aktuell gewuenschten) werden entfernt.
+void AssemblyLink::synchronizeGroundedAndRigidJoints()
+{
+    App::Document* doc = getDocument();
+    AssemblyObject* assembly = getLinkedAssembly();
+    if (!assembly) {
+        return;
+    }
+
+    JointGroup* sourceGroup = assembly->getJointGroup();
+    if (!sourceGroup) {
+        return;
+    }
+    JointGroup* jGroup = ensureJointGroup();
+
+    // ---- GroundedJoint: ein Zielobjekt pro Joint ----
+    std::vector<App::DocumentObject*> existingGroundedJoints;
+    std::vector<App::DocumentObject*> existingGroundedTargets;
+    for (auto* obj : jGroup->getObjects()) {
+        auto* prop = obj ? dynamic_cast<App::PropertyLink*>(obj->getPropertyByName("ObjectToGround"))
+                          : nullptr;
+        if (!prop) {
+            continue;
+        }
+        existingGroundedJoints.push_back(obj);
+        existingGroundedTargets.push_back(prop->getValue());
+    }
+
+    std::vector<App::DocumentObject*> wantedGroundedTargets;
+    for (auto* sourceJoint : sourceGroup->getObjects()) {
+        auto* prop = sourceJoint
+            ? dynamic_cast<App::PropertyLink*>(sourceJoint->getPropertyByName("ObjectToGround"))
+            : nullptr;
+        if (!prop || !prop->getValue()) {
+            continue;
+        }
+
+        App::DocumentObject* localTarget = mapToLocalComponent(prop->getValue());
+        if (!localTarget) {
+            Base::Console().warning(
+                "AssemblyLink: Could not map grounded component %s to a local link\n",
+                prop->getValue()->getNameInDocument()
+            );
+            continue;
+        }
+        wantedGroundedTargets.push_back(localTarget);
+
+        bool alreadyMirrored = std::find(
+                                    existingGroundedTargets.begin(),
+                                    existingGroundedTargets.end(),
+                                    localTarget
+                                )
+            != existingGroundedTargets.end();
+        if (alreadyMirrored) {
+            continue;
+        }
+
+        // Neuen GroundedJoint anlegen - dieselbe Technik wie
+        // AssemblyObject::syncGroundedJoints() (dort fuer den lokal-nicht-verschachtelten
+        // Fall), nur mit fest bekanntem Zielobjekt statt "erstes Teil mit gesperrtem
+        // Placement".
+        Base::PyGILStateLocker lock;
+        try {
+            std::string docName = doc->getName();
+            std::string asmLinkName = getNameInDocument();
+            std::string partName = localTarget->getNameInDocument();
+            std::string code = "import FreeCAD\n"
+                                "try:\n"
+                                "    import JointObject\n"
+                                "    import UtilsAssembly\n"
+                                "    doc = FreeCAD.getDocument('"
+                + docName
+                + "')\n"
+                  "    asmLink = doc.getObject('"
+                + asmLinkName
+                + "')\n"
+                  "    part = doc.getObject('"
+                + partName
+                + "')\n"
+                  "    jg = UtilsAssembly.getJointGroup(asmLink)\n"
+                  "    if jg:\n"
+                  "        j = jg.newObject('App::FeaturePython', 'GroundedJoint')\n"
+                  "        JointObject.GroundedJoint(j, part)\n"
+                  "        if hasattr(JointObject, 'ViewProviderGroundedJoint') and getattr(j, "
+                  "'ViewObject', None):\n"
+                  "            JointObject.ViewProviderGroundedJoint(j.ViewObject)\n"
+                  "        j.recompute()\n"
+                  "except Exception as e:\n"
+                  "    FreeCAD.Console.PrintError(str(e) + '\\n')\n";
+            Base::Interpreter().runString(code.c_str());
+        }
+        catch (...) {
+        }
+    }
+
+    for (size_t i = 0; i < existingGroundedJoints.size(); ++i) {
+        App::DocumentObject* target = existingGroundedTargets[i];
+        bool stillWanted = target
+            && std::find(wantedGroundedTargets.begin(), wantedGroundedTargets.end(), target)
+                != wantedGroundedTargets.end();
+        if (!stillWanted) {
+            doc->removeObject(existingGroundedJoints[i]->getNameInDocument());
+        }
+    }
+
+    // ---- RigidGroupJoint: eine Zielobjekt-MENGE pro Joint ----
+    std::vector<App::DocumentObject*> existingRigidJoints;
+    std::vector<std::vector<App::DocumentObject*>> existingRigidTargetSets;
+    for (auto* obj : jGroup->getObjects()) {
+        auto* prop = obj
+            ? dynamic_cast<App::PropertyLinkList*>(obj->getPropertyByName("ObjectsToRigidGroup"))
+            : nullptr;
+        if (!prop) {
+            continue;
+        }
+        existingRigidJoints.push_back(obj);
+        existingRigidTargetSets.push_back(prop->getValues());
+    }
+
+    std::vector<std::vector<App::DocumentObject*>> wantedRigidTargetSets;
+    for (auto* sourceJoint : sourceGroup->getObjects()) {
+        auto* prop = sourceJoint ? dynamic_cast<App::PropertyLinkList*>(
+                         sourceJoint->getPropertyByName("ObjectsToRigidGroup")
+                     )
+                                  : nullptr;
+        if (!prop || prop->getValues().empty()) {
+            continue;
+        }
+
+        std::vector<App::DocumentObject*> localTargets;
+        bool allMapped = true;
+        for (auto* sourceTarget : prop->getValues()) {
+            App::DocumentObject* localTarget = mapToLocalComponent(sourceTarget);
+            if (!localTarget) {
+                Base::Console().warning(
+                    "AssemblyLink: Could not map rigid group component %s to a local link\n",
+                    sourceTarget ? sourceTarget->getNameInDocument() : "?"
+                );
+                allMapped = false;
+                break;
+            }
+            localTargets.push_back(localTarget);
+        }
+        if (!allMapped) {
+            continue;
+        }
+        wantedRigidTargetSets.push_back(localTargets);
+
+        // Als Menge vergleichen (Reihenfolge soll hier keine Rolle spielen).
+        auto matchesSet = [&localTargets](const std::vector<App::DocumentObject*>& other) {
+            if (localTargets.size() != other.size()) {
+                return false;
+            }
+            for (auto* t : localTargets) {
+                if (std::find(other.begin(), other.end(), t) == other.end()) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        bool alreadyMirrored = std::any_of(
+            existingRigidTargetSets.begin(),
+            existingRigidTargetSets.end(),
+            matchesSet
+        );
+        if (alreadyMirrored) {
+            continue;
+        }
+
+        Base::PyGILStateLocker lock;
+        try {
+            std::string docName = doc->getName();
+            std::string asmLinkName = getNameInDocument();
+            std::string srcDocName = sourceJoint->getDocument()->getName();
+            std::string srcJointName = sourceJoint->getNameInDocument();
+            std::string partsList;
+            for (auto* t : localTargets) {
+                if (!partsList.empty()) {
+                    partsList += ", ";
+                }
+                partsList += "doc.getObject('" + std::string(t->getNameInDocument()) + "')";
+            }
+            // FCPROJECT-PATCH: RigidGroupJoint.__init__() berechnet RigidPlacements (die
+            // relativen Placements der Mitglieder zueinander) beim Anlegen SOFORT aus deren
+            // AKTUELLEM Placement - bei einer frisch gespiegelten Kopie steht das aber noch auf
+            // Identitaet (0,0,0), der eigentliche Solve, der die echte Position herstellen
+            // wuerde, ist zu diesem Zeitpunkt noch nicht gelaufen. Live so beobachtet (siehe
+            // patches/README.md): Erdung + Rigid-Group-Zuordnung waren beide bereits korrekt,
+            // die Teile blieben trotzdem alle bei Placement=Identitaet, weil RigidPlacements
+            // mit lauter Nullen eingefroren wurde. Fix: die bereits korrekten relativen
+            // Placements direkt von der QUELLE (wo sie im Rahmen ihres eigenen, laengst
+            // erfolgreich gelaufenen Solves richtig berechnet wurden) uebernehmen, statt sie
+            // hier neu (und falsch) zu berechnen - die Reihenfolge von localTargets entspricht
+            // 1:1 der Reihenfolge von sourceJoint.ObjectsToRigidGroup, ein direktes Kopieren
+            // ist also gueltig.
+            std::string code = "import FreeCAD\n"
+                                "try:\n"
+                                "    import JointObject\n"
+                                "    import UtilsAssembly\n"
+                                "    doc = FreeCAD.getDocument('"
+                + docName
+                + "')\n"
+                  "    asmLink = doc.getObject('"
+                + asmLinkName
+                + "')\n"
+                  "    jg = UtilsAssembly.getJointGroup(asmLink)\n"
+                  "    if jg:\n"
+                  "        rg = jg.newObject('App::FeaturePython', 'RigidGroupJoint')\n"
+                  "        JointObject.RigidGroupJoint(rg, ["
+                + partsList
+                + "])\n"
+                  "        if hasattr(JointObject, 'ViewProviderRigidGroupJoint') and getattr(rg, "
+                  "'ViewObject', None):\n"
+                  "            JointObject.ViewProviderRigidGroupJoint(rg.ViewObject)\n"
+                  "        srcJoint = FreeCAD.getDocument('"
+                + srcDocName
+                + "').getObject('"
+                + srcJointName
+                + "')\n"
+                  "        if srcJoint and hasattr(srcJoint, 'RigidPlacements'):\n"
+                  "            rg.setPropertyStatus('RigidPlacements', '-ReadOnly')\n"
+                  "            rg.RigidPlacements = list(srcJoint.RigidPlacements)\n"
+                  "            rg.setPropertyStatus('RigidPlacements', 'ReadOnly')\n"
+                  "        rg.recompute()\n"
+                  "except Exception as e:\n"
+                  "    FreeCAD.Console.PrintError(str(e) + '\\n')\n";
+            Base::Interpreter().runString(code.c_str());
+        }
+        catch (...) {
+        }
+    }
+
+    for (size_t i = 0; i < existingRigidJoints.size(); ++i) {
+        const auto& targetSet = existingRigidTargetSets[i];
+        bool stillWanted = false;
+        for (const auto& wantedSet : wantedRigidTargetSets) {
+            if (wantedSet.size() != targetSet.size()) {
+                continue;
+            }
+            bool allFound = true;
+            for (auto* t : targetSet) {
+                if (std::find(wantedSet.begin(), wantedSet.end(), t) == wantedSet.end()) {
+                    allFound = false;
+                    break;
+                }
+            }
+            if (allFound) {
+                stillWanted = true;
+                break;
+            }
+        }
+        if (!stillWanted) {
+            doc->removeObject(existingRigidJoints[i]->getNameInDocument());
+        }
+    }
+}
+
+// FCPROJECT-PATCH: siehe patches/README.md ("GroundedJoint/RigidGroupJoint verschwindet bei
+// verschachtelter flexibler Baugruppe"). mapToLocalComponent() findet die lokale Entsprechung
+// eines externen (Quell-)Objekts - anders als findLocalAncestor() (fuer Reference1/2 mit
+// Sub-Element-Pfad gedacht) wird hier ueber Objekt-IDENTITAET verglichen (kein Sub-Pfad-Konzept
+// fuer einen einfachen Objekt-Link wie ObjectToGround/ObjectsToRigidGroup): jede Mirror-Kopie
+// eines PDM-Teils ist selbst wieder ein App::Link, dessen rekursiv aufgeloestes Linked-Objekt
+// (DocumentObject::getLinkedObject(true)) IMMER auf dieselbe letztendliche Quelldatei zeigt,
+// egal auf welcher Verschachtelungsebene die Kopie sitzt. Zwei Objekte mit gleichem
+// getLinkedObject(true)-Ergebnis meinen also dasselbe reale Teil, auch wenn sie in
+// verschiedenen Dokumenten liegen und unterschiedliche Objekt-Pointer haben.
+//
+// Ablauf: zuerst die eigenen direkten Mirror-Kinder (objLinkMap-Werte) auf Identitaets-Treffer
+// pruefen; findet sich dort keiner, rekursiv in jedes Kind, das selbst eine AssemblyLink ist,
+// absteigen (das entspricht genau dem Weg, den auch die tatsaechliche Verschachtelung nimmt -
+// eine mehrfach verschachtelte Unterbaugruppe hat selbst wieder ihre eigene objLinkMap fuer
+// ihre eigenen Kinder).
+App::DocumentObject* AssemblyLink::mapToLocalComponent(App::DocumentObject* externalComponent)
+{
+    if (!externalComponent) {
+        return nullptr;
+    }
+
+    App::DocumentObject* targetRoot = externalComponent->getLinkedObject(true);
+    if (!targetRoot) {
+        targetRoot = externalComponent;
+    }
+
+    for (auto& entry : objLinkMap) {
+        App::DocumentObject* localMirror = entry.second;
+        if (!localMirror) {
+            continue;
+        }
+        App::DocumentObject* localRoot = localMirror->getLinkedObject(true);
+        if (!localRoot) {
+            localRoot = localMirror;
+        }
+        if (localRoot == targetRoot) {
+            return localMirror;
+        }
+    }
+
+    for (auto& entry : objLinkMap) {
+        auto* nestedLink = freecad_cast<AssemblyLink*>(entry.second);
+        if (!nestedLink) {
+            continue;
+        }
+        if (auto* found = nestedLink->mapToLocalComponent(externalComponent)) {
+            return found;
+        }
+    }
+
+    return nullptr;
+}
+
 
 void AssemblyLink::handleJointReference(
     App::DocumentObject* joint,
@@ -644,8 +1012,20 @@ void AssemblyLink::handleJointReference(
     }
 
     // 2. Map to local link
+    App::DocumentObject* localLink = nullptr;
+    std::string subPrefix;  // nur belegt, wenn ueber findLocalAncestor() gefunden
     auto it = objLinkMap.find(externalComponent);
-    if (it == objLinkMap.end()) {
+    if (it != objLinkMap.end()) {
+        localLink = it->second;
+    }
+    else {
+        // FCPROJECT-PATCH: siehe patches/bugreport-rigid-nested-joint-reference/README.md -
+        // externalComponent ist kein direktes Kind (z.B. ein Enkelkind aus einer
+        // verschachtelten Rigid=False-Unterbaugruppe) - Eltern-Kette hochlaufen statt
+        // sofort aufzugeben.
+        localLink = findLocalAncestor(externalComponent, subPrefix);
+    }
+    if (!localLink) {
         Base::Console().warning(
             "AssemblyLink: Could not map external component %s to a local link for joint %s\n",
             externalComponent->getNameInDocument(),
@@ -653,7 +1033,6 @@ void AssemblyLink::handleJointReference(
         );
         return;
     }
-    App::DocumentObject* localLink = it->second;
 
     // 3. Set the new reference
     // The local joint now points to the local link [LocalLink, "Sub"]
@@ -663,8 +1042,16 @@ void AssemblyLink::handleJointReference(
 
     // 4. Sync sub-elements
     // The sub-elements (e.g. "Body.Face1") are relative to the component.
-    // Since the LocalLink points to the ExternalPart, the relative path is identical.
+    // Since the LocalLink points to the ExternalPart, the relative path is identical - außer
+    // wenn wir gerade ueber findLocalAncestor() umgeleitet haben: dann ist localLink nicht
+    // mehr die ExternalPart selbst, sondern ein Vorfahre davon, und subPrefix traegt den
+    // fehlenden Zwischenpfad (z.B. "Halter." bei Reference auf "Halter.Edge34" statt "Edge34").
     std::vector<std::string> subs1 = prop1->getSubValues();
+    if (!subPrefix.empty()) {
+        for (auto& sub : subs1) {
+            sub = subPrefix + sub;
+        }
+    }
     std::vector<std::string> subs2 = prop2->getSubValues();
 
     bool changed = false;
@@ -683,6 +1070,63 @@ void AssemblyLink::handleJointReference(
     if (changed) {
         prop2->setSubValues(std::move(subs1));
     }
+}
+
+// FCPROJECT-PATCH: siehe patches/bugreport-rigid-nested-joint-reference/README.md und der
+// Kommentar bei der Deklaration im Header. Laeuft von obj aus die Struktur-Eltern-Kette hoch
+// (nicht getInList() blind nehmen - das kann auch Joints/andere Referenzhalter liefern, nicht
+// nur den strukturellen Container; stattdessen wird unter den getInList()-Kandidaten gezielt
+// der gesucht, dessen "Group"-Property obj tatsaechlich enthaelt), bis ein in objLinkMap
+// bekannter Vorfahre gefunden wird. outSubPrefix erhaelt dabei den durchlaufenen Pfad als
+// Punkt-getrennten Praefix (z.B. "Halter." wenn obj das Enkelkind "Halter" ist und der
+// gefundene Vorfahre dessen direkter Container war) - leer, wenn nichts gefunden wurde oder
+// obj selbst schon der Treffer war.
+App::DocumentObject* AssemblyLink::findLocalAncestor(
+    App::DocumentObject* obj,
+    std::string& outSubPrefix
+)
+{
+    outSubPrefix.clear();
+
+    App::DocumentObject* current = obj;
+    std::string prefix;
+    int maxDepth = 32;
+
+    while (current && maxDepth-- > 0) {
+        App::DocumentObject* parent = nullptr;
+        for (auto* candidate : current->getInList()) {
+            if (!candidate) {
+                continue;
+            }
+            auto* groupProp
+                = dynamic_cast<App::PropertyLinkList*>(candidate->getPropertyByName("Group"));
+            if (!groupProp) {
+                continue;
+            }
+            const auto& members = groupProp->getValues();
+            if (std::find(members.begin(), members.end(), current) != members.end()) {
+                parent = candidate;
+                break;
+            }
+        }
+
+        if (!parent) {
+            return nullptr;
+        }
+
+        const char* name = current->getNameInDocument();
+        prefix = std::string(name ? name : "?") + "." + prefix;
+
+        auto it = objLinkMap.find(parent);
+        if (it != objLinkMap.end()) {
+            outSubPrefix = prefix;
+            return it->second;
+        }
+
+        current = parent;
+    }
+
+    return nullptr;
 }
 
 void AssemblyLink::ensureNoJointGroup()

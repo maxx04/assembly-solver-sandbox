@@ -1,8 +1,14 @@
 {
-  "//": "Dieser Ordner ist ein Sparse-Checkout (nur src/Mod/Assembly + src/3rdParty/OndselSolver) - siehe SANDBOX_NOTES.md. Er ist absichtlich NICHT eigenstaendig baubar (der von CMakeLists.txt benoetigte cMake/-Helferordner fehlt), CMake-Tools soll ihn deshalb in Ruhe lassen. Echte Builds laufen immer in /home/maxx/freecad/freecad-source.",
-  "cmake.configureOnOpen": false,
+  "//": "Dieser Ordner ist ein Sparse-Checkout (nur src/Mod/Assembly + src/3rdParty/OndselSolver) - siehe SANDBOX_NOTES.md - und bleibt selbst nicht eigenstaendig baubar. Seit 2026-09-06 gibt es aber /home/maxx/freecad-sandbox/freecad-source: ein vollstaendiger, eigener FreeCAD-Klon, in dem src/Mod/Assembly + src/3rdParty/OndselSolver Symlinks GENAU auf diesen Sandbox-Ordner sind - CMake Tools baut/verlinkt/installiert also die hier bearbeiteten Dateien direkt, ohne Kopierschritt. cmake.sourceDirectory zeigt deshalb bewusst NACH AUSSEN (unterstuetzt, kein Workspace-Fehler).",
+  "cmake.sourceDirectory": "/home/maxx/freecad-sandbox/freecad-source",
+  "cmake.buildDirectory": "/home/maxx/freecad-sandbox/freecad-source/build",
+  "cmake.installPrefix": "/home/maxx/freecad-sandbox/install",
+  "cmake.configureOnOpen": true,
   "cmake.automaticReconfigure": false,
   "cmake.configureOnEdit": false,
+  "cmake.defaultVariants": {
+    "buildType": { "default": "release", "description": "", "choices": { "release": { "short": "Release", "long": "wie bereits konfiguriert (CMAKE_BUILD_TYPE=Release)", "buildType": "Release" } } }
+  },
 
   "//files": "Cone-Mode-Sparse-Checkout zieht immer die Top-Level-Dateien des ganzen FreeCAD-Repos mit (CMakeLists.txt, pixi.lock, Policy-Dateien etc.), obwohl nur die zwei Unterordner tatsaechlich Inhalt haben - fuer Explorer/Suche ausblenden, damit der Ordner wie das schlanke Assembly+OndselSolver-Arbeitsverzeichnis wirkt, das er sein soll.",
   "files.exclude": {

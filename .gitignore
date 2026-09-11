@@ -10,6 +10,7 @@
 # Build-Ausgaben
 build/
 standalone-check/build/
+standalone-check/kinematic-tests/fcstd-output/
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
@@ -25,6 +26,12 @@ __pycache__/
 *~
 *.clangd
 .DS_Store
+
+# FreeCAD-Backup-Dateien, die beim (Re-)Speichern automatisch entstehen - betrifft u.a.
+# standalone-check/kinematic-tests/fixtures/ (git-getrackte Ausgangs-.FCStd-Dateien, siehe
+# Projekt-Memory "reference-nested-fixture-methodology") - nur die eigentliche .FCStd soll
+# getrackt werden, nicht die Backup-Kopie vom letzten Ueberschreiben.
+*.FCBak
 
 # Logs von update-sandbox.sh (falls spaeter analog zu FCProjects update-logs/ angelegt)
 patches/update-logs/

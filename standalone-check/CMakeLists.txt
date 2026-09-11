@@ -1,172 +1,69 @@
-# Standalone-Compile-Check fuer diese Sandbox
-# ============================================
+# Sandbox-Hilfswerkzeuge (Build+Install der Aenderungen, Patch-Check, Kinematik-Tests)
+# =======================================================================================
 #
-# KEIN Teil von FreeCAD selbst (kein SPDX-Header wie die echten Mod/*-
-# CMakeLists.txt) - reines Hilfsmittel dieser Sandbox, um die hier bearbeiteten
-# .cpp-Dateien OHNE einen vollen FreeCAD-Build gegen die echten Header/Typen zu
-# kompilieren (Syntax-/Typ-Check des aktuellen Sandbox-Arbeitsstands).
+# KEIN Teil von FreeCAD selbst - reine Hilfsmittel dieser Sandbox.
 #
-# Warum kein echtes "add_library(Assembly SHARED ...)" mit Linking wie im
-# echten src/Mod/Assembly/App/CMakeLists.txt: Assembly haengt zur Laufzeit an
-# Part/PartDesign/Spreadsheet/FreeCADApp/OndselSolver, die wiederum an OCCT/
-# Qt6/Xerces/Boost/Coin3D/... haengen - nichts davon ist in dieser Sandbox
-# ausgecheckt (siehe ../SANDBOX_NOTES.md, Abschnitt "Zweck": "kein
-# eigenstaendig baubares FreeCAD"). Statt das nachzubilden, werden hier nur
-# OBJECT-Bibliotheken gebaut (compile-only, kein Link-Schritt) - das reicht,
-# um echte Compiler-Fehler (Syntax, Typen, fehlende Includes, falsche
-# Signaturen) an Ort und Stelle zu finden, ohne freecad-source anzufassen.
+# Nutzerauftrag (2026-09-06): JEDE Aenderung an Assembly-/OndselSolver-Dateien in dieser
+# Sandbox soll ueber ein CMake-Target HIER IM REPO gebaut+installiert werden - siehe Target
+# "build-and-deploy" unten. Alternativ (gleichwertig, dasselbe Ziel) ueber VS Codes
+# CMake-Tools-Extension direkt (siehe ../.vscode/settings.json, cmake.sourceDirectory zeigt
+# auf /home/maxx/freecad-sandbox/freecad-source, wo src/Mod/Assembly + src/3rdParty/
+# OndselSolver Symlinks auf genau diese Sandbox sind - Build dort aendert/testet also direkt
+# diese Dateien, kein Kopierschritt).
 #
-# Voraussetzung: ein bereits konfigurierter/gebauter Klon von
-# github.com/FreeCAD/FreeCAD unter FREECAD_SOURCE_DIR (Default: der auf
-# dieser Maschine ohnehin vorhandene /home/maxx/freecad/freecad-source, siehe
-# ../SANDBOX_NOTES.md) - von dort werden NUR generierte Header
-# (*_autogen/include, .pyi-generierte PyImp-Header) und System-Include-Pfade
-# wiederverwendet, keine .cpp/.h-Quelldateien. Alle Flags unten sind 1:1 aus
-# dessen build/compile_commands.json fuer AssemblyObject.cpp bzw.
-# ViewProviderAssembly.cpp uebernommen (Stand 2026-09-04) - bei einem
-# `update-and-rebuild-freecad.sh`-Lauf drueben koennen sich neue Upstream-
-# Header-Aenderungen ergeben, dann ggf. hier neu abgleichen.
+# Patch-Check und Kinematik-Tests sind DAVON UNABHAENGIGE Zwecke, bewusst weiterhin als
+# .sh-Skripte (kein Zwang, ALLES in CMake nachzubilden - Nutzerklarstellung 2026-09-06):
+#   - check-patches: prueft patches/*.patch gegen den aktuellen Sandbox-Checkout
+#   - kinematic-test-*: autonome Xvfb-Tests (analytisch vs. vanilla vs. gepatcht)
 #
 # Nutzung:
 #   cmake -S standalone-check -B standalone-check/build
-#   cmake --build standalone-check/build
-# (baut nur Objektdateien unter standalone-check/build/, nichts wird
-# installiert oder verlinkt; beliebig oft wiederholbar/loeschbar.)
-#
-# Optional andere Pfade:
-#   cmake -S standalone-check -B standalone-check/build \
-#         -DFREECAD_SOURCE_DIR=/pfad/zu/freecad-source \
-#         -DFREECAD_BUILD_DIR=/pfad/zu/freecad-source/build
+#   cmake --build standalone-check/build --target build-and-deploy
+#   cmake --build standalone-check/build --target check-patches
+#   cmake --build standalone-check/build --target kinematic-test-patched
 
 cmake_minimum_required(VERSION 3.16)
-project(assembly_sandbox_check CXX)
-
-set(FREECAD_SOURCE_DIR "/home/maxx/freecad/freecad-source" CACHE PATH
-    "Checkout von github.com/FreeCAD/FreeCAD, dessen generierte Header/System-Includes wiederverwendet werden")
-set(FREECAD_BUILD_DIR "${FREECAD_SOURCE_DIR}/build" CACHE PATH
-    "Konfigurierter Build-Ordner von FREECAD_SOURCE_DIR (fuer *_autogen/include, config.h etc.)")
-
-if(NOT EXISTS "${FREECAD_BUILD_DIR}/compile_commands.json")
-    message(FATAL_ERROR
-        "FREECAD_BUILD_DIR (${FREECAD_BUILD_DIR}) sieht nicht wie ein konfigurierter "
-        "FreeCAD-Build aus (compile_commands.json fehlt). Siehe ../SANDBOX_NOTES.md - "
-        "dieser Check braucht den echten freecad-source-Build, nicht nur diese Sandbox.")
-endif()
+project(assembly_sandbox_tools NONE)
 
 get_filename_component(SANDBOX_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 
-# Gemeinsame Defines/Includes, wortgleich aus compile_commands.json fuer
-# AssemblyObject.cpp bzw. ViewProviderAssembly.cpp (App- und Gui-Ziel
-# unterscheiden sich u.a. durch QT_*_LIB-Defines und die Gui/Qt-Widgets-Includes).
-set(COMMON_DEFINES
-    BOOST_ATOMIC_DYN_LINK BOOST_ATOMIC_NO_LIB
-    BOOST_DATE_TIME_DYN_LINK BOOST_DATE_TIME_NO_LIB
-    BOOST_PROGRAM_OPTIONS_DYN_LINK BOOST_PROGRAM_OPTIONS_NO_LIB
-    BOOST_REGEX_DYN_LINK BOOST_REGEX_NO_LIB
-    BOOST_THREAD_DYN_LINK BOOST_THREAD_NO_LIB
-    FMT_SHARED HAVE_CONFIG_H PYCXX_6_2_COMPATIBILITY
-    QT_CONCURRENT_LIB QT_CORE_LIB QT_NO_DEBUG QT_NO_KEYWORDS QT_XML_LIB
-    _OCC64 NDEBUG
+# --- Build+Install der Sandbox-Aenderungen (Assembly + OndselSolver + Python-Skripte) -----
+# /home/maxx/freecad-sandbox/freecad-source/src/Mod/Assembly (+ src/3rdParty/OndselSolver)
+# sind Symlinks auf diese Sandbox - Make erkennt selbst, dass Coin3D/Part/Gui/etc.
+# unveraendert sind (Sekunden statt Stunden, verifiziert). VIER Targets noetig, nicht nur
+# "Assembly":
+# - "Assembly"/"OndselSolver": kompilieren+linken das App-seitige C++ (AssemblyApp.so)
+# - "AssemblyGui": kompiliert+linkt das Gui-seitige C++ (AssemblyGui.so, u.a.
+#   ViewProviderAssembly.cpp) - OHNE dieses Target bleibt AssemblyGui.so beim ALTEN ABI
+#   stehen, wenn sich eine App-seitige Funktionssignatur aendert (z.B. getJoints() bekam
+#   durch einen Patch zwei zusaetzliche Parameter) -> "undefined symbol"-Crash beim naechsten
+#   Start, weil AssemblyGui.so noch die alte (2-Parameter-)Version der Funktion sucht, die es
+#   in der neuen AssemblyApp.so nicht mehr gibt. Live als echter Crash aufgetreten, als nach
+#   dem Anwenden mehrerer Patches nur "Assembly OndselSolver" neu gebaut wurde.
+# - "AssemblyTests": kopiert die .py-Dateien (JointObject.py, CommandSolveAssembly.py,
+#   UtilsAssembly.py, ...) - NICHT "AssemblyScripts" trotz des irrefuehrenden Namens (siehe
+#   src/Mod/Assembly/CMakeLists.txt: fc_copy_sources() fuer die eigentlichen Assembly_Scripts
+#   haengt dort dran) - live verifiziert: nur "Assembly OndselSolver" zu bauen liess eine
+#   .py-Aenderung unbemerkt liegen.
+#
+# KEIN deploy-so.sh-Umweg noetig wie im alten /home/maxx/freecad/-Workflow: dort entstand die
+# RUNPATH-Gefahr durch `cp -a` zwischen verschiedenen Installationsordnern. Hier installiert
+# `cmake --install` direkt in das eigene, dafuer konfigurierte install/-Verzeichnis
+# (CMAKE_INSTALL_PREFIX) - keine Kopie zwischen zwei Orten, keine RUNPATH-Problematik.
+set(FREECAD_SANDBOX_BUILD_DIR "/home/maxx/freecad-sandbox/freecad-source/build" CACHE PATH
+    "Build-Ordner des eigenstaendigen freecad-source-Klons (Symlinks auf diese Sandbox)")
+
+add_custom_target(build-and-deploy
+    COMMAND ${CMAKE_COMMAND} --build "${FREECAD_SANDBOX_BUILD_DIR}"
+            --target Assembly OndselSolver AssemblyGui AssemblyTests
+    COMMAND ${CMAKE_COMMAND} --install "${FREECAD_SANDBOX_BUILD_DIR}"
+    COMMENT "Baut Assembly+OndselSolver+AssemblyGui+Python-Skripte neu und installiert nach /home/maxx/freecad-sandbox/install"
+    VERBATIM
+    USES_TERMINAL
 )
 
-set(COMMON_INCLUDES
-    # WICHTIG: SANDBOX_ROOT/src steht bewusst VOR FREECAD_SOURCE_DIR/src. Die von
-    # generate_from_py() erzeugten *Py.h-Header (z.B. AssemblyObjectPy.h) includen
-    # per spitzer Klammer "<Mod/Assembly/App/AssemblyObject.h>" (Suchpfad-basiert,
-    # nicht pfadrelativ zur includierenden Datei) - ohne diese Reihenfolge wuerde
-    # das den ECHTEN freecad-source-Header treffen, waehrend die .cpp-Datei selbst
-    # per Anfuehrungszeichen-Include ("AssemblyObject.h") bereits den Sandbox-Header
-    # gezogen hat -> doppelte Definition derselben Klasse (live beobachtet).
-    "${SANDBOX_ROOT}/src"
-    "${FREECAD_BUILD_DIR}"
-    "${FREECAD_BUILD_DIR}/src"
-    "${FREECAD_SOURCE_DIR}/src"
-    "${FREECAD_SOURCE_DIR}/src/3rdParty/OndselSolver"
-    "${FREECAD_SOURCE_DIR}/src/3rdParty/FastSignals/libfastsignals/include"
-)
-set(COMMON_SYSTEM_INCLUDES
-    /usr/include/opencascade
-    /usr/include/freetype2
-    /usr/include/x86_64-linux-gnu/qt6/QtCore
-    /usr/include/x86_64-linux-gnu/qt6
-    /usr/include/x86_64-linux-gnu/qt6/QtXml
-    "${FREECAD_SOURCE_DIR}/src/3rdParty/PyCXX"
-    /usr/include/python3.12
-    "${FREECAD_SOURCE_DIR}/src/3rdParty"
-    /usr/lib/x86_64-linux-gnu/qt6/mkspecs/linux-g++
-    /usr/include/x86_64-linux-gnu/qt6/QtConcurrent
-    /usr/include/harfbuzz
-    /usr/include/hdf5/serial
-    /usr/lib/x86_64-linux-gnu/openmpi/include
-    /usr/lib/x86_64-linux-gnu/openmpi/include/openmpi
-)
-
-set(COMMON_COMPILE_OPTIONS -Wall -Wextra -Wno-write-strings -O3)
-
-# --- App-Ziel: AssemblyObject.cpp, AssemblyLink.cpp, AssemblyUtils.cpp -----
-add_library(assembly_app_check OBJECT
-    "${SANDBOX_ROOT}/src/Mod/Assembly/App/AssemblyObject.cpp"
-    "${SANDBOX_ROOT}/src/Mod/Assembly/App/AssemblyLink.cpp"
-    "${SANDBOX_ROOT}/src/Mod/Assembly/App/AssemblyUtils.cpp"
-)
-target_compile_features(assembly_app_check PRIVATE cxx_std_20)
-target_compile_options(assembly_app_check PRIVATE ${COMMON_COMPILE_OPTIONS})
-target_compile_definitions(assembly_app_check PRIVATE
-    Assembly_EXPORTS ${COMMON_DEFINES}
-)
-target_include_directories(assembly_app_check PRIVATE
-    "${FREECAD_BUILD_DIR}/src/Mod/Assembly/App/Assembly_autogen/include"
-    "${FREECAD_BUILD_DIR}/src/Mod/Assembly/App"
-    ${COMMON_INCLUDES}
-)
-target_include_directories(assembly_app_check SYSTEM PRIVATE ${COMMON_SYSTEM_INCLUDES})
-
-# --- Gui-Ziel: ViewProviderAssembly.cpp ------------------------------------
-add_library(assembly_gui_check OBJECT
-    "${SANDBOX_ROOT}/src/Mod/Assembly/Gui/ViewProviderAssembly.cpp"
-)
-target_compile_features(assembly_gui_check PRIVATE cxx_std_20)
-target_compile_options(assembly_gui_check PRIVATE ${COMMON_COMPILE_OPTIONS})
-target_compile_definitions(assembly_gui_check PRIVATE
-    AssemblyGui_EXPORTS ${COMMON_DEFINES}
-    QT_GUI_LIB QT_NETWORK_LIB QT_OPENGLWIDGETS_LIB QT_OPENGL_LIB
-    QT_PRINTSUPPORT_LIB QT_SVGWIDGETS_LIB QT_SVG_LIB QT_UITOOLS_LIB QT_WIDGETS_LIB
-)
-target_include_directories(assembly_gui_check PRIVATE
-    "${FREECAD_BUILD_DIR}/src/Mod/Assembly/Gui/AssemblyGui_autogen/include"
-    "${FREECAD_BUILD_DIR}/src/Mod/Assembly/Gui"
-    "${FREECAD_SOURCE_DIR}/src/Gui"
-    "${FREECAD_SOURCE_DIR}/src/Gui/Quarter"
-    "${FREECAD_SOURCE_DIR}/src/Gui/PreferencePages"
-    "${FREECAD_SOURCE_DIR}/src/Gui/Selection"
-    "${FREECAD_SOURCE_DIR}/src/Gui/StyleParameters"
-    "${FREECAD_BUILD_DIR}/src/Gui"
-    "${FREECAD_BUILD_DIR}/src/Gui/Language"
-    "${FREECAD_BUILD_DIR}/src/Gui/propertyeditor"
-    "${FREECAD_BUILD_DIR}/src/Gui/TaskView"
-    "${FREECAD_BUILD_DIR}/src/Gui/Quarter"
-    "${FREECAD_BUILD_DIR}/src/Gui/DAGView"
-    ${COMMON_INCLUDES}
-)
-target_include_directories(assembly_gui_check SYSTEM PRIVATE
-    ${COMMON_SYSTEM_INCLUDES}
-    /usr/include/x86_64-linux-gnu/qt6/QtWidgets
-    /usr/include/x86_64-linux-gnu/qt6/QtOpenGL
-    /usr/include/x86_64-linux-gnu/qt6/QtOpenGLWidgets
-    /usr/include/x86_64-linux-gnu/qt6/QtPrintSupport
-    /usr/include/x86_64-linux-gnu/qt6/QtSvg
-    /usr/include/x86_64-linux-gnu/qt6/QtSvgWidgets
-    /usr/include/x86_64-linux-gnu/qt6/QtNetwork
-    /usr/include/x86_64-linux-gnu/qt6/QtUiTools
-    /usr/include/x86_64-linux-gnu/qt6/QtGui
-)
-
-# Bequemer Sammel-Target fuer "baue alles, was diese Sandbox aktuell aendert".
-add_custom_target(check ALL DEPENDS assembly_app_check assembly_gui_check)
-
-# --- Patch-Check: pruft ../patches/*.patch gegen den aktuellen Checkout ----
-# NICHT Teil von ALL (laeuft nicht bei jedem normalen Build mit, u.a. weil es
-# einen Git-Worktree anlegt/entfernt - separat aufrufen:
+# --- Patch-Check: prueft ../patches/*.patch gegen den aktuellen Checkout ----
+# NICHT Teil von ALL (legt/entfernt einen Git-Worktree) - separat aufrufen:
 #   cmake --build standalone-check/build --target check-patches
 # Siehe check-patches.sh fuer Details/Begruendung der aktuellen 6-Patch-Liste
 # (Rest wurde als ueberholt/TEMP identifiziert und geloescht, siehe
@@ -175,6 +72,38 @@ add_custom_target(check-patches
     COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/check-patches.sh" "${SANDBOX_ROOT}"
     WORKING_DIRECTORY "${SANDBOX_ROOT}"
     COMMENT "Pruefe patches/*.patch gegen den aktuellen Sandbox-Checkout (schreibt nichts im Hauptarbeitsbaum)"
+    VERBATIM
+    USES_TERMINAL
+)
+
+# --- Kinematik-Testsuite: analytisch vs. vanilla-FreeCAD vs. gepatchter Stand -------------
+# Autonome Xvfb-Tests, siehe kinematic-tests/README.md. NICHT Teil von ALL (startet einen
+# eigenen FreeCAD-Gui-Prozess pro Installation, braucht Xvfb). Zwei separate Targets, damit
+# gezielt einzeln geprueft werden kann, ob eine Aenderung vanilla-Verhalten beeinflusst hat.
+#
+# Beide Targets laufen ueber run-all-tests.sh und fuehren damit die GESAMTE Testmatrix aus
+# (alle test_*.py in kinematic-tests/, aktuell: Fixed/Revolute/Cylindrical/Slider/Ball, flach -
+# siehe README.md "Aktuelle Tests"), nicht mehr nur test_fixed_joint_flat.py wie zu Beginn.
+# Einen einzelnen Testfall gezielt debuggen: run-test.sh direkt aufrufen (siehe dessen eigene
+# Kommentare) statt ueber dieses Target.
+set(KINEMATIC_TEST_INSTALL_PATCHED "/home/maxx/freecad-sandbox/install" CACHE PATH
+    "Zu testende gepatchte FreeCAD-Installation")
+set(KINEMATIC_TEST_INSTALL_VANILLA "/home/maxx/freecad-sandbox/install-clean-test" CACHE PATH
+    "Unmodifizierte FreeCAD-Installation als Vergleichsreferenz")
+
+add_custom_target(kinematic-test-patched
+    COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/kinematic-tests/common/run-all-tests.sh"
+            "${KINEMATIC_TEST_INSTALL_PATCHED}"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/kinematic-tests"
+    COMMENT "Kinematik-Testmatrix (alle test_*.py) gegen gepatchten Stand (${KINEMATIC_TEST_INSTALL_PATCHED})"
+    VERBATIM
+    USES_TERMINAL
+)
+add_custom_target(kinematic-test-vanilla
+    COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/kinematic-tests/common/run-all-tests.sh"
+            "${KINEMATIC_TEST_INSTALL_VANILLA}"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/kinematic-tests"
+    COMMENT "Kinematik-Testmatrix (alle test_*.py) gegen unmodifiziertes FreeCAD (${KINEMATIC_TEST_INSTALL_VANILLA})"
     VERBATIM
     USES_TERMINAL
 )

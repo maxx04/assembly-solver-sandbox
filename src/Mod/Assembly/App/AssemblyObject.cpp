@@ -291,7 +291,28 @@ App::DocumentObjectExecReturn* AssemblyObject::execute()
         "User parameter:BaseApp/Preferences/Mod/Assembly"
     );
     if (hGrp->GetBool("SolveOnRecompute", true)) {
-        solve(false);
+        // FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix,
+        // 2026-09-03, Nutzerentscheidung "oben nach unten"): eine Instanz, die strukturell unter
+        // einer flexiblen AssemblyLink haengt, loest sich hier bewusst NICHT mehr selbst - die
+        // aeussere, umfassendere Instanz erreicht ihre Joints/geerdeten Teile ohnehin bereits
+        // rekursiv (Teilschritt 2/2e) und schreibt direkt auf ihre ECHTEN Placement-Properties
+        // (canonicalizeForMbD()). Ohne diese Sperre loesen mehrere voneinander unabhaengige
+        // Instanzen denselben physischen Teilbaum, jede mit ihrer eigenen, unvollstaendigen Sicht,
+        // und ueberschreiben sich gegenseitig je nach Dokument-Abhaengigkeits-Reihenfolge - das
+        // war die eigentliche Ursache von Befund 3 (siehe assembly-architecture-overview.md,
+        // Abschnitt "NEUER, noch offener Befund"). Betrifft NUR diesen Recompute-Pfad -
+        // interaktives Ziehen (preDrag()/doDragStep()) ruft solve() weiterhin direkt und
+        // unbedingt auf der gerade aktiven Instanz auf.
+        if (isNestedUnderFlexibleParent()) {
+            Base::Console().message(
+                "Assembly: '%s' skipped its own solve() - nested under a flexible parent "
+                "assembly, which solves it as part of its own recompute.\n",
+                getFullName()
+            );
+        }
+        else {
+            solve(false);
+        }
     }
     return ret;
 }
@@ -309,14 +330,84 @@ void AssemblyObject::onChanged(const App::Property* prop)
     App::Part::onChanged(prop);
 }
 
+namespace
+{
+// FCPROJECT-PATCH (10, nachgebessert): Aequivalent zu JointObject.py's getContext() - baut den
+// vollen Pfad ueber die Eltern-Kette (InList, jeweils erster Eintrag) auf, z.B.
+// "Halterbaugruppe.Joint005" statt nur "Joint005". Ein blosser Name reicht bei verschachtelten
+// Baugruppen (PDM-Standardfall: jede Unterbaugruppe hat ihre EIGENE, lokal bei 0 beginnende
+// Joint-Nummerierung) nicht aus, um den Joint ohne Suchen im Baum wiederzufinden - man muss
+// wissen, in welcher Unterbaugruppe er sitzt. maxDepth als simple Zyklen-Bremse statt eines
+// zusaetzlichen std::set-Includes. Trotz des Namens nicht joint-spezifisch - funktioniert fuer
+// jedes DocumentObject (seit Fix 13 auch fuer geerdete Teile und Rigid-Group-Mitglieder
+// verwendet), daher hier vor solve() statt erst vor isMbDJointValid().
+std::string getJointContextName(App::DocumentObject* obj)
+{
+    std::vector<std::string> parts;
+    App::DocumentObject* current = obj;
+    int maxDepth = 32;
+    while (current && maxDepth-- > 0) {
+        const char* name = current->getNameInDocument();
+        parts.insert(parts.begin(), name ? name : "?");
+        const auto& inList = current->getInList();
+        current = inList.empty() ? nullptr : inList.front();
+    }
+
+    std::string result;
+    for (size_t i = 0; i < parts.size(); ++i) {
+        if (i > 0) {
+            result += ".";
+        }
+        result += parts[i];
+    }
+
+    if (obj && obj->getDocument()) {
+        return std::string(obj->getDocument()->Label.getStrValue()) + "#" + result;
+    }
+    return result;
+}
+
+// FCPROJECT-PATCH (13): Nutzerwunsch - Namen statt nur Anzahl ausgeben, siehe solve() unten.
+// Nur noch fuer die Rigid-Group-Mitgliederliste gebraucht (Vector) - die geerdeten Teile
+// bekommen seit Fix 15 je eine eigene Zeile statt einer komma-getrennten Liste.
+std::string joinContextNames(const std::vector<App::DocumentObject*>& objs)
+{
+    std::string result;
+    for (auto* obj : objs) {
+        if (!obj) {
+            continue;
+        }
+        if (!result.empty()) {
+            result += ", ";
+        }
+        result += getJointContextName(obj);
+    }
+    return result;
+}
+}  // namespace
+
 int AssemblyObject::solve(bool enableRedo)
 {
+    // FCPROJECT-PATCH (11): mehr Rueckmeldung ueber den Solver-Ablauf. Bisher blieb sowohl ein
+    // erfolgreicher Solve als auch ein mangels geerdetem Teil komplett uebersprungener Solve
+    // (groundedObjs.empty() -> return -6) OHNE JEDE Konsolen-Ausgabe - nur echte Exceptions
+    // wurden gemeldet (siehe catch-Bloecke unten). Im PDM-Alltag mit vielen verschachtelten
+    // Baugruppen ist dadurch oft unklar, ob/wann der Solver ueberhaupt gelaufen ist und was er
+    // dabei festgestellt hat (z.B. redundante Joints, siehe Fix 10) - die drei Meldungen unten
+    // decken die Fragen "1. gestartet? 2. berechnet? 3. mit welchem Ergebnis?" ab.
+    Base::Console().message("Assembly: Solving '%s'...\n", getFullName());
+
     ensureIdentityPlacements();
 
     syncGroundedJoints();
 
     mbdAssembly = makeMbdAssembly();
     objectPartMap.clear();
+    // FCPROJECT-PATCH (Teilschritt 2 "adressieren statt kopieren", solver-root-cause-fix): exakt
+    // derselbe Lifecycle wie objectPartMap.clear() (siehe Header-Kommentar an
+    // jointNestingPrefixMap fuer die Begruendung) - geleert bevor die anschliessende
+    // getJoints()-Rekursion sie neu befuellt.
+    jointNestingPrefixMap.clear();
     rebuildRigidClusters();
     syncActiveRigidGroupPlacements();
     motions.clear();
@@ -324,10 +415,17 @@ int AssemblyObject::solve(bool enableRedo)
     auto groundedObjs = fixGroundedParts();
     if (groundedObjs.empty()) {
         // If no part fixed we can't solve.
+        Base::Console().warning(
+            "Assembly: Solve of '%s' skipped - no grounded part found.\n",
+            getFullName()
+        );
         return -6;
     }
 
-    std::vector<App::DocumentObject*> joints = getJoints();
+    // verboseLog=true nur hier: dies ist der EINE echte, seltene solve()-Aufruf - nicht die
+    // haeufigen internen getJoints()-Aufrufe aus isPartConnected()/getJointsOfPart() waehrend
+    // einer interaktiven Zieh-Bewegung (siehe FCPROJECT-PATCH 16 in getJoints()).
+    std::vector<App::DocumentObject*> joints = getJoints(false, true, true);
 
     removeUnconnectedJoints(joints, groundedObjs);
 
@@ -354,12 +452,60 @@ int AssemblyObject::solve(bool enableRedo)
         return -1;
     }
 
+    // FCPROJECT-PATCH (13): Nutzerwunsch - nicht nur die ANZAHL der geerdeten Teile ausgeben,
+    // sondern auch deren Namen (z.B. um zu erkennen, dass Origin IMMER automatisch mitgezaehlt
+    // wird, auch ohne eigenen GroundedJoint - siehe getGroundedParts()), sowie die Mitglieder
+    // etwaiger Rigid Groups (siehe rebuildRigidClusters() oben, neues RigidGroup-Feature).
+    // FCPROJECT-PATCH (15): Nutzerwunsch - jedes geerdete Teil in einer eigenen Zeile statt
+    // komma-getrennt in einer Zeile, damit lange Listen im Report View nicht mehr horizontal
+    // gescrollt werden muessen.
+    Base::Console().message(
+        "Assembly: '%s' computed (%zu joint(s), %zu grounded part(s)):\n",
+        getFullName(),
+        joints.size(),
+        groundedObjs.size()
+    );
+    for (auto* obj : groundedObjs) {
+        if (!obj) {
+            continue;
+        }
+        Base::Console().message("Assembly:   grounded part: %s\n", getJointContextName(obj));
+    }
+
+    for (const auto& [rep, members] : rigidMembersByRep) {
+        Base::Console().message(
+            "Assembly: rigid group '%s' (%zu Teil(e)): %s.\n",
+            getJointContextName(rep),
+            members.size(),
+            joinContextNames(members)
+        );
+    }
+
     setNewPlacements();
     updateRigidPlacementCache();
 
     redrawJointPlacements(joints);
 
     updateSolveStatus();
+
+    if (lastHasRedundancies) {
+        std::string names;
+        for (const auto& n : lastRedundantJoints) {
+            if (!names.empty()) {
+                names += ", ";
+            }
+            names += n;
+        }
+        Base::Console().warning(
+            "Assembly: Solve of '%s' finished with %zu redundant joint(s): %s.\n",
+            getFullName(),
+            lastRedundantJoints.size(),
+            names
+        );
+    }
+    else {
+        Base::Console().message("Assembly: Solve of '%s' finished successfully.\n", getFullName());
+    }
 
     return 0;
 }
@@ -458,6 +604,9 @@ int AssemblyObject::generateSimulation(App::DocumentObject* sim)
 {
     mbdAssembly = makeMbdAssembly();
     objectPartMap.clear();
+    // FCPROJECT-PATCH (Teilschritt 2, siehe solve() fuer Begruendung): gleicher Lifecycle wie
+    // objectPartMap.
+    jointNestingPrefixMap.clear();
 
     motions = getMotionsFromSimulation(sim);
 
@@ -759,6 +908,9 @@ void AssemblyObject::exportAsASMT(std::string fileName)
 {
     mbdAssembly = makeMbdAssembly();
     objectPartMap.clear();
+    // FCPROJECT-PATCH (Teilschritt 2, siehe solve() fuer Begruendung): gleicher Lifecycle wie
+    // objectPartMap.
+    jointNestingPrefixMap.clear();
     rebuildRigidClusters();
     fixGroundedParts();
 
@@ -816,8 +968,28 @@ void AssemblyObject::rebuildRigidClusters()
             continue;
         }
 
-        auto* const first = members.front();
-        for (auto* const member : members | std::views::drop(1)) {
+        // FCPROJECT-PATCH (2026-09-09, "Starre Verbindung"/RigidGroupJoint in verschachtelter
+        // flexibler Baugruppe hebt kein 1-DOF-Gelenk richtig auf): ObjectsToRigidGroup liefert
+        // die ROHEN, lokal ausgewaehlten Objekte (z.B. den Spiegel 'mirror_BoxA' hier in
+        // GrandTop) - der Rest dieser Klasse (getConnectedParts()/removeUnconnectedJoints() via
+        // resolvePartForMbD(), traverseAndMarkConnectedParts()) arbeitet aber durchgaengig mit
+        // KANONISCHEN Identitaeten (canonicalizeForMbD() - das ECHTE, tiefste Objekt in der
+        // verschachtelten Unterbaugruppe, nicht dessen lokale Spiegelkopie). Ohne Kanonisierung
+        // HIER landen rigidRepByPart/rigidMembersByRep auf dem rohen Spiegel als Schluessel -
+        // getConnectedParts()s Rigid-Cluster-Kante (s.u.) liefert dann ebenfalls den rohen
+        // Spiegel als naechsten Traversal-Schritt, und der naechste Traversal-Schritt (ein
+        // ECHTER Joint in der Unterbaugruppe, dessen Reference1/2 bereits kanonisch aufgeloest
+        // wird) erkennt diesen rohen Spiegel nie als Uebereinstimmung - die Traversal-Kette
+        // bricht GENAU an der Rigid-Cluster-Kante ab. Live reproduziert: eine "Starre
+        // Verbindung" zwischen GrandTops BoxC und Subs (gespiegeltem) BoxB verhinderte NICHT,
+        // dass Subs eigene interne Erdung von BoxA redundant bestehen blieb - beide Enden des
+        // inneren Slider-Joints wurden dadurch unabhaengig voneinander fixiert, das Gelenk war
+        // komplett eingefroren statt seinen 1 Freiheitsgrad zu behalten. Fix: Mitglieder vor dem
+        // Verschmelzen kanonisieren, damit rigidRepByPart/rigidMembersByRep im SELBEN
+        // Identitaetsraum liegen wie der Rest der Traversal-Logik.
+        auto* const first = canonicalizeForMbD(members.front());
+        for (auto* const rawMember : members | std::views::drop(1)) {
+            auto* const member = canonicalizeForMbD(rawMember);
             unite(first, member);
         }
     }
@@ -996,7 +1168,135 @@ void AssemblyObject::setNewPlacements()
             propPlacement->setValue(newPlacement);
             obj->purgeTouched();
         }
+
+        // FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix,
+        // 2026-09-03, erweitert 2026-09-04 - live durch Nutzer aufgedeckt: "Boxen nach dem
+        // Laden werden bei Taste Z nicht linear/korrekt platziert"): bewusst AUSSERHALB des
+        // obigen isSame()-Checks aufgerufen, nicht nur wenn sich das kanonische (echte) Objekt
+        // selbst aendert. 'obj' ist hier der kanonische, ECHTE Pointer (dank
+        // canonicalizeForMbD() in getMbDData()) - die lokale Spiegel-Kopie, die tatsaechlich in
+        // DIESER Baugruppe gerendert/gezogen wird, ist ein SEPARATES Dokumentobjekt mit ihrem
+        // EIGENEN, unabhaengig gespeicherten Placement-Wert. Steht das echte Objekt (z.B. weil
+        // geerdet) schon VOR diesem solve() korrekt an seiner Zielposition, aendert sich
+        // 'propPlacement' hier gar nicht - der alte Code rief syncLocalMirrorPlacement() dann
+        // NIE auf, wodurch eine veraltete, direkt aus der Datei geladene lokale Spiegel-Kopie
+        // (z.B. vom letzten Speichern VOR einer Bearbeitung an der echten Baugruppe) dauerhaft
+        // falsch stehen blieb - sichtbar als "Box springt beim ersten Z auf unerwartete
+        // Position", weil eine ANDERE, tatsaechlich verschobene Box (hier: BoxD) ueber ihren
+        // Fixed-Joint an die inzwischen korrekt/aber-nie-synchronisierte lokale Kopie gekoppelt
+        // wird. syncLocalMirrorPlacement() hat selbst bereits einen eigenen isSame()-Check,
+        // unnoetige Schreibvorgaenge auf bereits korrekte lokale Kopien bleiben also trotzdem
+        // aus - nur der FEHLENDE erste Sync-Versuch wird hier nachgeholt.
+        syncLocalMirrorPlacement(obj, newPlacement);
     }
+}
+
+namespace
+{
+// FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix, 2026-09-03):
+// sammelt alle lokal gespiegelten "Blatt"-Objekte (Leaf-Kandidaten fuer syncLocalMirrorPlacement())
+// unterhalb von 'objects' ein - steigt dabei in FLEXIBLE AssemblyLinks und normale Gruppen ab,
+// nimmt eine RIGIDE AssemblyLink dagegen selbst als Kandidat (sie ist die atomare Spiegel-Einheit
+// fuer den Solver, siehe canonicalizeForMbD()). Bewusst identisches Abstiegsmuster wie
+// collectComponentsRecursively() (AssemblyUtils.cpp) - nur ohne dessen GeoFeature-Filter, da hier
+// auch reine App::Link-Blaetter als Kandidaten in Frage kommen.
+void collectLocalMirrorCandidates(
+    const std::vector<App::DocumentObject*>& objects,
+    std::vector<App::DocumentObject*>& out
+)
+{
+    for (auto* obj : objects) {
+        if (!obj) {
+            continue;
+        }
+        if (auto* asmLink = freecad_cast<Assembly::AssemblyLink*>(obj)) {
+            if (asmLink->isRigid()) {
+                out.push_back(obj);
+            }
+            else {
+                collectLocalMirrorCandidates(asmLink->Group.getValues(), out);
+            }
+            continue;
+        }
+        if (auto* group = freecad_cast<App::DocumentObjectGroup*>(obj)) {
+            collectLocalMirrorCandidates(group->Group.getValues(), out);
+            continue;
+        }
+        out.push_back(obj);
+    }
+}
+}  // namespace
+
+// FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix, 2026-09-03,
+// live durch Nutzer-Maus-Drag aufgedeckt): schliesst die zuletzt gefundene Luecke -
+// AssemblyLink::synchronizeComponents() spiegelt die Placement eines lokalen Spiegel-Objekts
+// (das, was tatsaechlich in der 3D-Ansicht gerendert und mit der Maus gezogen wird) nur bei
+// Rigid=true vom echten Quellobjekt zurueck; bei flexiblen Unterbaugruppen fehlt dieser Ruecksync
+// komplett. Ein Versuch, das direkt in AssemblyLink.cpp analog zu ergaenzen, scheitert an der
+// Ausfuehrungsreihenfolge: AssemblyLink::execute() (das updateContents()/
+// synchronizeComponents() aufruft) laeuft INNERHALB DESSELBEN Recompute-Durchlaufs VOR dem
+// solve() der Baugruppe, deren Ergebnis gespiegelt werden muesste - live per Debug-Logging
+// bestaetigt. Ein Sync dort wuerde also immer die VERALTETEN Werte kopieren.
+//
+// Stattdessen hier, direkt im Anschluss an das Schreiben des kanonischen (echten) Placement-
+// Werts in setNewPlacements() - zu diesem Zeitpunkt ist der frisch geloeste Wert garantiert
+// aktuell, und alles laeuft synchron innerhalb DESSELBEN solve()-Aufrufs, ganz ohne Abhaengigkeit
+// von einer Recompute-Reihenfolge zwischen verschiedenen Objekten. Sucht unter allen lokal
+// gespiegelten Kandidaten (collectLocalMirrorCandidates()) denjenigen, der laut
+// canonicalizeForMbD() - derselben, bereits verifizierten Aufloesung, die auch die Joints/
+// Erdung auf 'realObj' abgebildet hat - genau 'realObj' entspricht, und schreibt dessen
+// Placement ebenfalls. Bewusst als Brute-Force-Suche ueber ALLE Kandidaten implementiert statt
+// als eigenstaendige "Rueckwaerts"-Aufloesung, um keine zweite, potenziell abweichende
+// Namenspfad-Logik zu pflegen - canonicalizeForMbD() bleibt die einzige Quelle der Wahrheit fuer
+// "was ist das echte Objekt hinter diesem lokalen Kandidaten".
+void AssemblyObject::syncLocalMirrorPlacement(App::DocumentObject* realObj, const Base::Placement& plc)
+{
+    if (!realObj) {
+        return;
+    }
+
+    std::vector<App::DocumentObject*> candidates;
+    collectLocalMirrorCandidates(Group.getValues(), candidates);
+
+    for (auto* candidate : candidates) {
+        if (!candidate || candidate == realObj) {
+            continue;
+        }
+        if (canonicalizeForMbD(candidate) != realObj) {
+            continue;
+        }
+
+        auto* propPlc = candidate->getPlacementProperty();
+        if (!propPlc) {
+            continue;
+        }
+        if (!propPlc->getValue().isSame(plc)) {
+            propPlc->setValue(plc);
+            candidate->purgeTouched();
+        }
+    }
+}
+
+// FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix, 2026-09-03):
+// siehe ausfuehrliche Begruendung am Deklarationsort in AssemblyObject.h.
+bool AssemblyObject::hasRealObject(App::DocumentObject* obj)
+{
+    if (!obj) {
+        return false;
+    }
+    if (hasObject(obj, true)) {
+        return true;
+    }
+
+    std::vector<App::DocumentObject*> candidates;
+    collectLocalMirrorCandidates(Group.getValues(), candidates);
+
+    for (auto* candidate : candidates) {
+        if (candidate && canonicalizeForMbD(candidate) == obj) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void AssemblyObject::redrawJointPlacements(std::vector<App::DocumentObject*> joints)
@@ -1131,7 +1431,12 @@ ViewGroup* AssemblyObject::getExplodedViewGroup() const
     return nullptr;
 }
 
-std::vector<App::DocumentObject*> AssemblyObject::getJoints(bool delBadJoints, bool subJoints)
+std::vector<App::DocumentObject*> AssemblyObject::getJoints(
+    bool delBadJoints,
+    bool subJoints,
+    bool verboseLog,
+    const std::string& nestingPrefix
+)
 {
     std::vector<App::DocumentObject*> joints = {};
 
@@ -1140,6 +1445,19 @@ std::vector<App::DocumentObject*> AssemblyObject::getJoints(bool delBadJoints, b
         return {};
     }
 
+    // FCPROJECT-PATCH (16): Nutzerwunsch - sichtbar machen, WELCHE Joints hier pro Solve
+    // uebernommen und welche warum uebersprungen werden. Hintergrund: bei verschachtelten
+    // Baugruppen kann ein Joint STILLSCHWEIGEND rausfallen, wenn beide Referenzen ueber
+    // getMovingPartFromRef() auf DASSELBE aeussere Bauteil abgebildet werden (z.B. weil Rotor UND
+    // Gehaeuse beide innerhalb DERSELBEN als "Rigid" markierten Unter-Baugruppe liegen - dann
+    // sieht dieser Joint von hier aus wie ein selbst-verweisender/inkohaerenter Joint aus, obwohl
+    // er weiter unten in der eigentlich zustaendigen inneren Baugruppe voellig normal waere).
+    // Ohne diese Meldung ist das von aussen nicht von einem echten "Teil geloescht"-Leichenjoint
+    // zu unterscheiden - beide Faelle liefen bisher identisch lautlos durch.
+    // FCPROJECT-PATCH (16, nachgebessert): NUR noch hinter verboseLog, siehe Header-Kommentar -
+    // isPartConnected()/getJointsOfPart() rufen diese Funktion waehrend einer interaktiven
+    // Zieh-Bewegung (preDrag()) potenziell auf jedem Mausereignis auf; unbedingtes Logging hat dort
+    // spuerbar CPU gekostet (Report-View-Textausgabe ist pro Aufruf nicht billig).
     Base::PyGILStateLocker lock;
     for (auto joint : jointGroup->getObjects()) {
         if (!joint) {
@@ -1147,16 +1465,52 @@ std::vector<App::DocumentObject*> AssemblyObject::getJoints(bool delBadJoints, b
         }
 
         auto* prop = dynamic_cast<App::PropertyBool*>(joint->getPropertyByName("Suppressed"));
+        // FCPROJECT-DEBUG (temporaer, intermittierender isPartConnected()-Ausfall 2026-09-04):
+        // unbedingt, um den exakten Moment einzufangen.
+        Base::Console().log(
+            "FCPROJECT-DEBUG getJoints: joint='%s' isError=%d Suppressed=%d\n",
+            joint->getNameInDocument(),
+            joint->isError() ? 1 : 0,
+            (prop && prop->getValue()) ? 1 : 0
+        );
         if (joint->isError() || !prop || prop->getValue()) {
             // Filter grounded joints and deactivated joints.
+            if (verboseLog) {
+                Base::Console().message(
+                    "Assembly: getJoints('%s') - Joint '%s' uebersprungen (isError=%d, "
+                    "Suppressed=%d).\n",
+                    getFullName(),
+                    joint->getNameInDocument(),
+                    joint->isError() ? 1 : 0,
+                    (prop && prop->getValue()) ? 1 : 0
+                );
+            }
             continue;
         }
 
         auto* part1 = getMovingPartFromRef(joint, "Reference1");
         auto* part2 = getMovingPartFromRef(joint, "Reference2");
+        Base::Console().log(
+            "FCPROJECT-DEBUG getJoints: joint='%s' part1='%s' part2='%s'\n",
+            joint->getNameInDocument(),
+            part1 ? part1->getFullName().c_str() : "<null>",
+            part2 ? part2->getFullName().c_str() : "<null>"
+        );
         if (!part1 || !part2 || part1->getFullName() == part2->getFullName()) {
             // Remove incomplete joints. Left-over when the user deletes a part.
             // Remove incoherent joints (self-pointing joints)
+            if (verboseLog) {
+                Base::Console().message(
+                    "Assembly: getJoints('%s') - Joint '%s' uebersprungen: part1='%s', "
+                    "part2='%s' (unvollstaendig oder BEIDE Referenzen zeigen auf dasselbe "
+                    "aeussere Bauteil - z.B. weil beide innerhalb derselben Rigid-Unterbaugruppe "
+                    "liegen).\n",
+                    getFullName(),
+                    joint->getNameInDocument(),
+                    part1 ? part1->getFullName().c_str() : "<null>",
+                    part2 ? part2->getFullName().c_str() : "<null>"
+                );
+            }
             if (delBadJoints) {
                 getDocument()->removeObject(joint->getNameInDocument());
             }
@@ -1166,16 +1520,77 @@ std::vector<App::DocumentObject*> AssemblyObject::getJoints(bool delBadJoints, b
         auto proxy = dynamic_cast<App::PropertyPythonObject*>(joint->getPropertyByName("Proxy"));
         if (proxy) {
             if (proxy->getValue().hasAttr("setJointConnectors")) {
+                if (verboseLog) {
+                    Base::Console().message(
+                        "Assembly: getJoints('%s') - Joint '%s' UEBERNOMMEN: part1='%s', "
+                        "part2='%s'.\n",
+                        getFullName(),
+                        joint->getNameInDocument(),
+                        part1->getFullName().c_str(),
+                        part2->getFullName().c_str()
+                    );
+                }
                 joints.push_back(joint);
+                // FCPROJECT-PATCH (Teilschritt 2 "adressieren statt kopieren", solver-root-cause-
+                // fix): merkt sich, unter welchem Verschachtelungs-Praefix DIESER Aufruf von
+                // getJoints() diesen Joint gefunden hat - siehe Lifecycle-Begruendung am
+                // Deklarationsort in AssemblyObject.h (jointNestingPrefixMap). Fuer einen Joint,
+                // der direkt in dieser Instanz liegt (der unveraenderte Normalfall), ist
+                // nestingPrefix "".
+                jointNestingPrefixMap[joint] = nestingPrefix;
+            }
+            else if (verboseLog) {
+                Base::Console().message(
+                    "Assembly: getJoints('%s') - Joint '%s' uebersprungen: Proxy hat keine "
+                    "setJointConnectors-Methode (kein normaler beweglicher Joint, z.B. Grounded/"
+                    "RigidGroup).\n",
+                    getFullName(),
+                    joint->getNameInDocument()
+                );
             }
         }
     }
 
     // add sub assemblies joints.
+    //
+    // FCPROJECT-PATCH (Teilschritt 2 "adressieren statt kopieren", solver-root-cause-fix, siehe
+    // patches/assembly-architecture-overview.md, Abschnitte "Teilschritt 2 - Konkreter
+    // Detailplan"/"Teilschritt 2 - Umsetzung"): liest nicht mehr die bereits KOPIERTEN Joints aus
+    // der AssemblyLink-eigenen JointGroup (assembly->getJoints(), die parameterlose
+    // AssemblyLink-Methode - reiner JointGroup-Zugriff), sondern steigt in die ECHTE, verlinkte
+    // AssemblyObject-Instanz ab (getLinkedAssembly()) und liest deren ORIGINAL-Joints direkt,
+    // rekursiv, mit korrekt mitgefuehrtem nestingPrefix.
+    //
+    // Rigide (Rigid=true) Unter-AssemblyLinks werden EXPLIZIT uebersprungen: eine rigide
+    // Unterbaugruppe verhaelt sich fuer den Solver wie ein einziges starres Teil, ihre INTERNEN
+    // Joints duerfen NICHT zusaetzlich in den Solve der aeusseren, rigide einbindenden Baugruppe
+    // einfliessen.
     if (subJoints) {
-        for (auto& assembly : getSubAssemblies()) {
-            auto subJoints = assembly->getJoints();
-            joints.insert(joints.end(), subJoints.begin(), subJoints.end());
+        for (auto* assembly : getSubAssemblies()) {
+            if (!assembly || assembly->isRigid()) {
+                continue;
+            }
+
+            AssemblyObject* nestedAssembly = assembly->getLinkedAssembly();
+            if (!nestedAssembly || nestedAssembly == this) {
+                // Defensiv: kaputter Link, oder eine (sollte nie vorkommen) Selbstreferenz - nie
+                // eine Endlosrekursion riskieren.
+                continue;
+            }
+
+            std::string nestedPrefix = nestingPrefix + assembly->getNameInDocument() + ".";
+            auto nestedJoints
+                = nestedAssembly->getJoints(delBadJoints, subJoints, verboseLog, nestedPrefix);
+            joints.insert(joints.end(), nestedJoints.begin(), nestedJoints.end());
+
+            // Die eben rekursiv aufgerufene getJoints()-Instanz hat die Praefixe fuer
+            // 'nestedJoints' bereits korrekt (voll akkumuliert, siehe nestedPrefix oben) in IHRER
+            // EIGENEN jointNestingPrefixMap (nestedAssembly->jointNestingPrefixMap) abgelegt - hier
+            // gezielt in die Map DIESER Instanz uebernehmen, damit jeder Eintrag Ebene fuer Ebene
+            // bis zur Wurzel hochgereicht wird.
+            for (auto* nestedJoint : nestedJoints) {
+                jointNestingPrefixMap[nestedJoint] = nestedAssembly->jointNestingPrefixMap[nestedJoint];
+            }
         }
     }
 
@@ -1295,13 +1710,20 @@ std::vector<App::DocumentObject*> AssemblyObject::getJointsOfPart(App::DocumentO
         return {};
     }
 
+    // FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix, 2026-09-03):
+    // 'part' auf denselben kanonischen Identitaetsraum gebracht wie die Joint-Endpunkte unten -
+    // sonst findet der Vergleich fuer ein bereits kanonisiertes 'part' (z.B. aus der Fixed-Joint-
+    // Rekursion in getMbDData(), siehe dortiger Kommentar) einen rein lokal referenzierenden
+    // Joint nie, selbst wenn beide dasselbe reale Teil meinen.
+    App::DocumentObject* canonicalPart = canonicalizeForMbD(part);
+
     std::vector<App::DocumentObject*> joints = getJoints();
     std::vector<App::DocumentObject*> jointsOf;
 
     for (auto joint : joints) {
-        App::DocumentObject* part1 = getMovingPartFromRef(joint, "Reference1");
-        App::DocumentObject* part2 = getMovingPartFromRef(joint, "Reference2");
-        if (part == part1 || part == part2) {
+        App::DocumentObject* part1 = canonicalizeForMbD(getMovingPartFromRef(joint, "Reference1"));
+        App::DocumentObject* part2 = canonicalizeForMbD(getMovingPartFromRef(joint, "Reference2"));
+        if (canonicalPart == part1 || canonicalPart == part2) {
             jointsOf.push_back(joint);
         }
     }
@@ -1338,8 +1760,92 @@ std::unordered_set<App::DocumentObject*> AssemblyObject::getGroundedParts()
         }
     }
 
-    // Origin is not in Group so we add it separately
-    groundedSet.insert(Origin.getValue());
+    // Origin is not in Group so we add it separately.
+    // FCPROJECT-PATCH (14): nur einfuegen, wenn tatsaechlich gesetzt - direkt beim Laden (bevor
+    // der Origin des Assembly-Objekts initialisiert ist) liefert Origin.getValue() nullptr,
+    // was bisher ungeprueft in groundedSet landete. Zaehlte dann als "1 grounded part", obwohl
+    // gar kein echtes Teil gemeint war - fiel erst mit Fix 13 auf, weil die Namensausgabe fuer
+    // diesen Phantom-Eintrag leer blieb (Nullpointer wird beim Benennen korrekt uebersprungen,
+    // die Anzahl blieb davon aber unberuehrt).
+    if (auto* origin = Origin.getValue()) {
+        groundedSet.insert(origin);
+    }
+
+    // FCPROJECT-PATCH (Befund 3, Teilschritt 2e "adressieren statt kopieren", solver-root-cause-
+    // fix): geerdete Teile aus verschachtelten FLEXIBLEN AssemblyLinks zusaetzlich rekursiv
+    // einsammeln - direkt bei der ECHTEN, verlinkten AssemblyObject-Instanz erfragt
+    // (getLinkedAssembly()->getGroundedParts()), NICHT ueber das oben bereits ausgewertete
+    // isReadOnly()-Flag der LOKALEN Spiegel-Kopie. Grund: dieses Flag wird durch die bestehende
+    // Kopier-Pipeline nachweislich NUR EINE Ebene tief zuverlaessig synchronisiert (live per
+    // Debug-Logging bestaetigt: ein 2 Ebenen tief geerdetes Teil taucht in getGroundedParts()
+    // dieser AssemblyObject-Instanz bislang UEBERHAUPT NICHT auf) - ohne diese Ergaenzung bleibt
+    // ein Joint, dessen einzige Verbindung zum Rest der Baugruppe ueber ein 2+ Ebenen tief
+    // geerdetes Teil laeuft, in removeUnconnectedJoints() faelschlich fuer immer "nicht
+    // erreichbar", selbst nachdem canonicalizeForMbD() (s.o.) die Identitaetsraeume angeglichen
+    // hat. Gleiches Rigid-Skip-Prinzip wie bei getJoints()' subJoints-Rekursion: eine rigide
+    // Unter-Baugruppe verhaelt sich wie ein einziges starres Teil, ihre INTERNE Erdung ist fuer
+    // den Solver dieser Ebene irrelevant. Die von der rekursiv aufgerufenen Instanz gelieferten
+    // Objekte liegen bereits in DEREN eigenem, "echten" Identitaetsraum - exakt das, was
+    // canonicalizeForMbD() fuer denselben Namenspfad ohnehin liefern wuerde - und werden daher
+    // unveraendert uebernommen.
+    // FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix, 2026-09-04,
+    // Nutzerkorrektur): die obige Rekursion allein war zu aggressiv - sie zieht die Erdung eines
+    // verschachtelten Teils IMMER mit rein, selbst wenn dieses Teil bereits ueber eine ganz
+    // normale Joint-Kette von der AEUSSEREN Erdung dieser Ebene aus erreichbar ist (z.B. BoxC
+    // hier -[Slider]- BoxD -[Fixed]- BoxA, wobei BoxA IN SUB zusaetzlich sein eigenes,
+    // eigenstaendiges GroundedJoint hat). Ergebnis: zwei widerspruechliche Vorschriften fuer
+    // dasselbe Teil ("bleib hier fest" vs. "beweg dich starr mit BoxD mit"), vom Solver als
+    // "redundant" gemeldet und mit chaotischem, nicht-linearem Ergebnis aufgeloest. Im
+    // unveraenderten FreeCAD (vor Teilschritt 2e) war dieses Verhalten nicht sichtbar, weil
+    // getGroundedParts() gar nicht rekursiv war - Subs eigene Erdung war fuer diese Ebene
+    // schlicht unsichtbar, die Erdung "wanderte" effektiv komplett zur aeusseren Kette (BoxC).
+    // Fix: vor dem Uebernehmen einer verschachtelten Erdung pruefen, ob das betroffene Teil
+    // bereits ueber die (bereits adressierungsbewusste) Joint-Kette von der LOKALEN, nicht-
+    // rekursiven Erdung dieser Ebene aus erreichbar ist - wenn ja, hat die AEUSSERE Kette
+    // Vorrang und die verschachtelte Erdung wird NICHT zusaetzlich uebernommen (kein doppelter
+    // Eintrag, keine Redundanz). Nur wenn ein verschachteltes Teil auf KEINE andere Weise
+    // erreichbar waere, zaehlt seine eigene Erdung weiterhin (z.B. wenn die betroffene
+    // Unterbaugruppe gar nicht an die aeussere Kette angebunden ist).
+    std::vector<App::DocumentObject*> reachabilityJoints = getJoints();
+    std::vector<ObjRef> reachableFromLocalGrounding;
+    for (auto* g : groundedSet) {
+        reachableFromLocalGrounding.push_back({g, nullptr});
+    }
+    for (auto* g : groundedSet) {
+        traverseAndMarkConnectedParts(g, reachableFromLocalGrounding, reachabilityJoints);
+    }
+
+    // FCPROJECT-PATCH (2026-09-09, ENTFERNT statt weiter ausgeflickt - siehe Befund-3-Kommentar
+    // oben fuer die Vorgeschichte dieses Blocks): die rekursive Uebernahme einer verschachtelten
+    // Unterbaugruppe eigener interner Erdung (nestedAssembly->getGroundedParts()) erwies sich
+    // als grundsaetzlich falsch dosiert, egal wie fein die Ausnahme dafuer gefasst wurde - live
+    // reproduziert in ZWEI verschiedenen, gegensaetzlich unmoeglich gleichzeitig zu loesenden
+    // Faellen:
+    // 1. Eine frisch eingefuegte, KOMPLETT unverbundene flexible Unterbaugruppe (kein aeusserer
+    //    Joint) wurde dadurch sofort komplett unbeweglich, statt frei verschiebbar zu bleiben.
+    // 2. Selbst mit einem aeusseren Joint (z.B. GrandTop-BoxC zu Subs BoxB) blieb Subs davon
+    //    UNABHAENGIGE eigene Erdung (BoxA) bestehen, sobald der INNERE Joint (BoxA-BoxB)
+    //    geloescht wurde - obwohl BoxA dann eine eigene, vom aeusseren Anschlusspunkt komplett
+    //    GETRENNTE Insel ist, fror das die ganze eingebettete Baugruppe grundlos ein.
+    // Ein Versuch, Fall 1 durch eine dokumentweite Erreichbarkeitspruefung zu loesen ("ist
+    // UEBERHAUPT etwas aus diesem Dokument erreichbar") behob Fall 1, machte aber Fall 2 nicht
+    // besser (BoxB IST erreichbar, die Erdung von BoxA - einer davon komplett getrennten Insel
+    // im selben Dokument - wurde trotzdem weiter reingezogen). Eine wirklich korrekte Loesung
+    // braeuchte eine Pro-Insel- statt Pro-Dokument-Erreichbarkeitspruefung (ueber Subs EIGENE
+    // interne Joints, unabhaengig vom aeusseren Anschluss) - dafuer besteht aber der begruendete
+    // Verdacht, dass sie sich mit der urspruenglichen Absicht dieses Blocks (ein 2+ Ebenen tief
+    // NUR ueber sein eigenes GroundedJoint erreichbares Teil, dessen NORMALE Joint-Kette zur
+    // Wurzel aus einem NUR HIER liegenden Sync-Bug der alten Kopier-Pipeline heraus nicht
+    // erkannt wurde) nicht sauber unterscheiden laesst: beide Situationen sehen aus reiner
+    // Joint-Graph-Sicht identisch aus ("Teil X ist ueber keinen Reference1/2-Joint-Pfad von der
+    // lokalen Erdung dieser Ebene aus erreichbar"). Nutzerentscheidung (2026-09-09): diesen
+    // gesamten Rekursionsblock ERSATZLOS entfernen, um die BEIDEN reproduzierten, aktuellen
+    // Regressionsfaelle zu beheben - reine Joint-Graph-Erreichbarkeit (reachableFromLocalGrounding
+    // oben, die dank getJoints()' eigener subJoints-Rekursion bereits echte, tief verschachtelte
+    // Joint-Ketten korrekt mit einschliesst) reicht als alleinige Grundlage. Falls die
+    // urspruengliche Befund-3-Situation (Sync-Bug der alten Kopier-Pipeline bei isReadOnly())
+    // dadurch wieder auftritt, ist das ein bekanntes, akzeptiertes Risiko dieser Entscheidung -
+    // noch nicht erneut getestet, siehe [[reference-nested-grounding-leak-bugfix]].
 
     // Propagate grounding through active rigid clusters.
     std::vector<App::DocumentObject*> groundedSnapshot(groundedSet.begin(), groundedSet.end());
@@ -1486,17 +1992,44 @@ void AssemblyObject::removeUnconnectedJoints(
     std::unordered_set<App::DocumentObject*> groundedObjs
 )
 {
+    // FCPROJECT-PATCH (Befund 3, Teilschritt 2e "adressieren statt kopieren", solver-root-cause-
+    // fix): groundedObjs kommt aus getGroundedParts() und liegt damit im LOKALEN Spiegel-
+    // Identitaetsraum (siehe canonicalizeForMbD() fuer die ausfuehrliche Begruendung) - fuer die
+    // Erreichbarkeits-Traversal unten (getConnectedParts() vergleicht gegen
+    // resolvePartForMbD()-Ergebnisse, also ECHTE Objekte) muss der Startpunkt im SELBEN,
+    // kanonischen Identitaetsraum liegen wie die Joint-Endpunkte weiter unten - sonst bricht eine
+    // tatsaechlich erreichbare Kette schon am allerersten Schritt ab und der komplette
+    // dahinterliegende, verschachtelte Zweig wird faelschlich als "nicht erreichbar" entfernt.
+    std::unordered_set<App::DocumentObject*> canonicalGroundedObjs;
+    for (auto* groundedObj : groundedObjs) {
+        if (auto* canonical = canonicalizeForMbD(groundedObj)) {
+            canonicalGroundedObjs.insert(canonical);
+        }
+    }
+
     std::vector<ObjRef> connectedParts;
 
     // Initialize connectedParts with groundedObjs
-    for (auto* groundedObj : groundedObjs) {
+    for (auto* groundedObj : canonicalGroundedObjs) {
         connectedParts.push_back({groundedObj, nullptr});
     }
 
     // Perform a traversal from each grounded object
-    for (auto* groundedObj : groundedObjs) {
+    for (auto* groundedObj : canonicalGroundedObjs) {
         traverseAndMarkConnectedParts(groundedObj, connectedParts, joints);
     }
+
+    // FCPROJECT-PATCH (16): siehe getJoints() weiter oben - gleiches Prinzip, zweite Filterstufe.
+    // Hier faellt ein Joint raus, wenn eine seiner beiden Seiten NICHT ueber eine Kette von
+    // Joints von einem geerdeten Teil aus erreichbar ist (traverseAndMarkConnectedParts()).
+    Base::Console().message(
+        "Assembly: removeUnconnectedJoints('%s') - %zu geerdete(s) Teil(e), %zu erreichbare(s) "
+        "Teil(e), pruefe %zu Joint(s).\n",
+        getFullName(),
+        canonicalGroundedObjs.size(),
+        connectedParts.size(),
+        joints.size()
+    );
 
     // Filter out unconnected joints
     joints.erase(
@@ -1504,12 +2037,33 @@ void AssemblyObject::removeUnconnectedJoints(
             joints.begin(),
             joints.end(),
             [&](App::DocumentObject* joint) {
-                App::DocumentObject* obj1 = getMovingPartFromRef(joint, "Reference1");
-                App::DocumentObject* obj2 = getMovingPartFromRef(joint, "Reference2");
-                return (
-                    !isObjInSetOfObjRefs(obj1, connectedParts)
-                    || !isObjInSetOfObjRefs(obj2, connectedParts)
-                );
+                // FCPROJECT-PATCH (Teilschritt 2c "adressieren statt kopieren", solver-root-
+                // cause-fix): auf resolvePartForMbD() umgestellt, aus demselben Grund wie bei
+                // isMbDJointValid()/handleOneSideOfJoint() - getGroundedParts() liefert bereits
+                // lokale, ueber verschachtelte flexible AssemblyLinks aufgeloeste Spiegel-
+                // Identitaeten, waehrend die alte getMovingPartFromRef() fuer einen tief
+                // verschachtelten Joint das rohe, joint-lokale (ggf. cross-document) Original
+                // liefert - beide Seiten muessen im SELBEN Identitaetsraum liegen, sonst erkennt
+                // dieser Vergleich eine tatsaechlich erreichbare Kette faelschlich als nicht
+                // erreichbar.
+                App::DocumentObject* obj1 = resolvePartForMbD(joint, "Reference1");
+                App::DocumentObject* obj2 = resolvePartForMbD(joint, "Reference2");
+                bool obj1Connected = isObjInSetOfObjRefs(obj1, connectedParts);
+                bool obj2Connected = isObjInSetOfObjRefs(obj2, connectedParts);
+                if (!obj1Connected || !obj2Connected) {
+                    Base::Console().message(
+                        "Assembly: removeUnconnectedJoints('%s') - Joint '%s' entfernt: "
+                        "part1='%s' (erreichbar=%d), part2='%s' (erreichbar=%d).\n",
+                        getFullName(),
+                        joint->getNameInDocument(),
+                        obj1 ? obj1->getFullName().c_str() : "<null>",
+                        obj1Connected ? 1 : 0,
+                        obj2 ? obj2->getFullName().c_str() : "<null>",
+                        obj2Connected ? 1 : 0
+                    );
+                    return true;
+                }
+                return false;
             }
         ),
         joints.end()
@@ -1549,8 +2103,12 @@ std::vector<ObjRef> AssemblyObject::getConnectedParts(
             continue;
         }
 
-        App::DocumentObject* obj1 = getMovingPartFromRef(joint, "Reference1");
-        App::DocumentObject* obj2 = getMovingPartFromRef(joint, "Reference2");
+        // FCPROJECT-PATCH (Teilschritt 2c "adressieren statt kopieren", solver-root-cause-fix):
+        // auf resolvePartForMbD() umgestellt - siehe Begruendung beim Schwester-Aufruf in
+        // removeUnconnectedJoints() (identisches Muster: 'part' kommt hier bereits als lokal
+        // aufgeloeste Identitaet herein, obj1/obj2 muessen daher im SELBEN Identitaetsraum liegen).
+        App::DocumentObject* obj1 = resolvePartForMbD(joint, "Reference1");
+        App::DocumentObject* obj2 = resolvePartForMbD(joint, "Reference2");
 
         if (!obj1 || !obj2) {
             continue;
@@ -1608,27 +2166,68 @@ bool AssemblyObject::isPartConnected(App::DocumentObject* obj)
         return false;
     }
 
+    // FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix, 2026-09-03,
+    // live durch Nutzer-Maus-Drag aufgedeckt): dieselbe Identitaetsraum-Luecke wie in
+    // removeUnconnectedJoints() (siehe dortiger Kommentar) - groundedObjs liegt im LOKALEN
+    // Spiegel-Identitaetsraum, waehrend 'obj' seit dem getMovingPartFromSel()-Fix (s.o.) jetzt
+    // bereits das ECHTE, tief verschachtelte Objekt sein kann. Ohne Kanonisierung findet die
+    // Traversal unten nie eine Uebereinstimmung fuer ein solches Teil - preDrag() haelt es
+    // faelschlich fuer "nicht verbunden" und laesst es komplett unbeschraenkt, frei in jede
+    // Richtung ziehen (genau das vom Nutzer beobachtete Symptom, trotz korrekt aufgeloestem
+    // getMovingPartFromSel()-Ergebnis).
+    App::DocumentObject* canonicalObj = canonicalizeForMbD(obj);
+
     auto groundedObjs = getGroundedParts();
     std::vector<App::DocumentObject*> joints = getJoints();
 
     std::vector<ObjRef> connectedParts;
 
-    // Initialize connectedParts with groundedObjs
+    std::unordered_set<App::DocumentObject*> canonicalGroundedObjs;
     for (auto* groundedObj : groundedObjs) {
+        if (auto* canonical = canonicalizeForMbD(groundedObj)) {
+            canonicalGroundedObjs.insert(canonical);
+        }
+    }
+
+    // Initialize connectedParts with groundedObjs
+    for (auto* groundedObj : canonicalGroundedObjs) {
         connectedParts.push_back({groundedObj, nullptr});
     }
 
     // Perform a traversal from each grounded object
-    for (auto* groundedObj : groundedObjs) {
+    for (auto* groundedObj : canonicalGroundedObjs) {
         traverseAndMarkConnectedParts(groundedObj, connectedParts, joints);
     }
 
+    // FCPROJECT-DEBUG (temporaer, Befund-3-Live-Diagnose 2026-09-03): wieder entfernen, sobald
+    // der Drag-Pfad nachvollzogen ist.
+    {
+        std::string names;
+        for (auto& objRef : connectedParts) {
+            if (!objRef.obj) {
+                continue;
+            }
+            if (!names.empty()) {
+                names += ", ";
+            }
+            names += objRef.obj->getFullName();
+        }
+        Base::Console().log(
+            "FCPROJECT-DEBUG isPartConnected: obj='%s' canonicalObj='%s' -> connectedParts=[%s]\n",
+            obj->getFullName().c_str(),
+            canonicalObj ? canonicalObj->getFullName().c_str() : "<null>",
+            names.c_str()
+        );
+    }
+
     for (auto& objRef : connectedParts) {
-        if (obj == objRef.obj) {
+        if (canonicalObj == objRef.obj) {
+            Base::Console().log("FCPROJECT-DEBUG isPartConnected: -> TRUE\n");
             return true;
         }
     }
 
+    Base::Console().log("FCPROJECT-DEBUG isPartConnected: -> FALSE\n");
     return false;
 }
 
@@ -2161,7 +2760,14 @@ std::string AssemblyObject::handleOneSideOfJoint(
     const std::string& markerName
 )
 {
-    App::DocumentObject* part = getMovingPartFromRef(joint, propRefName);
+    // FCPROJECT-PATCH (Teilschritt 2 "adressieren statt kopieren", solver-root-cause-fix): auf
+    // resolvePartForMbD() umgestellt - DAS ist die Stelle, an der ein Joint tatsaechlich einen
+    // MbD-Marker an einen konkreten starren Koerper haengt (siehe AssemblyObject.h fuer die
+    // Herleitung). 'part' wird unten nur fuer getMbDData(part) (welcher MbD-Koerper) und fuer
+    // getGlobalPlacement(part, ref) (targetObj-Parameter) verwendet - beide bleiben fuer jeden
+    // nicht verschachtelten Joint (nestingPrefix "") unveraendert, weil resolvePartForMbD() dort
+    // exakt dasselbe Objekt liefert wie die alte getMovingPartFromRef().
+    App::DocumentObject* part = resolvePartForMbD(joint, propRefName);
     App::DocumentObject* obj = getObjFromJointRef(joint, propRefName);
 
     if (!part || !obj) {
@@ -2222,7 +2828,12 @@ void AssemblyObject::getRackPinionMarkers(
         swapJCS(joint);  // make sure that rack is first.
     }
 
-    App::DocumentObject* part1 = getMovingPartFromRef(joint, "Reference1");
+    // FCPROJECT-PATCH (Teilschritt 2 "adressieren statt kopieren", solver-root-cause-fix): part1
+    // (das einzige hier fuer getMbDData()/den MbD-Koerper verwendete Ergebnis, s.u.) auf
+    // resolvePartForMbD() umgestellt - siehe handleOneSideOfJoint() fuer die Begruendung. obj1/ref1
+    // bleiben bewusst bei der alten, joint-lokalen Aufloesung (nur fuer die Rack/Pinion-spezifische
+    // Placement-Anpassung unten gebraucht).
+    App::DocumentObject* part1 = resolvePartForMbD(joint, "Reference1");
     App::DocumentObject* obj1 = getObjFromJointRef(joint, "Reference1");
     Base::Placement plc1 = getPlacementFromProp(joint, "Placement1");
 
@@ -2339,23 +2950,206 @@ int AssemblyObject::slidingPartIndex(App::DocumentObject* joint)
     return slidingFound;
 }
 
+namespace
+{
+// FCPROJECT-PATCH (Befund 3, Teilschritt 2e): Top-Down-Suche nach 'target' innerhalb von
+// 'objects' (und rekursiv in AssemblyLink::Group / App::DocumentObjectGroup::Group), sammelt
+// dabei die Namen aller durchquerten AssemblyLink-Container in 'outPath'. Bewusst ueber die
+// GROUP-Mitgliedschaft gesucht (eindeutig), NICHT ueber einen InList-Aufstieg von 'target' aus -
+// InList enthaelt JEDES Objekt, das 'target' per IRGENDEINER Property referenziert (z.B. auch ein
+// Joint via Reference1/Reference2), und dessen erster Eintrag ist keineswegs garantiert der
+// semantische Group-Elternknoten. Ein frueherer Versuch mit InList-Aufstieg griff dadurch
+// tatsaechlich einen referenzierenden Joint statt des Group-Containers und loeste komplett falsch
+// auf (live per FCPROJECT-DEBUG-Logging beobachtet: 'GrandTop#BoxC' -> 'Top#Joint').
+bool findLocalGroupPath(
+    const std::vector<App::DocumentObject*>& objects,
+    App::DocumentObject* target,
+    std::vector<std::string>& outPath
+)
+{
+    for (auto* candidate : objects) {
+        if (!candidate) {
+            continue;
+        }
+        if (candidate == target) {
+            return true;
+        }
+        if (auto* asmLink = freecad_cast<Assembly::AssemblyLink*>(candidate)) {
+            outPath.push_back(candidate->getNameInDocument());
+            if (findLocalGroupPath(asmLink->Group.getValues(), target, outPath)) {
+                return true;
+            }
+            outPath.pop_back();
+            continue;
+        }
+        if (auto* group = freecad_cast<App::DocumentObjectGroup*>(candidate)) {
+            if (findLocalGroupPath(group->Group.getValues(), target, outPath)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+}  // namespace
+
+// FCPROJECT-PATCH (Befund 3, Teilschritt 2e "adressieren statt kopieren", solver-root-cause-fix):
+// siehe ausfuehrliche Erklaerung am Deklarationsort in AssemblyObject.h.
+App::DocumentObject* AssemblyObject::canonicalizeForMbD(App::DocumentObject* obj)
+{
+    if (!obj) {
+        return obj;
+    }
+
+    // Schritt 1: den lokalen Namenspfad von 'this' (exklusive der eigenen AssemblyLink-
+    // Zwischencontainer, inklusive 'obj' selbst als letztes Segment) per eindeutiger
+    // Top-Down-Gruppensuche einsammeln. Wird 'obj' dabei gar nicht gefunden, liegt es NICHT im
+    // lokalen Baum dieser AssemblyObject-Instanz (z.B. schon ein von resolveJointReference()
+    // geliefertes echtes, fremddokument-Objekt, oder ein root-level Datum wie Origin/LCS) - dann
+    // ist 'obj' bereits kanonisch und wird unveraendert zurueckgegeben.
+    std::vector<std::string> pathNames;
+    if (!findLocalGroupPath(Group.getValues(), obj, pathNames)) {
+        // FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix,
+        // 2026-09-04, GrandTop-Zwischenebenen-Luecke): 'obj' liegt nicht im EIGENEN lokalen Baum
+        // dieser Instanz - bisher wurde daraus geschlossen, 'obj' sei bereits kanonisch. Das
+        // stimmt aber NICHT, wenn 'obj' die lokale Spiegel-Kopie einer VERSCHACHTELTEN
+        // Unterbaugruppe ist (z.B. 'Top#BoxA', aufgerufen von GrandTop aus): dieses Objekt lebt
+        // im DOKUMENT der Unterbaugruppe, GrandTop sieht in seinem EIGENEN Group nur deren
+        // AssemblyLink-Container ('Assembly001'), niemals 'Top#BoxA' selbst - findLocalGroupPath()
+        // findet es folgerichtig nie. Ohne diesen Fallback blieb GrandTops solve() bei einem
+        // NICHT verschachtelten Joint, dessen Referenz zufaellig auf eine solche fremde lokale
+        // Spiegel-Kopie zeigt (kein 'nestingPrefix', siehe resolvePartForMbD()), auf DIESER
+        // Zwischen-Kopie stehen, anstatt bis zum ECHTEN, tiefsten Objekt (hier: 'Sub#BoxA')
+        // durchzuloesen - live beobachtet: die lokale Kopie 'Top#BoxA' wurde korrekt bewegt,
+        // das ECHTE 'Sub#BoxA' blieb unveraendert am Ursprung stehen, im 3D-View ueberlappten sich
+        // dadurch mehrere Boxen statt sauber auf der Schubgelenk-Achse zu liegen. Fix: an JEDE
+        // eigene (nicht rigide) Unterbaugruppe delegieren, deren EIGENES Dokument zu 'obj' passt -
+        // canonicalizeForMbD() ist rekursiv, loest dadurch automatisch beliebig viele
+        // Verschachtelungsebenen bis zum tatsaechlich tiefsten echten Objekt auf.
+        for (auto* asmLink : getSubAssemblies()) {
+            if (!asmLink || asmLink->isRigid()) {
+                continue;
+            }
+            AssemblyObject* nested = asmLink->getLinkedAssembly();
+            if (!nested || nested == this || nested->getDocument() != obj->getDocument()) {
+                continue;
+            }
+            return nested->canonicalizeForMbD(obj);
+        }
+        return obj;
+    }
+    pathNames.push_back(obj->getNameInDocument());
+
+    // Schritt 2: denselben Namenspfad stattdessen durch die ECHTEN, verschachtelten
+    // AssemblyObject-Instanzen aufloesen (getLinkedAssembly() statt AssemblyLink::Group) - jedes
+    // Zwischensegment muss eine FLEXIBLE (nicht rigide) AssemblyLink sein, sonst ist die
+    // entsprechende Ebene bereits die atomare Einheit fuer den Solver und wird unveraendert
+    // zurueckgegeben (Rigid-Sub-Baugruppe verhaelt sich wie ein einziges starres Teil, siehe
+    // getJoints()' subJoints-Rekursion).
+    AssemblyObject* currentAssembly = this;
+    for (std::size_t i = 0; i + 1 < pathNames.size(); ++i) {
+        App::DocumentObject* levelObj = currentAssembly->getDocument()->getObject(pathNames[i].c_str());
+        auto* asmLink = freecad_cast<Assembly::AssemblyLink*>(levelObj);
+        if (!asmLink || asmLink->isRigid()) {
+            return levelObj ? levelObj : obj;
+        }
+        AssemblyObject* nested = asmLink->getLinkedAssembly();
+        if (!nested) {
+            return levelObj;
+        }
+        currentAssembly = nested;
+    }
+
+    App::DocumentObject* resolved = currentAssembly->getDocument()->getObject(pathNames.back().c_str());
+    return resolved ? resolved : obj;
+}
+
+// FCPROJECT-PATCH (Teilschritt 2 "adressieren statt kopieren", solver-root-cause-fix, siehe
+// patches/assembly-architecture-overview.md, Abschnitt "Teilschritt 2 - Umsetzung"): siehe
+// ausfuehrliche Erklaerung (inkl. der bewussten Abweichung beim subPath - wird derzeit nirgends
+// an getMbDData()/getMbDPart() weitergereicht) am Deklarationsort in AssemblyObject.h.
+App::DocumentObject* AssemblyObject::resolvePartForMbD(App::DocumentObject* joint, const char* propRefName)
+{
+    std::string nestingPrefix;
+    auto it = jointNestingPrefixMap.find(joint);
+    if (it != jointNestingPrefixMap.end()) {
+        nestingPrefix = it->second;
+    }
+
+    ResolvedJointRef resolved = resolveJointReference(this, joint, propRefName, nestingPrefix);
+    if (resolved.obj) {
+        // FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix,
+        // 2026-09-03, live durch Nutzer-Maus-Drag aufgedeckt - sechste Baustelle): fuer einen
+        // NICHT verschachtelten Joint (nestingPrefix leer), dessen Referenz zufaellig direkt auf
+        // ein lokales Spiegel-Objekt INNERHALB einer verschachtelten flexiblen AssemblyLink zeigt
+        // (z.B. Joint002 "Starrer Verbund" im Top-Level-JointGroup, Ziel "App::Link BoxA"
+        // innerhalb von unterAssambly), liefert resolveJointReference() nur diesen ROHEN,
+        // lokalen Pointer - OHNE nestingPrefix hat die Funktion keinen Grund, weiter durch
+        // getLinkedAssembly() aufzuloesen. Subs EIGENER Slider-Joint (ueber subJoints-Rekursion,
+        // nestingPrefix="unterAssambly.") landet dagegen beim ECHTEN Sub#BoxA - zwei
+        // UNTERSCHIEDLICHE Pointer fuer dasselbe reale Teil. Ohne dieses canonicalizeForMbD()
+        // sah removeUnconnectedJoints()/getConnectedParts() (die resolvePartForMbD() OHNE
+        // Umweg ueber getMbDData() direkt fuer Erreichbarkeits-Vergleiche nutzen) die beiden
+        // Pointer als unverbunden - der tatsaechlich erreichbare Sub-Joint wurde faelschlich als
+        // "nicht erreichbar" entfernt (live per Log bestaetigt, nachdem eine redundante
+        // Erdung in Sub entfernt wurde, die das vorher zufaellig kaschiert hatte).
+        return canonicalizeForMbD(resolved.obj);
+    }
+
+    // Defensiver Ruecksfall: unveraendertes Altverhalten fuer jeden Fall, den
+    // resolveJointReference() (noch) nicht abdeckt.
+    return canonicalizeForMbD(getMovingPartFromRef(joint, propRefName));
+}
+
 bool AssemblyObject::isMbDJointValid(App::DocumentObject* joint)
 {
     // When dragging a part, we are bundling fixed parts together.
     // This may lead to a conflicting joint that is self referencing a MbD part.
     // The solver crash when fed such a bad joint. So we make sure it does not happen.
-    App::DocumentObject* part1 = getMovingPartFromRef(joint, "Reference1");
-    App::DocumentObject* part2 = getMovingPartFromRef(joint, "Reference2");
+    //
+    // FCPROJECT-PATCH (Teilschritt 2 "adressieren statt kopieren", solver-root-cause-fix): auf
+    // resolvePartForMbD() umgestellt (statt der sub-pfad-blinden getMovingPartFromRef()). Fuer
+    // einen nicht verschachtelten Joint (nestingPrefix "") liefert das exakt dasselbe Objekt wie
+    // bisher; ein tief verschachtelter Joint bekommt jetzt tatsaechlich die zwei
+    // UNTERSCHIEDLICHEN, korrekt aufgeloesten lokalen Spiegel-Teile statt zweimal denselben
+    // kollabierten Zwischen-Wrapper.
+    App::DocumentObject* part1 = resolvePartForMbD(joint, "Reference1");
+    App::DocumentObject* part2 = resolvePartForMbD(joint, "Reference2");
     if (!part1 || !part2) {
         return false;
     }
 
     // If this joint is self-referential it must be ignored.
     if (getMbDPart(part1) == getMbDPart(part2)) {
+        // FCPROJECT-PATCH (10): getJointContextName() statt getFullLabel() - Label ist fuer JEDEN
+        // gleichartigen Joint identisch (z.B. "Parallel" fuer jeden Parallel-Joint), der blosse
+        // Name allein (z.B. "Joint005") ist zwar eindeutig, verraet aber nicht, in welcher (ggf.
+        // verschachtelten) Unterbaugruppe der Joint sitzt - jede Unterbaugruppe hat ihre eigene,
+        // lokal bei 0 beginnende Joint-Nummerierung. getJointContextName() liefert deshalb den
+        // vollen Pfad ueber die Eltern-Kette, z.B. "Halterbaugruppe.Joint005". Gleiches Muster
+        // wie Fix 8 (getContext() in JointObject.py).
+        //
+        // FCPROJECT-PATCH (2026-08-28, "kleiner erster Schritt"; Warnungstext seit Teilschritt 2
+        // leicht angepasst): part1==part2 heisst jetzt, dass beide Referenzen NACH
+        // adressierungsbewusster Aufloesung (resolvePartForMbD(), s.o.) auf dasselbe Objekt
+        // zeigen - fuer einen echten, heute schon funktionierenden Redundanz-/Konflikt-Fall ist
+        // das weiterhin zuverlaessig, ein tief verschachtelter Joint kollabiert dank Teilschritt 2
+        // i.d.R. NICHT mehr faelschlich hierher. Die lokalen Sub-Pfade beider Referenzen werden
+        // trotzdem weiter mit ausgegeben, falls doch noch ein bisher unbekannter Kollisionsfall
+        // auftritt.
+        auto* prop1 = joint->getPropertyByName<App::PropertyXLinkSub>("Reference1");
+        auto* prop2 = joint->getPropertyByName<App::PropertyXLinkSub>("Reference2");
+        std::string sub1 = (prop1 && !prop1->getSubValues().empty()) ? prop1->getSubValues()[0] : std::string("<leer>");
+        std::string sub2 = (prop2 && !prop2->getSubValues().empty()) ? prop2->getSubValues()[0] : std::string("<leer>");
         Base::Console().warning(
             "Assembly: Ignoring joint (%s) because its parts are connected by a fixed "
-            "joint bundle. This joint is a conflicting or redundant constraint.\n",
-            joint->getFullLabel()
+            "joint bundle. This joint is a conflicting or redundant constraint. "
+            "[FCProject-Diagnose: Reference1 zeigt auf '%s' (Sub-Pfad '%s'), Reference2 auf "
+            "'%s' (Sub-Pfad '%s') - falls die Sub-Pfade unterschiedlich sind, ist das "
+            "vermutlich KEIN echter Konflikt, sondern eine bekannte Solver-Einschraenkung bei "
+            "verschachtelten Baugruppen, siehe patches/bugreport-nested-flex-joint-detach/]\n",
+            getJointContextName(joint),
+            part1->getNameInDocument(), sub1.c_str(),
+            part2->getNameInDocument(), sub2.c_str()
         );
         return false;
     }
@@ -2364,6 +3158,15 @@ bool AssemblyObject::isMbDJointValid(App::DocumentObject* joint)
 
 AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part)
 {
+    // FCPROJECT-PATCH (Befund 3, Teilschritt 2e): zentraler Kanonisierungs-Punkt - jeder Aufrufer
+    // (Joints via resolvePartForMbD(), geerdete Teile via fixGroundedPart(), etc.) landet dadurch
+    // garantiert auf demselben Pointer fuer ein und dasselbe reale Teil, egal ob er ueber die
+    // lokale Spiegel-Kopie oder das echte Objekt hereinkam - siehe canonicalizeForMbD() fuer die
+    // ausfuehrliche Begruendung. Ohne das legte objectPartMap (pointer-keyed) fuer beide Wege
+    // getrennte MbD-Teile an, wodurch ein geerdetes Teil und der es bewegende Joint nie im selben
+    // Constraint-Graphen landeten.
+    part = canonicalizeForMbD(part);
+
     auto it = objectPartMap.find(part);
     if (it != objectPartMap.end()) {
         // part has been associated with an ASMTPart before
@@ -2410,16 +3213,38 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
     mbdAssembly->addPart(mbdPart);
     MbDPartData data = {mbdPart, Base::Placement()};
     objectPartMap[part] = data;  // Store the association
+    Base::Console().log(
+        "FCPROJECT-DEBUG getMbDData: NEW mbdPart '%s' for key '%s'\n",
+        str.c_str(),
+        part->getFullName().c_str()
+    );
 
     // Associate other objects connected with fixed joints
     if (bundleFixed) {
+        // FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix,
+        // 2026-09-03, live durch Nutzer-Maus-Drag aufgedeckt): part1/part2/partToAdd hier auf
+        // canonicalizeForMbD() umgestellt. Ohne das schrieb dieser Block DIREKT in objectPartMap
+        // (ohne ueber getMbDData() zu gehen) und benutzte dabei den ROHEN, nicht kanonisierten
+        // Pointer als Schluessel - z.B. das lokale App::Link-Spiegelobjekt "BoxA" innerhalb einer
+        // verschachtelten flexiblen AssemblyLink, referenziert von einem GANZ NORMALEN,
+        // nicht-verschachtelten Fixed-Joint (Reference direkt auf die lokale Kopie, kein Nesting
+        // am Joint selbst). Sub's ECHTER Slider-Joint (BoxA<->BoxB) landet dagegen ueber die
+        // adressierungsbewusste Rekursion beim ECHTEN Sub#BoxA - zwei GETRENNTE objectPartMap-
+        // Eintraege fuer dasselbe reale Teil, exakt dasselbe Muster wie der urspruengliche
+        // canonicalizeForMbD()-Fix es fuer Grounding/Joint-Referenzen behoben hat. Sichtbares
+        // Symptom: ein Fixed-Bundle (hier: BoxD<->BoxA) "gewinnt" den lokalen Spiegel-Pointer,
+        // der ECHTE Slider-Joint bekommt einen komplett separaten, unabhaengigen MbD-Koerper -
+        // BoxB folgt BoxDs Bewegung dadurch nicht.
         auto addConnectedFixedParts = [&](App::DocumentObject* currentPart, auto& self) -> void {
             std::vector<App::DocumentObject*> joints = getJointsOfPart(currentPart);
             for (auto* joint : joints) {
                 JointType jointType = getJointType(joint);
                 if (jointType == JointType::Fixed) {
-                    App::DocumentObject* part1 = getMovingPartFromRef(joint, "Reference1");
-                    App::DocumentObject* part2 = getMovingPartFromRef(joint, "Reference2");
+                    App::DocumentObject* part1 = canonicalizeForMbD(getMovingPartFromRef(joint, "Reference1"));
+                    App::DocumentObject* part2 = canonicalizeForMbD(getMovingPartFromRef(joint, "Reference2"));
+                    if (!part1 || !part2) {
+                        continue;
+                    }
                     App::DocumentObject* partToAdd = currentPart == part1 ? part2 : part1;
 
                     if (objectPartMap.find(partToAdd) != objectPartMap.end()) {
@@ -2430,6 +3255,12 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
                     Base::Placement plci = getPlacementFromProp(partToAdd, "Placement");
                     MbDPartData partData = {mbdPart, plc.inverse() * plci};
                     objectPartMap[partToAdd] = partData;  // Store the association
+                    Base::Console().log(
+                        "FCPROJECT-DEBUG getMbDData: BUNDLE-FIXED key '%s' -> mbdPart '%s' (via joint '%s')\n",
+                        partToAdd->getFullName().c_str(),
+                        mbdPart->name.c_str(),
+                        joint->getFullName().c_str()
+                    );
 
                     // Recursively call for partToAdd
                     self(partToAdd, self);
@@ -2592,6 +3423,19 @@ std::vector<AssemblyLink*> AssemblyObject::getSubAssemblies()
     return subAssemblies;
 }
 
+// FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix, 2026-09-03):
+// siehe ausfuehrliche Erklaerung am Deklarationsort in AssemblyObject.h.
+bool AssemblyObject::isNestedUnderFlexibleParent() const
+{
+    for (auto* obj : getInList()) {
+        auto* asmLink = freecad_cast<Assembly::AssemblyLink*>(obj);
+        if (asmLink && !asmLink->isRigid()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void AssemblyObject::ensureIdentityPlacements()
 {
     std::vector<App::DocumentObject*> group = Group.getValues();
@@ -2655,9 +3499,40 @@ void AssemblyObject::syncGroundedJoints()
 
         // Create grounding joint if placement is locked but no joint exists
         if (isReadOnly && !hasJoint) {
+            Base::Console().log(
+                "FCPROJECT-DEBUG: syncGroundedJoints('%s') legt NEUEN GroundedJoint an fuer "
+                "part='%s' (Dokument '%s').\n",
+                getFullName(),
+                part->getNameInDocument(),
+                part->getDocument() ? part->getDocument()->getName() : "<null>"
+            );
+            // Konsistenter Zustand (oder Selbstheilung greift) - ein evtl. anhaengiger
+            // Loesch-Verdacht von einem frueheren Aufruf ist damit hinfaellig.
+            pendingGroundedJointRemoval.erase(part);
+
             Base::PyGILStateLocker lock;
             try {
+                // FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix,
+                // 2026-09-04, GrandTop-Endlosschleife): 'part' kann dank getAssemblyComponents()s
+                // Rekursion in verschachtelte flexible AssemblyLinks ein ECHTES Objekt aus einem
+                // ANDEREN Dokument sein (z.B. 'part' aus MinimalReproSub, waehrend 'this' zu
+                // MinimalReproGrandTop gehoert) - derselbe Identitaetsraum-Fehler wie bei
+                // getMovingPartFromSel()/resolveJointReference() (siehe dort). Die alte Zeile nutzte
+                // IMMER getDocument() (das Dokument DIESER Assembly) fuer BEIDE Lookups (asm UND
+                // part) - fuer ein cross-document 'part' liefert doc.getObject(partName) dann
+                // entweder None oder (schlimmer, bei zufaelliger Namensgleichheit) ein VOELLIG
+                // ANDERES Objekt. JointObject.GroundedJoint(j, None) wirft eine Exception, NACHDEM
+                // jg.newObject() das kaputte 'j' bereits angelegt hat - dessen ObjectToGround bleibt
+                // leer, hasJoint bleibt beim naechsten solve() weiterhin False fuer 'part', ein
+                // NEUES kaputtes GroundedJoint wird angelegt - fuer immer (jede Neuanlage touched
+                // das Dokument, loest sofort den naechsten Recompute/solve()-Durchlauf aus). Erklaert
+                // vermutlich auch die laenger bekannte, bisher nur als "kosmetisch" eingestufte
+                // GroundedJoint-Vervielfachung (mehrere GroundedJoint/GroundedJoint003/... fuer
+                // dasselbe Teil, siehe project_fcproject_groundedjoint_proliferation_bug-Memory).
+                // Fix: 'part' wird in SEINEM EIGENEN Dokument gesucht, nicht in dem der Assembly.
                 std::string docName = getDocument()->getName();
+                std::string partDocName =
+                    part->getDocument() ? part->getDocument()->getName() : docName;
                 std::string asmName = getNameInDocument();
                 std::string partName = part->getNameInDocument();
                 std::string code = "import FreeCAD\n"
@@ -2667,10 +3542,13 @@ void AssemblyObject::syncGroundedJoints()
                                    "    doc = FreeCAD.getDocument('"
                     + docName
                     + "')\n"
+                      "    partDoc = FreeCAD.getDocument('"
+                    + partDocName
+                    + "')\n"
                       "    asm = doc.getObject('"
                     + asmName
                     + "')\n"
-                      "    part = doc.getObject('"
+                      "    part = partDoc.getObject('"
                     + partName
                     + "')\n"
                       "    jg = UtilsAssembly.getJointGroup(asm)\n"
@@ -2688,9 +3566,35 @@ void AssemblyObject::syncGroundedJoints()
             catch (...) {
             }
         }
-        // Delete grounding joint if placement lock was lifted
+        // Delete grounding joint if placement lock was lifted - aber erst nach einer zweiten
+        // Bestaetigung in einem SPAETEREN solve()-Aufruf (siehe Kommentar bei
+        // pendingGroundedJointRemoval in AssemblyObject.h). Das faengt die Race Condition ab,
+        // bei der der ganz fruehe, durch onChanged(&Group) waehrend des Dokument-Restores
+        // ausgeloeste solve()-Aufruf schneller laeuft als GroundedJoint.onDocumentRestored()
+        // (Python), das das ReadOnly-Flag neu setzt: bei einem einmaligen Race-Treffer ist das
+        // Flag spaetestens beim naechsten solve() korrekt gesetzt, der Verdacht wird dann durch
+        // den ersten if-Zweig oben (isReadOnly && !hasJoint faellt weg) wieder ausgeraeumt,
+        // BEVOR es zu dieser zweiten Bestaetigung kommt. Beim echten Anwendungsfall (Nutzer hebt
+        // die Sperre manuell per Rechtsklick auf) bleibt der inkonsistente Zustand dagegen ueber
+        // mehrere solve()-Aufrufe hinweg bestehen - dort loescht der zweite Treffer wie bisher.
         else if (!isReadOnly && hasJoint) {
-            getDocument()->removeObject(it->second->getNameInDocument());
+            if (pendingGroundedJointRemoval.count(part)) {
+                Base::Console().message(
+                    "Assembly: GroundedJoint '%s' fuer Teil '%s' entfernt (Sperre wurde "
+                    "ueber mehrere Solve-Zyklen hinweg aufgehoben).\n",
+                    it->second->getNameInDocument(), part->getNameInDocument()
+                );
+                getDocument()->removeObject(it->second->getNameInDocument());
+                pendingGroundedJointRemoval.erase(part);
+            }
+            else {
+                pendingGroundedJointRemoval.insert(part);
+            }
+        }
+        else {
+            // Konsistenter Zustand (isReadOnly && hasJoint, oder !isReadOnly && !hasJoint) -
+            // ein evtl. anhaengiger Loesch-Verdacht ist hinfaellig.
+            pendingGroundedJointRemoval.erase(part);
         }
     }
 }

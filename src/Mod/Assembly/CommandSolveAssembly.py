@@ -63,6 +63,17 @@ class CommandSolveAssembly:
             return
 
         App.setActiveTransaction("Solve assembly")
+        # FCPROJECT-PATCH (12): assembly.recompute(True) allein loeste den eigentlichen Solve
+        # nicht zuverlaessig aus - DocumentObject.recompute() ueberspringt execute() (und damit
+        # den darin aufgerufenen solve(), siehe AssemblyObject::execute()), wenn das Objekt nicht
+        # bereits als "touched" markiert ist. Das True-Argument bedeutet nur "rekursiv in
+        # Abhaengigkeiten", nicht "erzwinge trotzdem". Ergebnis: der "Baugruppe loesen"-Befehl
+        # (Tastenkuerzel Z) tat je nach Touched-Status manchmal buchstaeblich gar nichts - obwohl
+        # Ziehen eines Teils (das direkt solve() aufruft, siehe preDrag()) zuverlaessig
+        # funktionierte. touch() erzwingt das jetzt zuverlaessig, ohne execute()'s sonstiges
+        # Verhalten (Part::execute(), Signal-Emissionen etc.) durch einen direkten solve()-Aufruf
+        # zu umgehen. Live verifiziert per Zusatz-Logging in assembly-solver-sandbox.
+        assembly.touch()
         assembly.recompute(True)
         Gui.ActiveDocument.commitCommand()
 

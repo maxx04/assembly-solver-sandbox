@@ -2,8 +2,8 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "sandboxfreecad: configure",
-      "detail": "CMake-Konfiguration fuer standalone-check/ (Compile-Check der Sandbox-Aenderungen, siehe standalone-check/CMakeLists.txt)",
+      "label": "build-and-deploy: configure",
+      "detail": "CMake-Konfiguration fuer standalone-check/ (enthaelt das build-and-deploy-Ziel, siehe standalone-check/CMakeLists.txt)",
       "type": "shell",
       "command": "cmake",
       "args": ["-S", "standalone-check", "-B", "standalone-check/build"],
@@ -12,13 +12,13 @@
       "presentation": { "reveal": "silent", "panel": "shared", "clear": true }
     },
     {
-      "label": "sandboxfreecad",
-      "detail": "Baut die in der Sandbox geaenderten Assembly-Dateien gegen die echten FreeCAD-Header (kein Linking, keine Installation, siehe standalone-check/CMakeLists.txt)",
+      "label": "build-and-deploy",
+      "detail": "Baut Assembly+OndselSolver+AssemblyTests (Python-Skripte) neu und installiert nach /home/maxx/freecad-sandbox/install - siehe standalone-check/CMakeLists.txt",
       "type": "shell",
       "command": "cmake",
-      "args": ["--build", "standalone-check/build"],
+      "args": ["--build", "standalone-check/build", "--target", "build-and-deploy"],
       "options": { "cwd": "${workspaceFolder}" },
-      "dependsOn": ["sandboxfreecad: configure"],
+      "dependsOn": ["build-and-deploy: configure"],
       "group": { "kind": "build", "isDefault": true },
       "problemMatcher": ["$gcc"],
       "presentation": { "reveal": "always", "panel": "shared", "clear": true }

@@ -1,0 +1,27 @@
+# Patch-Liste dieser Sandbox - EINE Quelle der Wahrheit fuer Anwendungsreihenfolge.
+#
+# Wird gelesen von:
+#   - update-sandbox.sh (wendet nach jedem Upstream-Sync automatisch alle Zeilen hier an)
+#   - standalone-check/check-patches.sh (prueft dieselbe Liste/Reihenfolge)
+#
+# Format: eine Zeile = ein Patch-Dateiname (relativ zu patches/), in dieser Reihenfolge
+# anzuwenden. Leerzeilen und Zeilen, die mit # beginnen, werden ignoriert.
+#
+# Namenskonvention: JJJJ.MM.DD-<name>.patch - das Datum ist die letzte inhaltliche
+# Aktualisierung dieses Patches (nicht die Erstellung, falls seitdem neu generiert). Bewusst
+# so gewaehlt, dass eine simple alphabetische Sortierung der Dateinamen bereits eine gueltige
+# Anwendungsreihenfolge ergibt (frueheres Datum = frueher anwenden) - diese Liste hier ist
+# trotzdem explizit gepflegt, nicht nur "ls sortiert", damit Ausnahmen (siehe unten) klar
+# werden und die Reihenfolge nicht von einer stillschweigenden Namenskonvention abhaengt.
+
+2026.08.23-freecad-assembly-grounded-joint-nested-flex.patch
+2026.09.04-freecad-assembly-addressing-utils.patch
+2026.09.04-freecad-assembly-jointobject.patch
+2026.09.04-freecad-assembly-viewprovider-null-crash.patch
+2026.09.06-freecad-assembly-link-subjoints-revert.patch
+
+# NICHT in obiger Liste, weil nicht auf DIESE Sandbox anwendbar (betrifft src/App/*, hier
+# per Sparse-Checkout gar nicht ausgecheckt - nur src/Mod/Assembly + src/3rdParty/
+# OndselSolver sind es). Gehoert inhaltlich trotzdem zum selben Fix-Komplex, wird separat
+# gegen freecad-source direkt geprueft/angewendet:
+#   2026.09.04-freecad-app-getplacementof-partdesign-feature.patch
