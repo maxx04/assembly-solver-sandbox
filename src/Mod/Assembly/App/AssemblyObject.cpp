@@ -1491,14 +1491,18 @@ std::vector<JointRef> AssemblyObject::getJoints(
         }
 
         auto* prop = dynamic_cast<App::PropertyBool*>(joint->getPropertyByName("Suppressed"));
-        // FCPROJECT-DEBUG (temporaer, intermittierender isPartConnected()-Ausfall 2026-09-04):
-        // unbedingt, um den exakten Moment einzufangen.
-        Base::Console().log(
-            "FCPROJECT-DEBUG getJoints: joint='%s' isError=%d Suppressed=%d\n",
-            joint->getNameInDocument(),
-            joint->isError() ? 1 : 0,
-            (prop && prop->getValue()) ? 1 : 0
-        );
+        // FCPROJECT-PATCH (Teilschritt 3.1b): der urspruengliche intermittierende
+        // isPartConnected()-Ausfall vom 2026-09-04 ist geklaert (siehe
+        // reference-nested-grounding-leak-bugfix.md) - das Log muss dafuer nicht mehr unbedingt
+        // laufen. Hinter verboseLog, aus demselben CPU-Grund wie oben (preDrag()-Heisspfad).
+        if (verboseLog) {
+            Base::Console().log(
+                "FCPROJECT-DEBUG getJoints: joint='%s' isError=%d Suppressed=%d\n",
+                joint->getNameInDocument(),
+                joint->isError() ? 1 : 0,
+                (prop && prop->getValue()) ? 1 : 0
+            );
+        }
         if (joint->isError() || !prop || prop->getValue()) {
             // Filter grounded joints and deactivated joints.
             if (verboseLog) {
@@ -1516,12 +1520,14 @@ std::vector<JointRef> AssemblyObject::getJoints(
 
         auto* part1 = getMovingPartFromRef(joint, "Reference1");
         auto* part2 = getMovingPartFromRef(joint, "Reference2");
-        Base::Console().log(
-            "FCPROJECT-DEBUG getJoints: joint='%s' part1='%s' part2='%s'\n",
-            joint->getNameInDocument(),
-            part1 ? part1->getFullName().c_str() : "<null>",
-            part2 ? part2->getFullName().c_str() : "<null>"
-        );
+        if (verboseLog) {
+            Base::Console().log(
+                "FCPROJECT-DEBUG getJoints: joint='%s' part1='%s' part2='%s'\n",
+                joint->getNameInDocument(),
+                part1 ? part1->getFullName().c_str() : "<null>",
+                part2 ? part2->getFullName().c_str() : "<null>"
+            );
+        }
         if (!part1 || !part2 || part1->getFullName() == part2->getFullName()) {
             // Remove incomplete joints. Left-over when the user deletes a part.
             // Remove incoherent joints (self-pointing joints)
@@ -2180,7 +2186,7 @@ bool AssemblyObject::isPartGrounded(App::DocumentObject* obj)
     return false;
 }
 
-bool AssemblyObject::isPartConnected(App::DocumentObject* obj)
+bool AssemblyObject::isPartConnected(App::DocumentObject* obj, bool verboseLog)
 {
     if (!obj) {
         return false;
@@ -2219,9 +2225,11 @@ bool AssemblyObject::isPartConnected(App::DocumentObject* obj)
         traverseAndMarkConnectedParts(groundedObj, connectedParts, joints);
     }
 
-    // FCPROJECT-DEBUG (temporaer, Befund-3-Live-Diagnose 2026-09-03): wieder entfernen, sobald
-    // der Drag-Pfad nachvollzogen ist.
-    {
+    // FCPROJECT-PATCH (Teilschritt 3.1b): der Drag-Pfad aus der urspruenglichen Befund-3-Diagnose
+    // ist inzwischen nachvollzogen (siehe Kommentar oben an canonicalizeForMbD()) - Logs bleiben
+    // fuer kuenftige Diagnosen erhalten, laufen aber nur noch hinter verboseLog, da
+    // isPartConnected() auch aus dem preDrag()-Heisspfad heraus pro Mausereignis aufgerufen wird.
+    if (verboseLog) {
         std::string names;
         for (auto& objRef : connectedParts) {
             if (!objRef.obj) {
@@ -2242,12 +2250,16 @@ bool AssemblyObject::isPartConnected(App::DocumentObject* obj)
 
     for (auto& objRef : connectedParts) {
         if (canonicalObj == objRef.obj) {
-            Base::Console().log("FCPROJECT-DEBUG isPartConnected: -> TRUE\n");
+            if (verboseLog) {
+                Base::Console().log("FCPROJECT-DEBUG isPartConnected: -> TRUE\n");
+            }
             return true;
         }
     }
 
-    Base::Console().log("FCPROJECT-DEBUG isPartConnected: -> FALSE\n");
+    if (verboseLog) {
+        Base::Console().log("FCPROJECT-DEBUG isPartConnected: -> FALSE\n");
+    }
     return false;
 }
 

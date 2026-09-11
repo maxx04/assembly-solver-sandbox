@@ -175,10 +175,16 @@ AssemblyExport App::DocumentObject* getLinkedObjFromRef(
     const char* propName
 );
 // Get the moving part from a selection, which has the full path.
+// FCPROJECT-PATCH (Teilschritt 3.1b): verboseLog-Parameter ergaenzt, damit die
+// FCPROJECT-DEBUG-Logs in der Definition (urspruenglich fuer die Befund-3-Live-Diagnose
+// 2026-09-03 unbedingt eingebaut) nicht mehr bei jedem Selektions-/Zieh-Ereignis unbedingt
+// laufen. Default false, kein bestehender Aufrufer (Commands.cpp, ViewProviderAssembly.cpp)
+// muss angepasst werden.
 AssemblyExport App::DocumentObject* getMovingPartFromSel(
     const AssemblyObject* assemblyObject,
     App::DocumentObject* obj,
-    const std::string& sub
+    const std::string& sub,
+    bool verboseLog = false
 );
 AssemblyExport App::DocumentObject* getMovingPartFromRef(const App::PropertyXLinkSub* prop);
 AssemblyExport App::DocumentObject* getMovingPartFromRef(App::DocumentObject* joint, const char* pName);

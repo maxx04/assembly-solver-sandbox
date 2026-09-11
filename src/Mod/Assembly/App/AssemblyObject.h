@@ -244,7 +244,11 @@ public:
         const std::vector<App::DocumentObject*>& joints
     );
     bool isPartGrounded(App::DocumentObject* part);
-    bool isPartConnected(App::DocumentObject* part);
+    // FCPROJECT-PATCH (Teilschritt 3.1b): verboseLog-Parameter ergaenzt, damit die
+    // FCPROJECT-DEBUG-Logs in der Definition (urspruenglich fuer die Befund-3-Live-Diagnose
+    // 2026-09-03 unbedingt eingebaut) nicht mehr in jedem preDrag()-Mausereignis unbedingt
+    // laufen. Default false, kein bestehender Aufrufer muss angepasst werden.
+    bool isPartConnected(App::DocumentObject* part, bool verboseLog = false);
 
     std::vector<ObjRef> getDownstreamParts(
         App::DocumentObject* part,

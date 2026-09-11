@@ -660,7 +660,8 @@ App::DocumentObject* getLinkedObjFromRef(const App::DocumentObject* joint, const
 App::DocumentObject* getMovingPartFromSel(
     const AssemblyObject* assemblyObject,
     App::DocumentObject* obj,
-    const std::string& sub
+    const std::string& sub,
+    bool verboseLog
 )
 {
     if (!obj) {
@@ -674,45 +675,53 @@ App::DocumentObject* getMovingPartFromSel(
 
     bool assemblyPassed = false;
 
-    // FCPROJECT-DEBUG (temporaer, Befund-3-Live-Diagnose 2026-09-03): zeigt jeden Schritt des
-    // Namens-Walks - wieder entfernen, sobald der Drag-Pfad nachvollzogen ist.
-    Base::Console().log(
-        "FCPROJECT-DEBUG getMovingPartFromSel: assemblyObject='%s', selRoot='%s', sub='%s', "
-        "names=[%s]\n",
-        assemblyObject ? assemblyObject->getFullName().c_str() : "<null>",
-        obj->getFullName().c_str(),
-        sub.c_str(),
-        [&names]() {
-            std::string joined;
-            for (const auto& n : names) {
-                if (!joined.empty()) {
-                    joined += ", ";
+    // FCPROJECT-PATCH (Teilschritt 3.1b): der Namens-Walk aus der urspruenglichen
+    // Befund-3-Live-Diagnose 2026-09-03 ist inzwischen nachvollzogen - Logs bleiben fuer
+    // kuenftige Diagnosen erhalten, laufen aber nur noch hinter verboseLog, da diese Funktion
+    // bei jedem Selektions-/Zieh-Ereignis aufgerufen wird.
+    if (verboseLog) {
+        Base::Console().log(
+            "FCPROJECT-DEBUG getMovingPartFromSel: assemblyObject='%s', selRoot='%s', sub='%s', "
+            "names=[%s]\n",
+            assemblyObject ? assemblyObject->getFullName().c_str() : "<null>",
+            obj->getFullName().c_str(),
+            sub.c_str(),
+            [&names]() {
+                std::string joined;
+                for (const auto& n : names) {
+                    if (!joined.empty()) {
+                        joined += ", ";
+                    }
+                    joined += n;
                 }
-                joined += n;
-            }
-            return joined;
-        }()
-            .c_str()
-    );
+                return joined;
+            }()
+                .c_str()
+        );
+    }
 
     for (const auto& objName : names) {
         obj = doc->getObject(objName.c_str());
-        Base::Console().log(
-            "FCPROJECT-DEBUG   step name='%s' in doc='%s' -> obj='%s'\n",
-            objName.c_str(),
-            doc->getName(),
-            obj ? obj->getFullName().c_str() : "<not found>"
-        );
+        if (verboseLog) {
+            Base::Console().log(
+                "FCPROJECT-DEBUG   step name='%s' in doc='%s' -> obj='%s'\n",
+                objName.c_str(),
+                doc->getName(),
+                obj ? obj->getFullName().c_str() : "<not found>"
+            );
+        }
         if (!obj) {
             continue;
         }
 
         if (obj->isLink()) {  // update the document if necessary for next object
             doc = obj->getLinkedObject()->getDocument();
-            Base::Console().log(
-                "FCPROJECT-DEBUG     isLink() -> doc switched to '%s'\n",
-                doc->getName()
-            );
+            if (verboseLog) {
+                Base::Console().log(
+                    "FCPROJECT-DEBUG     isLink() -> doc switched to '%s'\n",
+                    doc->getName()
+                );
+            }
         }
 
         if (obj == assemblyObject) {
@@ -750,12 +759,15 @@ App::DocumentObject* getMovingPartFromSel(
                 if (auto* asmLink = freecad_cast<Assembly::AssemblyLink*>(obj)) {
                     if (auto* linkedAssembly = asmLink->getLinkedAssembly()) {
                         doc = linkedAssembly->getDocument();
-                        Base::Console().log(
-                            "FCPROJECT-DEBUG     flexible AssemblyLink -> doc switched to '%s'\n",
-                            doc->getName()
-                        );
+                        if (verboseLog) {
+                            Base::Console().log(
+                                "FCPROJECT-DEBUG     flexible AssemblyLink -> doc switched to "
+                                "'%s'\n",
+                                doc->getName()
+                            );
+                        }
                     }
-                    else {
+                    else if (verboseLog) {
                         Base::Console().log(
                             "FCPROJECT-DEBUG     flexible AssemblyLink but getLinkedAssembly()==null!\n"
                         );
@@ -765,13 +777,17 @@ App::DocumentObject* getMovingPartFromSel(
             }
         }
 
-        Base::Console().log(
-            "FCPROJECT-DEBUG   -> RETURN '%s'\n",
-            obj->getFullName().c_str()
-        );
+        if (verboseLog) {
+            Base::Console().log(
+                "FCPROJECT-DEBUG   -> RETURN '%s'\n",
+                obj->getFullName().c_str()
+            );
+        }
         return obj;
     }
-    Base::Console().log("FCPROJECT-DEBUG   -> RETURN nullptr\n");
+    if (verboseLog) {
+        Base::Console().log("FCPROJECT-DEBUG   -> RETURN nullptr\n");
+    }
     return nullptr;
 }
 
