@@ -144,7 +144,18 @@ JointParallelForbidden = [
 
 
 def solveIfAllowed(assembly, storePrev=False):
-    if assembly.Type == "Assembly" and Preferences.preferences().GetBool(
+    # FCPROJECT-PATCH (2026-09-13, "geerdetes Teil springt beim Joint-Anlegen" - siehe
+    # docs/ARCHITECTURE.md §2.4): "assembly.Type == 'Assembly'" ersetzt durch
+    # "assembly is not None" - assembly kommt hier IMMER aus getAssembly(joint), das laut
+    # eigener Definition (isDerivedFrom("Assembly::AssemblyObject")-Pruefung) nur None oder ein
+    # echtes AssemblyObject zurueckliefert. Die Type-Property wird aber nur EINMALIG, hartkodiert
+    # in CommandCreateAssembly.py beim "Neue Baugruppe"-Befehl gesetzt - bei jeder Baugruppe, die
+    # nicht ueber GENAU diesen Befehl entstanden ist (z.B. aeltere Dateien), bleibt sie leer, was
+    # diese Pruefung fuer ein voellig normales, echtes AssemblyObject faelschlich False werden
+    # liess. Live reproduziert: fuehrte in matchJCS()/ensureUnconnectedIsSecondRef() dazu, dass
+    # ein bereits geerdetes Teil faelschlich als "beweglich" behandelt und sein Placement direkt
+    # ueberschrieben wurde.
+    if assembly is not None and Preferences.preferences().GetBool(
         "SolveInJointCreation", True
     ):
         assembly.solve(storePrev)
@@ -808,7 +819,8 @@ class Joint:
 
             presolved = joint.JointType in JointUsingPreSolve and self.preSolve(joint, False)
 
-            isAssembly = self.getAssembly(joint).Type == "Assembly"
+            # FCPROJECT-PATCH (2026-09-13, siehe solveIfAllowed() oben fuer Begruendung):
+            isAssembly = self.getAssembly(joint) is not None
             if isAssembly and not presolved:
                 solveIfAllowed(self.getAssembly(joint))
             else:
@@ -847,7 +859,8 @@ class Joint:
     def setJointConnectors(self, joint, refs):
         # current selection is a vector of strings like "Assembly.Assembly1.Assembly2.Body.Pad.Edge16" including both what selection return as obj_name and obj_sub
         assembly = self.getAssembly(joint)
-        isAssembly = assembly.Type == "Assembly"
+        # FCPROJECT-PATCH (2026-09-13, siehe solveIfAllowed() oben fuer Begruendung):
+        isAssembly = assembly is not None
 
         if len(refs) >= 1:
             joint.Reference1 = refs[0]
@@ -937,7 +950,8 @@ class Joint:
         if not part1 or not part2:
             return False
 
-        isAssembly = assembly.Type == "Assembly"
+        # FCPROJECT-PATCH (2026-09-13, siehe solveIfAllowed() oben fuer Begruendung):
+        isAssembly = assembly is not None
         if isAssembly:
             joint.Suppressed = True
             part1Connected = assembly.isPartConnected(part1)
@@ -1027,7 +1041,8 @@ class Joint:
         part1 = UtilsAssembly.getMovingPart(joint.Reference1)
         part2 = UtilsAssembly.getMovingPart(joint.Reference2)
 
-        isAssembly = assembly.Type == "Assembly"
+        # FCPROJECT-PATCH (2026-09-13, siehe solveIfAllowed() oben fuer Begruendung):
+        isAssembly = assembly is not None
         if isAssembly:
             part1ConnectedByJoint = assembly.isJointConnectingPartToGround(joint, "Reference1")
             part2ConnectedByJoint = assembly.isJointConnectingPartToGround(joint, "Reference2")
@@ -1066,7 +1081,17 @@ class Joint:
         # See https://github.com/FreeCAD/FreeCAD/issues/29355 for instance.
         # This function swap the references if possible to avoid those issues.
         assembly = self.getAssembly(joint)
-        if not assembly or assembly.Type != "Assembly":
+        # FCPROJECT-PATCH (2026-09-13, "geerdetes Teil springt beim Joint-Anlegen" - siehe
+        # docs/ARCHITECTURE.md §2.4 und solveIfAllowed() oben fuer die volle Begruendung):
+        # "assembly.Type != 'Assembly'" ersetzt durch "assembly is None" - getAssembly() liefert
+        # laut eigener Definition nur None oder ein echtes AssemblyObject; die Type-Property wird
+        # aber nur einmalig in CommandCreateAssembly.py gesetzt und bleibt bei jeder Baugruppe,
+        # die nicht ueber GENAU diesen Befehl entstand, leer. Live reproduziert: liess diese
+        # Funktion bei einer voellig normalen, echten Baugruppe silently ohne Tausch zurueckkehren
+        # - das nachfolgende matchJCS() entschied dann anhand der (falschen) Auswahlreihenfolge
+        # statt der echten Verbindung, welches Teil sich bewegen soll, und ueberschrieb im
+        # schlimmsten Fall das Placement eines bereits geerdeten Teils direkt.
+        if assembly is None:
             return
 
         part1 = UtilsAssembly.getMovingPart(joint.Reference1)
