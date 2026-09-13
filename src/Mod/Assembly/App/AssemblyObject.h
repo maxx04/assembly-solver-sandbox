@@ -131,6 +131,16 @@ public:
 
     Base::Placement getMbdPlacement(std::shared_ptr<MbD::ASMTPart> mbdPart);
     bool validateNewPlacements();
+    // FCPROJECT-PATCH (2026-09-13, "Erdung driftet trotz eingefrorenem Ziel" - siehe
+    // docs/ARCHITECTURE.md §2.1a): liefert die starre Korrektur-Transformation, die das
+    // tatsaechlich geloeste Placement des (per Definition genau einen) explizit geerdeten
+    // Teils dieser Ebene exakt auf seinen eingefrorenen Zielwert (GroundedJoint.
+    // GroundedPlacement) zurueckbiegt - Identity, wenn keine Abweichung besteht oder keine
+    // explizite Erdung vorliegt. Wird in setNewPlacements() auf ALLE geloesten Placements
+    // dieser Ebene angewendet, nicht nur auf das geerdete Teil selbst - das haelt saemtliche,
+    // vom Solver bereits korrekt berechneten RELATIVEN Positionen zwischen den Teilen exakt
+    // erhalten (eine global-starre Transformation aendert keine Relativgeometrie).
+    Base::Placement computeGroundCorrection();
     void setNewPlacements();
     static void redrawJointPlacements(std::vector<App::DocumentObject*> joints);
     static void redrawJointPlacement(App::DocumentObject* joint);
@@ -405,6 +415,19 @@ private:
     void syncLocalMirrorPlacement(App::DocumentObject* realObj, const Base::Placement& plc);
 
     std::shared_ptr<MbD::ASMTAssembly> mbdAssembly;
+
+    // FCPROJECT-PATCH (2026-09-13, "Erdung driftet trotz Solve-Erfolg" - siehe
+    // docs/ARCHITECTURE.md §2.1a): der EINE (per Definition genau eine, unabhaengig von der
+    // Teileanzahl) explizit per GroundedJoint geerdete Zielwert dieses solve()-Durchlaufs -
+    // live in fixGroundedParts() eingelesen (unveraendertes Alt-Verhalten), aber hier
+    // gemerkt, damit computeGroundCorrection() danach saemtliche geloesten Placements exakt
+    // darauf zurueckbiegen kann. Das macht die Erdung unbedingt exakt, selbst wenn OndselSolvers
+    // Redundanz-Elimination (generische Gauss-Elimination mit Voll-Pivotisierung, kennt keine
+    // Objekt-Identitaet) ausgerechnet die Erdungs-eigenen Gleichungen verwirft. groundedTargetObj
+    // bleibt nullptr, wenn keine explizite Erdung existiert (z.B. waehrend eines Zwischenzustands)
+    // - computeGroundCorrection() liefert dann Identity, unveraendertes Verhalten.
+    App::DocumentObject* groundedTargetObj = nullptr;
+    Base::Placement groundedTargetPlc;
 
     std::unordered_map<App::DocumentObject*, MbDPartData> objectPartMap;
     // FCPROJECT-PATCH (Teilschritt 2 "adressieren statt kopieren", solver-root-cause-fix): pro

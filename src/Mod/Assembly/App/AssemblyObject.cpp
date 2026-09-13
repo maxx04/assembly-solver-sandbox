@@ -1159,8 +1159,49 @@ void AssemblyObject::updateRigidPlacementCache()
     });
 }
 
+Base::Placement AssemblyObject::computeGroundCorrection()
+{
+    // FCPROJECT-PATCH (2026-09-13, "Erdung driftet trotz Solve-Erfolg" - siehe
+    // docs/ARCHITECTURE.md §2.1a, Nutzerkorrektur "nach dem Solver in Ruhe lassen und alle
+    // bewegenden Teile relativ zur Erdung berechnen"): OndselSolvers Redundanz-Elimination
+    // (generische Gauss-Elimination mit Voll-Pivotisierung, GESpMatFullPvPosIC.cpp - waehlt
+    // rein nach Betragsgroesse des Pivot-Elements, kennt keine Objekt-Identitaet) kann auch die
+    // Erdungs-Constraints selbst als redundant verwerfen, wenn andere Fixed-Joints im System
+    // nur ANNAEHERND (nicht exakt) konsistent sind - der in fixGroundedParts() als Ziel
+    // vorgegebene Wert wird dann schlicht nicht durchgesetzt, das verbundene Teile-Cluster
+    // bleibt als Ganzes um die fehlenden Freiheitsgrade frei verschiebbar/verdrehbar. Statt den
+    // geteilten Solver-Kern anzufassen: die tatsaechlich geloeste Placement des (per Definition
+    // genau EINEN) explizit geerdeten Teils dieser Ebene gegen den in fixGroundedParts()
+    // gemerkten Zielwert (groundedTargetObj/groundedTargetPlc) vergleichen und die Differenz
+    // als EINE starre Koordinaten-Umrechnung zurueckliefern, die auf ALLE geloesten
+    // Placements dieser Ebene angewendet wird (siehe setNewPlacements()) - macht die Erdung
+    // dadurch UNBEDINGT exakt, unabhaengig davon, was die Redundanz-Elimination intern
+    // verworfen hat. Braucht dafuer KEINEN persistenten Zustand ueber solve()-Aufrufe hinweg:
+    // da jeder solve()-Durchlauf die Erdung exakt auf den Wert zurueckbiegt, den
+    // fixGroundedParts() fuer GENAU DIESEN Durchlauf live eingelesen hat, liest der naechste
+    // solve()-Aufruf denselben (jetzt korrekten) Wert wieder als sein eigenes Ziel ein - ein
+    // stabiler Fixpunkt, ganz ohne eingefrorene Property.
+    if (!groundedTargetObj) {
+        return Base::Placement();
+    }
+
+    auto it = objectPartMap.find(groundedTargetObj);
+    if (it == objectPartMap.end() || !it->second.part) {
+        return Base::Placement();
+    }
+
+    Base::Placement solvedActual = getMbdPlacement(it->second.part);
+    if (!it->second.offsetPlc.isIdentity()) {
+        solvedActual = solvedActual * it->second.offsetPlc;
+    }
+
+    return groundedTargetPlc * solvedActual.inverse();
+}
+
 void AssemblyObject::setNewPlacements()
 {
+    Base::Placement groundCorrection = computeGroundCorrection();
+
     for (auto& pair : objectPartMap) {
         App::DocumentObject* obj = pair.first;
         std::shared_ptr<ASMTPart> mbdPart = pair.second.part;
@@ -1179,6 +1220,12 @@ void AssemblyObject::setNewPlacements()
         Base::Placement newPlacement = getMbdPlacement(mbdPart);
         if (!pair.second.offsetPlc.isIdentity()) {
             newPlacement = newPlacement * pair.second.offsetPlc;
+        }
+        if (!groundCorrection.isIdentity()) {
+            // Global-starre Korrektur (siehe computeGroundCorrection()) - aendert keine
+            // Relativgeometrie zwischen den Teilen, biegt nur das Gesamtergebnis so zurecht,
+            // dass das geerdete Teil exakt an seinem eingefrorenen Platz landet.
+            newPlacement = groundCorrection * newPlacement;
         }
         if (!propPlacement->getValue().isSame(newPlacement)) {
             propPlacement->setValue(newPlacement);
@@ -1896,12 +1943,42 @@ std::unordered_set<App::DocumentObject*> AssemblyObject::fixGroundedParts()
 {
     auto groundedParts = getGroundedParts();
 
+    // FCPROJECT-PATCH (2026-09-13, "geerdetes Teil springt beim Anlegen weiterer Joints" -
+    // siehe docs/ARCHITECTURE.md §2.1a): Live-Placement-Lesen bleibt hier UNVERAENDERT (jeder
+    // solve()-Durchlauf nimmt weiterhin den aktuellen Ist-Wert als Ziel fuer den Solver) - das
+    // eigentliche Problem war nie DAS Lesen selbst, sondern dass OndselSolvers
+    // Redundanz-Elimination die Erdungs-Gleichungen anschliessend verwerfen und den
+    // vorgegebenen Zielwert dadurch stillschweigend IGNORIEREN kann (siehe
+    // computeGroundCorrection()). Merkt sich hier deshalb zusaetzlich, WELCHES Objekt per
+    // echtem GroundedJoint (nicht Origin/Datums/Rigid-Gruppen-Mitglieder) geerdet ist und WAS
+    // sein vorgegebenes Ziel fuer DIESEN Durchlauf war (groundedTargetObj/groundedTargetPlc,
+    // AssemblyObject.h) - computeGroundCorrection() biegt danach alle geloesten Placements
+    // exakt darauf zurueck, egal was der Solver intern verworfen hat. Nur EINE Erdung pro
+    // Assembly-Ebene (Nutzerkorrektur: "egal wieviele Teile dazu gehoeren") - die erste
+    // gefundene gewinnt.
+    groundedTargetObj = nullptr;
+    std::unordered_set<App::DocumentObject*> explicitlyGroundedTargets;
+    for (auto* jointObj : getGroundedJoints()) {
+        if (!jointObj) {
+            continue;
+        }
+        auto* propObj
+            = dynamic_cast<App::PropertyLink*>(jointObj->getPropertyByName("ObjectToGround"));
+        if (propObj && propObj->getValue()) {
+            explicitlyGroundedTargets.insert(propObj->getValue());
+        }
+    }
+
     for (auto obj : groundedParts) {
         if (!obj) {
             continue;
         }
 
         Base::Placement plc = getPlacementFromProp(obj, "Placement");
+        if (!groundedTargetObj && explicitlyGroundedTargets.count(obj)) {
+            groundedTargetObj = obj;
+            groundedTargetPlc = plc;
+        }
         std::string str = obj->getFullName();
         fixGroundedPart(obj, plc, str);
     }
