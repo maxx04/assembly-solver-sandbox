@@ -26,3 +26,11 @@
 # OndselSolver sind es). Gehoert inhaltlich trotzdem zum selben Fix-Komplex, wird separat
 # gegen freecad-source direkt geprueft/angewendet:
 #   2026.09.04-freecad-app-getplacementof-partdesign-feature.patch
+#
+# NICHT in obiger Liste, ebenfalls nicht auf DIESE Sandbox anwendbar (betrifft src/Gui/
+# FileDialog.*, allgemeiner Gui-Code ausserhalb des Assembly-Sparse-Checkouts). Reine
+# Referenzkopie aus dem separaten FCProject-Repo (patches/freecad-filedialog-search-filter.patch
+# dort) - fuegt ein Live-Suchfeld im Qt-eigenen (nicht-nativen) Datei-Oeffnen/Speichern-Dialog
+# hinzu, das die Dateiliste per setNameFilter() waehrend des Tippens filtert. Falls gewuenscht,
+# direkt gegen freecad-source pruefen/anwenden, nicht ueber update-sandbox.sh/check-patches.sh:
+#   2026.09.13-freecad-filedialog-search-filter.patch

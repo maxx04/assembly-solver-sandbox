@@ -1,0 +1,192 @@
+diff --git a/src/Gui/FileDialog.cpp b/src/Gui/FileDialog.cpp
+index c86736bd1e..e08892401e 100644
+--- a/src/Gui/FileDialog.cpp
++++ b/src/Gui/FileDialog.cpp
+@@ -40,6 +40,7 @@
+ #include <QFileSystemModel>
+ #include <QGridLayout>
+ #include <QGroupBox>
++#include <QLabel>
+ #include <QLineEdit>
+ #include <QMenuBar>
+ #include <QPushButton>
+@@ -203,6 +204,12 @@ FileDialog::FileDialog(QWidget* parent)
+ 
+ FileDialog::~FileDialog() = default;
+ 
++void FileDialog::showEvent(QShowEvent* event)
++{
++    QFileDialog::showEvent(event);
++    setupSearchFilter();
++}
++
+ void FileDialog::onSelectedFilter(const QString& /*filter*/)
+ {
+     QRegularExpression rx(QLatin1String(R"(\(\*.(\w+))"));
+@@ -214,6 +221,111 @@ void FileDialog::onSelectedFilter(const QString& /*filter*/)
+     }
+ }
+ 
++void FileDialog::setupSearchFilter()
++{
++    if (searchLineEdit) {
++        return;  // already set up - showEvent() can fire more than once
++    }
++
++    // Only the non-native (Qt-drawn) dialog exposes an internal QGridLayout
++    // we can add a widget to; the native OS dialog is a black box and isn't
++    // affected by this at all. Note this internal UI is itself built lazily
++    // by QFileDialog, only once the dialog is actually about to be shown -
++    // it doesn't exist yet right after construction (verified empirically:
++    // layout() is nullptr there). That's why this runs from showEvent()
++    // instead of the constructor.
++    auto* grid = qobject_cast<QGridLayout*>(layout());
++    if (!grid) {
++        // Some Qt builds/styles wrap the dialog's actual content grid in an
++        // outer layout instead of exposing it directly via layout(). Fall
++        // back to searching the whole widget tree for a QGridLayout -
++        // QLayout is QObject-parented to the dialog widget even when nested
++        // inside another layout, so findChildren() reaches it regardless of
++        // nesting depth. Prefer the one that actually contains the
++        // OK/Cancel button box, since that reliably identifies the dialog's
++        // main content grid rather than some smaller nested one.
++        QDialogButtonBox* buttonBox = findChild<QDialogButtonBox*>();
++        const auto grids = findChildren<QGridLayout*>();
++        for (auto* candidate : grids) {
++            if (buttonBox && candidate->indexOf(buttonBox) >= 0) {
++                grid = candidate;
++                break;
++            }
++        }
++        if (!grid && !grids.isEmpty()) {
++            grid = grids.constFirst();
++        }
++        Base::Console().log(
++            "FileDialog::setupSearchFilter: top-level layout() is %s (not a "
++            "QGridLayout); found %d nested QGridLayout(s), %s.\n",
++            layout() ? layout()->metaObject()->className() : "nullptr",
++            int(grids.size()),
++            grid ? "using one of them" : "none usable - search field not added"
++        );
++    }
++    if (!grid) {
++        return;
++    }
++
++    // Remember what the "Files of type" combo had selected so it can be
++    // restored once the search field is cleared again - onSearchTextChanged()
++    // temporarily overrides it with setNameFilter() while searching.
++    originalNameFilters = nameFilters();
++    originalSelectedFilter = selectedNameFilter();
++
++    auto* label = new QLabel(tr("Search:"), this);
++    auto* edit = new QLineEdit(this);
++    edit->setClearButtonEnabled(true);
++    edit->setPlaceholderText(
++        tr("Filter files in this folder (wildcards * and ? supported)")
++    );
++    connect(edit, &QLineEdit::textChanged, this, &FileDialog::onSearchTextChanged);
++    searchLineEdit = edit;
++
++    // Deliberately appended at grid->rowCount(), i.e. the first row that is
++    // guaranteed to still be empty - this lands below the OK/Cancel button
++    // box rather than above it, but avoids guessing at the internal row/
++    // column position of any existing widget (an earlier version tried to
++    // detect and shift the button box down, which risked landing the new
++    // row on top of already-occupied cells - e.g. if the button box shares
++    // its row with the "File name" controls - and could silently produce an
++    // invisible/overlapped field instead of a visible error).
++    int row = grid->rowCount();
++    grid->addWidget(label, row, 0);
++    grid->addWidget(edit, row, 1, 1, grid->columnCount() - 1);
++
++    Base::Console().log(
++        "FileDialog::setupSearchFilter: search field added at grid row %d.\n",
++        row
++    );
++}
++
++void FileDialog::onSearchTextChanged(const QString& text)
++{
++    QString pattern = text.trimmed();
++    if (pattern.isEmpty()) {
++        // Back to whatever the "Files of type" combo had selected before
++        // searching started.
++        setNameFilters(originalNameFilters);
++        if (!originalSelectedFilter.isEmpty()) {
++            selectNameFilter(originalSelectedFilter);
++        }
++        return;
++    }
++
++    // Plain text without explicit wildcards is treated as a substring match
++    // ("*text*"); a pattern that already contains '*' or '?' is used as-is,
++    // so e.g. "BOM*.csv" keeps working as a real wildcard mask. setNameFilter()
++    // is QFileDialog's own, fully supported filtering mechanism (same one the
++    // "Files of type" combo uses) - unlike a custom proxy model, it needs no
++    // extra bookkeeping to keep folders always navigable: QFileDialog already
++    // never applies name filters to directories, only to files.
++    if (!pattern.contains(QLatin1Char('*')) && !pattern.contains(QLatin1Char('?'))) {
++        pattern = QStringLiteral("*%1*").arg(pattern);
++    }
++    setNameFilter(pattern);
++}
++
+ QList<QUrl> FileDialog::fetchSidebarUrls()
+ {
+     QStringList list;
+diff --git a/src/Gui/FileDialog.h b/src/Gui/FileDialog.h
+index 8f2c5c1776..71e871b848 100644
+--- a/src/Gui/FileDialog.h
++++ b/src/Gui/FileDialog.h
+@@ -35,6 +35,7 @@ class QGridLayout;
+ class QGroupBox;
+ class QHBoxLayout;
+ class QLineEdit;
++class QShowEvent;
+ class QSpacerItem;
+ 
+ namespace Gui
+@@ -157,13 +158,42 @@ public:
+ 
+     void accept() override;
+ 
++protected:
++    /*!
++     * QFileDialog builds its internal widget-based UI (the QGridLayout
++     * setupSearchFilter() hooks into) lazily, not in the constructor - it
++     * only exists once the dialog is actually about to be shown. Adding the
++     * search field has to happen here rather than in the constructor.
++     */
++    void showEvent(QShowEvent* event) override;
++
+ private Q_SLOTS:
+     void onSelectedFilter(const QString&);
++    void onSearchTextChanged(const QString&);
+ 
+ private:
+     bool hasSuffix(const QString&) const;
+     static QList<QUrl> fetchSidebarUrls();
++    /*!
++     * Adds a live search/filter field below the file view (non-native dialog
++     * only). Unlike QFileDialog's own wildcard-on-Enter handling in the
++     * "File name" field - which validates the typed text as a literal file
++     * name on every keystroke and is unreliable in practice - this filters
++     * the visible list as you type, via setNameFilter() (see
++     * onSearchTextChanged()). Folders are always kept visible so navigation
++     * still works while a filter is active - QFileDialog's name filters
++     * already never apply to directories, only to files. Safe to call more
++     * than once (e.g. from repeated showEvent()s) - a no-op once the field
++     * already exists.
++     */
++    void setupSearchFilter();
+     static QString workingDirectory;
++
++    QPointer<QLineEdit> searchLineEdit;
++    /// "Files of type" state from before the search field took over, so it
++    /// can be restored once the search text is cleared again.
++    QStringList originalNameFilters;
++    QString originalSelectedFilter;
+ };
+ 
+ // ----------------------------------------------------------------------
