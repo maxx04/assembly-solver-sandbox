@@ -157,6 +157,60 @@ sequenceDiagram
 komplett unabhängig. Ein Dokument-Recompute löst sie alle nacheinander (Sub → Top → GrandTop) -
 deshalb zeigt ein voller Recompute den Nested-Bug nicht, ein interaktiver Drag schon (2.2).
 
+### 2.1a Erdung: fixierter Anker statt Live-Placement (2026-09-13)
+
+`fixGroundedParts()` liest für den Zielwert eines geerdeten Teils bewusst weiterhin bei **jedem**
+`solve()` das aktuelle `Placement` live ein (unverändert seit jeher) - das Problem liegt nicht im
+Lesen selbst, sondern darin, dass OndselSolvers Redundanz-Elimination (generische Gauss-
+Elimination mit Voll-Pivotisierung, `GESpMatFullPvPosIC.cpp::doPivoting()` - wählt rein nach
+Betragsgröße des Pivot-Elements, kennt keine Objekt-Identität) auch die Erdungs-eigenen
+Constraints als redundant verwerfen kann, wenn andere `Fixed`-Joints im System nur *annähernd*
+(nicht exakt) konsistent sind. Der vorgegebene Zielwert wird dann schlicht nicht durchgesetzt -
+live reproduziert an einer realen CNC3018-Baugruppe (mehrere Fixed-Joints an ein geerdetes
+Basisteil): das verbundene Teile-Cluster blieb als Ganzes um die fehlenden Freiheitsgrade frei,
+landete nach jedem `solve()`-Aufruf an einer anderen, nur "zufällig" gültigen Position - ganz ohne
+Fehlermeldung, da der Solver selbst erfolgreich konvergierte.
+
+**Fix** (`computeGroundCorrection()`, aufgerufen von `setNewPlacements()`): `fixGroundedParts()`
+merkt sich zusätzlich Objekt und vorgegebenen Zielwert des einen (per Definition genau einen)
+explizit per `GroundedJoint` geerdeten Teils dieser Ebene (`groundedTargetObj`/`groundedTargetPlc`,
+`AssemblyObject.h`). Nach dem eigentlichen Solve wird die *tatsächlich* gelöste Placement dieses
+Teils gegen den vorgegebenen Wert verglichen; die Differenz ist eine einzige starre
+Koordinatentransformation, die `setNewPlacements()` auf **alle** gelösten Placements dieser Ebene
+anwendet (nicht nur auf das geerdete Teil selbst) - ändert dadurch keine vom Solver bereits korrekt
+berechnete Relativgeometrie zwischen Teilen, biegt nur das Gesamtergebnis so zurecht, dass das
+geerdete Teil exakt an seinem vorgegebenen Platz landet. Kein persistenter Zustand nötig: da jeder
+`solve()`-Durchlauf die Erdung exakt zurückbiegt, liest der nächste Durchlauf denselben (jetzt
+korrekten) Wert wieder als sein eigenes Ziel ein - ein stabiler Fixpunkt. Betrifft ausschließlich
+`AssemblyObject.cpp`/`.h`, der Solver-Kern (OndselSolver) bleibt unangetastet.
+
+**Bewusst nicht mit behoben:** die davon unabhängige Kaltstart-Konvergenzempfindlichkeit von Newton
+bei mehreren gleichzeitigen `Fixed`-Joints auf demselben Basisteil (ein frisch geöffnetes Dokument
+mit weit von der Loesung entfernten Start-Placements kann trotz dieses Fixes mit
+`MbD: No convergence` scheitern, wo ein schrittweiser Aufbau mit Zwischen-Solves konvergiert) -
+separates, größeres Numerik-Thema.
+
+### 2.1b Joint-Erstellung: fragile `Type`-Property statt echter Typprüfung (2026-09-13)
+
+Zweiter, unabhängiger Fund an derselben Symptomklasse ("geerdetes Teil springt"): `JointObject.py`s
+`matchJCS()`/`ensureUnconnectedIsSecondRef()` (aufgerufen aus dem in §2.4 beschriebenen, komplett
+von `solve()` getrennten JCS-Vorschau-Pfad) entschieden bislang anhand von
+`assembly.Type == "Assembly"`, ob überhaupt eine echte Verbindungsprüfung (`isPartConnected()`)
+stattfinden soll. Diese `Type`-Property (geerbt von `App::Part`) wird aber **nur einmalig**,
+hartkodiert in `CommandCreateAssembly.py` beim "Neue Baugruppe"-Befehl gesetzt - bei jeder
+Baugruppe, die nicht über GENAU diesen Befehl entstand (z.B. ältere Dateien), bleibt sie ein leerer
+String. Die Prüfung wurde dadurch fälschlich `False`, der Code fiel in einen Rückfallzweig, der
+blind annimmt "das zweite ausgewählte Element ist immer das bewegliche Teil" - unabhängig von
+echter Verbindung/Erdung. Traf in der Praxis abwechselnd das neu ausgewählte Teil UND das bereits
+geerdete Teil (je nach Auswahlreihenfolge), im zweiten Fall wurde `Placement` eines bereits fest
+geerdeten Teils direkt überschrieben.
+
+**Fix:** alle 6 betroffenen Stellen ersetzen `assembly.Type == "Assembly"`/`!= "Assembly"` durch
+`assembly is not None`/`assembly is None`. `assembly` kommt an jeder dieser Stellen aus
+`getAssembly(joint)`, das laut eigener Definition (`isDerivedFrom("Assembly::AssemblyObject")`
+beim `InList`-Durchlauf) ohnehin nur `None` oder ein echtes `AssemblyObject` zurückliefert - die
+zusätzliche, aber fragile String-Prüfung war überflüssig und die eigentliche Fehlerquelle.
+
 ### 2.2 Interaktives Ziehen - warum nur die äußerste Baugruppe löst
 
 ```mermaid
@@ -446,10 +500,16 @@ Migrationsschritte selbst.
   GroundedJoint/RigidGroupJoint-Verschwinden-Historie - diese Datei **existiert nicht** im Repo.
   Weder nachgezogen noch die Kommentare umgebogen; die referenzierten Inhalte sind (soweit
   bekannt) nur in diesem Dokument bzw. in `JOURNAL.md` erfasst.
-- **"BoxA springt komisch" (2026-09-09, offen):** beim Testen des Grounding-Leak-Fixes in einem
-  frischen Dokument (Sub per Insert Link eingefügt, noch kein Joint angelegt) war BoxB korrekt
-  beweglich, BoxA zeigte aber ein noch nicht reproduziertes, ungewöhnliches Drag-Verhalten -
-  nächster Untersuchungsschritt, siehe Projekt-Memory `reference-nested-grounding-leak-bugfix.md`.
+- **"BoxA springt komisch" (2026-09-09, weiterhin offen):** beim Testen des Grounding-Leak-Fixes
+  in einem frischen Dokument (Sub per Insert Link eingefügt, noch kein Joint angelegt) war BoxB
+  korrekt beweglich, BoxA zeigte aber ein noch nicht reproduziertes, ungewöhnliches Drag-Verhalten -
+  siehe Projekt-Memory `reference-nested-grounding-leak-bugfix.md`. **Vorsicht bei der Einordnung:**
+  §2.1a/§2.1b (2026-09-13) beheben zwei ANDERE, live reproduzierte "geerdetes Teil bewegt sich"-
+  Fälle (beim `solve()` bzw. beim Joint-Anlegen/Offset-Ändern) - dieser Eintrag hier betraf
+  ausdrücklich interaktives *Ziehen* (`preDrag()`/`doDragStep()`, ein dritter, eigener Codepfad,
+  siehe §2.2), der bislang NICHT untersucht wurde. Ob derselbe oder ein anderer Mechanismus
+  dahintersteckt, ist unbestätigt - als eigenständig offen zu behandeln, nicht stillschweigend als
+  durch §2.1a/§2.1b miterledigt annehmen.
 - **Unabhängig geöffnete Zwischenebene synchronisiert nicht:** `Top`s eigene lokale Spiegel-Kopie
   bleibt nach einem `GrandTop`-only-Solve unsynchronisiert, wenn `Top` separat vom übergeordneten
   `GrandTop` geöffnet/angezeigt wird. Für `GrandTop`s eigene 3D-Ansicht irrelevant. Nicht verfolgt,
