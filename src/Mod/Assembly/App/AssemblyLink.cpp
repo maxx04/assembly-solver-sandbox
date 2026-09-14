@@ -377,6 +377,7 @@ void AssemblyLink::synchronizeComponents()
     }
 
     objLinkMap.clear();
+    mirrorToSourceMap.clear();
 
     std::vector<App::DocumentObject*> assemblyGroup = assembly->Group.getValues();
     std::vector<App::DocumentObject*> assemblyLinkGroup = Group.getValues();
@@ -454,6 +455,7 @@ void AssemblyLink::synchronizeComponents()
                             = link2->ElementList.getValues();
                         for (size_t i = 0; i < srcElements.size(); ++i) {
                             objLinkMap[srcElements[i]] = newElements[i];
+                            mirrorToSourceMap[newElements[i]] = srcElements[i];
                         }
                         break;
                     }
@@ -509,6 +511,7 @@ void AssemblyLink::synchronizeComponents()
                         syncPlacements(srcObj, newObj);
                     }
                     objLinkMap[srcObj] = newObj;
+                    mirrorToSourceMap[newObj] = srcObj;
                 }
 
                 link = newLink;
@@ -524,6 +527,7 @@ void AssemblyLink::synchronizeComponents()
         }
 
         objLinkMap[obj] = link;
+        mirrorToSourceMap[link] = obj;
     }
 
     // If the assemblyLink is rigid, then we keep all placements synchronized.
@@ -551,6 +555,12 @@ void AssemblyLink::synchronizeComponents()
             doc->removeObject(obj->getNameInDocument());
         }
     }
+}
+
+App::DocumentObject* AssemblyLink::getSourceForMirror(App::DocumentObject* mirror) const
+{
+    auto it = mirrorToSourceMap.find(mirror);
+    return it == mirrorToSourceMap.end() ? nullptr : it->second;
 }
 
 namespace

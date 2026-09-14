@@ -170,23 +170,41 @@ public:
     };
     MbDPartData getMbDData(App::DocumentObject* part);
     std::shared_ptr<MbD::ASMTMarker> makeMbdMarker(std::string& name, Base::Placement& plc);
-    std::vector<std::shared_ptr<MbD::ASMTJoint>> makeMbdJoint(App::DocumentObject* joint);
+    // FCPROJECT-PATCH (Mehrfachinstanz-Fix - siehe
+    // docs/ARCHITECTURE.md Abschnitt 4/5): nestingPrefix-Parameter ergaenzt. Ohne ihn wurde die
+    // ASMT-Joint-/Marker-Benennung (siehe Definitionsort) allein aus joint->getFullName()
+    // gebildet - kollidiert, sobald DERSELBE reale Joint ueber ZWEI verschiedene
+    // AssemblyLink-Instanzen desselben verlinkten Dokuments erreicht wird (zwei Eintraege in
+    // getJoints()' Rueckgabe mit demselben joint-Zeiger, aber unterschiedlichem nestingPrefix -
+    // siehe jointInstanceName()). "" (Default) entspricht exakt dem alten, nicht verschachtelten
+    // Verhalten.
+    std::vector<std::shared_ptr<MbD::ASMTJoint>> makeMbdJoint(
+        App::DocumentObject* joint,
+        const std::string& nestingPrefix = std::string()
+    );
     std::shared_ptr<MbD::ASMTJoint> makeMbdJointOfType(App::DocumentObject* joint, JointType jointType);
     std::shared_ptr<MbD::ASMTJoint> makeMbdJointDistance(App::DocumentObject* joint);
     std::string handleOneSideOfJoint(
         App::DocumentObject* joint,
         const char* propRefName,
         const char* propPlcName,
-        const std::string& markerName = std::string()
+        const std::string& markerName = std::string(),
+        const std::string& nestingPrefix = std::string()
     );
     void getRackPinionMarkers(
         App::DocumentObject* joint,
         std::string& markerNameI,
-        std::string& markerNameJ
+        std::string& markerNameJ,
+        const std::string& nestingPrefix = std::string()
     );
     int slidingPartIndex(App::DocumentObject* joint);
 
-    void jointParts(std::vector<App::DocumentObject*> joints);
+    // FCPROJECT-PATCH (Mehrfachinstanz-Fix): Parametertyp von
+    // vector<DocumentObject*> auf vector<JointRef> umgestellt - jointNestingPrefixMap (siehe
+    // deren Entfernung unten) transportierte das nestingPrefix bisher separat und kollabierte
+    // dabei zwei Instanzen desselben Joints auf einen einzigen Eintrag; jetzt reist es mit jedem
+    // JointRef direkt mit, siehe getJoints().
+    void jointParts(const std::vector<JointRef>& joints);
     JointGroup* getJointGroup() const;
     ViewGroup* getExplodedViewGroup() const;
     template<typename T>
@@ -213,10 +231,13 @@ public:
     // Rueckgabewert mit, statt es (wie vorher) zusaetzlich in die Member-Map
     // jointNestingPrefixMap zu schreiben. Reiner Typ-Umbau, KEINE Verhaltensaenderung: dieselben
     // Joints, dieselbe Reihenfolge, dasselbe nestingPrefix pro Joint wie zuvor - nur anders
-    // transportiert. jointNestingPrefixMap selbst bleibt als Lookup-Struktur fuer
-    // resolvePartForMbD() bestehen, wird aber jetzt von den drei "obersten" Aufrufern
-    // (solve()/generateSimulation()/exportAsASMT()) direkt nach diesem Aufruf aus dem
-    // Rueckgabewert befuellt, statt tief in der Rekursion hier.
+    // transportiert. jointNestingPrefixMap selbst blieb zunaechst als separate Lookup-Struktur
+    // fuer resolvePartForMbD() bestehen - seit dem Mehrfachinstanz-Fix (docs/ARCHITECTURE.md
+    // Abschnitt 4/5) ist sie ERSATZLOS entfernt, siehe deren vormaligen Deklarationsort weiter
+    // unten fuer die Begruendung (NICHT zu verwechseln mit dem separat, ebenfalls bewusst
+    // zurueckgestellten Teilschritt 3.3 aus Abschnitt 5 - einem eigenen, andersartigen
+    // `getGlobalPlacement()`-Experiment). Der JointRef-Rueckgabewert hier ist seitdem der
+    // EINZIGE Transportweg fuer das nestingPrefix.
     std::vector<JointRef> getJoints(
         bool delBadJoints = false,
         bool subJoints = true,
@@ -240,18 +261,24 @@ public:
     bool isJointTypeConnecting(App::DocumentObject* joint);
 
     bool isObjInSetOfObjRefs(App::DocumentObject* obj, const std::vector<ObjRef>& pairs);
+    // FCPROJECT-PATCH (Mehrfachinstanz-Fix - siehe
+    // docs/ARCHITECTURE.md Abschnitt 4/5): Parametertyp von vector<DocumentObject*> auf
+    // vector<JointRef> umgestellt, aus demselben Grund wie bei jointParts() oben - das
+    // nestingPrefix jedes Joints wird hier fuer resolvePartForMbD() gebraucht (Reference1/2-
+    // Aufloesung), und jointNestingPrefixMap konnte das fuer zwei Instanzen desselben realen
+    // Joints nicht mehr eindeutig bereithalten.
     void removeUnconnectedJoints(
-        std::vector<App::DocumentObject*>& joints,
+        std::vector<JointRef>& joints,
         std::unordered_set<App::DocumentObject*> groundedObjs
     );
     void traverseAndMarkConnectedParts(
         App::DocumentObject* currentPart,
         std::vector<ObjRef>& connectedParts,
-        const std::vector<App::DocumentObject*>& joints
+        const std::vector<JointRef>& joints
     );
     std::vector<ObjRef> getConnectedParts(
         App::DocumentObject* part,
-        const std::vector<App::DocumentObject*>& joints
+        const std::vector<JointRef>& joints
     );
     bool isPartGrounded(App::DocumentObject* part);
     // FCPROJECT-PATCH (Teilschritt 3.1b): verboseLog-Parameter ergaenzt, damit die
@@ -311,7 +338,11 @@ public:
 
     std::vector<App::DocumentObject*> getMotionsFromSimulation(App::DocumentObject* sim);
 
-    bool isMbDJointValid(App::DocumentObject* joint);
+    // FCPROJECT-PATCH (Mehrfachinstanz-Fix): nestingPrefix-Parameter
+    // ergaenzt, direkt an resolvePartForMbD() durchgereicht (siehe dort) statt aus
+    // jointNestingPrefixMap gelesen. "" (Default) entspricht dem alten, nicht verschachtelten
+    // Verhalten.
+    bool isMbDJointValid(App::DocumentObject* joint, const std::string& nestingPrefix = std::string());
 
     bool isEmpty() const;
     int numberOfComponents() const;
@@ -369,13 +400,24 @@ private:
     // FCPROJECT-PATCH (Teilschritt 2 "adressieren statt kopieren", solver-root-cause-fix, siehe
     // patches/assembly-architecture-overview.md, Abschnitt "Teilschritt 2 - Umsetzung"): loest die
     // fuer den MbD-Solver relevante Teil-Identitaet einer Joint-Referenz adressierungsbewusst auf
-    // (AssemblyUtils::resolveJointReference(), mit dem in jointNestingPrefixMap fuer diesen Joint
-    // hinterlegten nestingPrefix), statt ueber die alte, sub-pfad-blinde
-    // AssemblyUtils::getMovingPartFromRef(). Faellt defensiv auf getMovingPartFromRef() zurueck,
-    // falls die Aufloesung fehlschlaegt (kein bekannter Eintrag in jointNestingPrefixMap, oder
-    // resolveJointReference() selbst liefert nullptr) - garantiert dadurch, dass jeder bisher
-    // funktionierende (nicht verschachtelte) Fall exakt sein bisheriges Verhalten behaelt.
-    App::DocumentObject* resolvePartForMbD(App::DocumentObject* joint, const char* propRefName);
+    // (AssemblyUtils::resolveJointReference(), mit dem uebergebenen nestingPrefix), statt ueber
+    // die alte, sub-pfad-blinde AssemblyUtils::getMovingPartFromRef(). Faellt defensiv auf
+    // getMovingPartFromRef() zurueck, falls die Aufloesung fehlschlaegt (resolveJointReference()
+    // liefert nullptr) - garantiert dadurch, dass jeder bisher funktionierende (nicht
+    // verschachtelte) Fall exakt sein bisheriges Verhalten behaelt.
+    //
+    // FCPROJECT-PATCH (Mehrfachinstanz-Fix - siehe
+    // docs/ARCHITECTURE.md Abschnitt 4/5): nestingPrefix wird jetzt vom Aufrufer direkt
+    // uebergeben statt aus der (entfernten) jointNestingPrefixMap gelesen - diese Map war nach
+    // Joint-ZEIGER geschluesselt und konnte deshalb fuer denselben realen Joint, ueber zwei
+    // verschiedene AssemblyLink-Instanzen desselben verlinkten Dokuments erreicht, nur EIN
+    // nestingPrefix gleichzeitig halten (der zweite Eintrag ueberschrieb den ersten
+    // kommentarlos) - eine der beiden Instanzen wurde dadurch mit dem FALSCHEN Prefix aufgeloest.
+    App::DocumentObject* resolvePartForMbD(
+        App::DocumentObject* joint,
+        const char* propRefName,
+        const std::string& nestingPrefix
+    );
 
     // FCPROJECT-PATCH (Befund 3, Teilschritt 2e "adressieren statt kopieren", solver-root-cause-
     // fix, siehe patches/assembly-architecture-overview.md): resolvePartForMbD() loest Joint-
@@ -430,22 +472,20 @@ private:
     Base::Placement groundedTargetPlc;
 
     std::unordered_map<App::DocumentObject*, MbDPartData> objectPartMap;
-    // FCPROJECT-PATCH (Teilschritt 2 "adressieren statt kopieren", solver-root-cause-fix): pro
-    // Original-Joint (Pointer-Identitaet) das nestingPrefix, mit dem getJoints() ihn beim
-    // rekursiven Abstieg in verschachtelte, flexible AssemblyLinks gefunden hat (leer "" fuer
-    // einen Joint, der direkt in dieser AssemblyObject-Instanz liegt). Wird von
-    // resolvePartForMbD() gelesen.
-    //
-    // FCPROJECT-PATCH (Migrationsschritt 3 "Adressieren statt Kopieren"): getJoints() selbst
-    // befuellt diese Map NICHT mehr (das nestingPrefix steckt jetzt direkt in deren
-    // JointRef-Rueckgabewert, s. Deklarationsort) - stattdessen befuellen die drei "obersten"
-    // Aufrufer (solve()/generateSimulation()/exportAsASMT()) sie direkt nach ihrem jeweiligen
-    // getJoints()-Aufruf aus dem Rueckgabewert. Lifecycle unveraendert identisch zu
-    // objectPartMap gehalten - geleert an genau denselben Stellen wie objectPartMap.clear(),
-    // NICHT bei jedem getJoints()-Aufruf selbst, weil ein waehrend des Draggens ausgeloester
-    // getJoints()-Aufruf (isPartConnected()/getJointsOfPart()) die fuer den GERADE LAUFENDEN
-    // solve() gueltigen Eintraege nicht loeschen darf.
-    std::unordered_map<App::DocumentObject*, std::string> jointNestingPrefixMap;
+    // FCPROJECT-PATCH (Mehrfachinstanz-Fix - siehe
+    // docs/ARCHITECTURE.md Abschnitt 4/5): die vormalige jointNestingPrefixMap (Original-Joint-
+    // Zeiger -> nestingPrefix) ist ERSATZLOS entfernt - sie war nach Joint-Zeiger geschluesselt
+    // und konnte deshalb, sobald DERSELBE reale Joint ueber ZWEI AssemblyLink-Instanzen desselben
+    // verlinkten Dokuments erreicht wurde (zwei JointRef-Eintraege mit gleichem joint-Zeiger,
+    // aber unterschiedlichem nestingPrefix - siehe getJoints()), nur EINEN der beiden Werte
+    // halten (der zweite ueberschrieb den ersten kommentarlos). Betraf zusaetzlich den Aufbau der
+    // MbD-Joint/Marker-Namen (bare joint->getFullName(), siehe jointInstanceName()) - derselbe
+    // reale Joint landete dadurch ZWEIMAL mit IDENTISCHEM Namen im Solver. Das nestingPrefix wird
+    // seit diesem Fix ausschliesslich ueber den JointRef-Rueckgabewert von getJoints() explizit
+    // durch die gesamte Aufrufkette gereicht (resolvePartForMbD()/isMbDJointValid()/
+    // handleOneSideOfJoint()/getRackPinionMarkers()/makeMbdJoint(), sowie jointParts()/
+    // removeUnconnectedJoints()/traverseAndMarkConnectedParts()/getConnectedParts() ueber
+    // vector<JointRef> statt vector<DocumentObject*>) - keine separate Member-Map mehr noetig.
     std::unordered_map<App::DocumentObject*, App::DocumentObject*> rigidRepByPart;
     std::unordered_map<App::DocumentObject*, std::vector<App::DocumentObject*>> rigidMembersByRep;
     std::unordered_map<App::DocumentObject*, Base::Placement> rigidPlacementCache;

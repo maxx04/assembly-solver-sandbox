@@ -405,8 +405,8 @@ graph TD
 
 | Funktion | Datei | Rolle |
 |---|---|---|
-| `canonicalizeForMbD()` | `AssemblyObject.cpp:2997` | **Zentrale Wahrheitsquelle.** Rekursiv seit Bug 10 (2026-09-04) - delegiert an die tatsächlich zuständige verschachtelte Instanz, statt bei fehlgeschlagener lokaler Suche falsch "bereits kanonisch" zurückzugeben. |
-| `resolvePartForMbD()` | `AssemblyObject.cpp:3070` | Kanonisiert konsequent für Solver-Zwecke (Bug 6) - liest den bei `getJoints()` hinterlegten `nestingPrefix`, löst `Reference1/2` adressierungsbewusst bis zum individuellen Teil auf (`resolveJointReference()`), kanonisiert das Ergebnis zusätzlich. |
+| `canonicalizeForMbD()` | `AssemblyObject.cpp:3132` | **Zentrale Wahrheitsquelle.** Rekursiv seit Bug 10 (2026-09-04) - delegiert an die tatsächlich zuständige verschachtelte Instanz, statt bei fehlgeschlagener lokaler Suche falsch "bereits kanonisch" zurückzugeben. Seit dem Mehrfachinstanz-Fix (2026-09-14, siehe §4.1) löst sie jede Verschachtelungsebene **identitätsbasiert** über `AssemblyLink::objLinkMap`/`getSourceForMirror()` auf statt über einen Namensvergleich. |
+| `resolvePartForMbD()` | `AssemblyObject.cpp:3238` | Kanonisiert konsequent für Solver-Zwecke (Bug 6) - erhält seit 2026-09-14 das `nestingPrefix` direkt vom Aufrufer als Parameter (nicht mehr aus einer separaten Member-Map, siehe §4.1), löst `Reference1/2` adressierungsbewusst bis zum individuellen Teil auf (`resolveJointReference()`), kanonisiert das Ergebnis zusätzlich. |
 | `getMovingPartFromSel()` | `AssemblyUtils.cpp:660` | Fix für `isLink()`-Bug bei verschachtelten flexiblen Links (Bug 1). Bleibt die einzige Funktion, die den vollen Sub-Pfad tatsächlich abläuft - für **Nutzer-Selektion**, nicht Joint-Referenzen. |
 | `resolveJointReference()` | `AssemblyUtils.cpp:801` | Das Pendant zu `getMovingPartFromSel()` für **Joint-Referenzen**: baut die volle Adresse aus `nestingPrefix + Reference-Objekt + Sub-Pfad`, bricht defensiv (leeres Ergebnis) statt zu raten, wenn ein Segment nicht auflösbar ist. |
 | `getGroundedParts()`/`fixGroundedParts()` | `AssemblyObject.cpp:1733`/`1869` | Was zählt als "geerdet" (`Placement.isReadOnly()`, plus Rigid-Cluster-Propagation) - siehe §6 für den 2026-09-09 entfernten, überaggressiven Rekursionsblock. |
@@ -414,6 +414,93 @@ graph TD
 | `isPartConnected()` | `AssemblyObject.cpp:2163` | Dieselbe Traversal-Logik, aber für ein einzelnes Teil - Grundlage der Drag-Zulässigkeitsprüfung (§2.4). |
 | `syncLocalMirrorPlacement()`/`collectLocalMirrorCandidates()` | `AssemblyObject.cpp:1252` | Hält lokale Spiegel-Kopien mit dem Solver-Ergebnis synchron (Bug 8) - bekannter Rest-Gap siehe §6. |
 | `hasRealObject()` | `AssemblyObject.cpp`/`.h` | Erlaubt `canDragObjectIn3d()`, ein über verschachtelte flexible Links erreichtes Objekt zuzulassen (Bug 3). |
+
+### 4.1 Mehrfachinstanzen derselben verlinkten Baugruppe (2026-09-14)
+
+**Befund:** Fügt man dieselbe verlinkte Unterbaugruppe ein ZWEITES Mal in dieselbe
+Elternbaugruppe ein (realer Fall: BG22/BG25 - "kann Freecad nicht trennen 1 und 2 BG 25, kann
+die zweite BG 25 nicht bewegen"), brach die Identitätsauflösung auf zwei unabhängigen Wegen -
+beide eine Folge derselben, nie geprüften impliziten Annahme "es gibt höchstens eine
+`AssemblyLink`-Instanz pro verlinktem Dokument je Ebene". Kein Fixture/Testfall der bisherigen
+Matrix und kein Bug in [JOURNAL.md](JOURNAL.md) hatte dieses Szenario je geprüft - "doppelt
+verschachtelt" bedeutete dort ausschließlich Verschachtelungs**tiefe** (Sub→Top→GrandTop, immer
+verschiedene Dokumente), nie zwei Instanzen desselben Dokuments nebeneinander.
+
+**Bug A - `canonicalizeForMbD()` löste namensbasiert auf:** Der letzte Auflösungsschritt (und ein
+Zwischenschritt bei Verschachtelungstiefe ≥ 3) suchte ein Objekt per **Name**
+(`getDocument()->getObject(name)`), wobei der Name aus dem ÄUSSEREN Dokument stammte
+(`findLocalGroupPath()`). Das funktioniert nur, weil eine Spiegelkopie beim erstmaligen Anlegen
+denselben Namen wie ihr echtes Quellobjekt bekommt (`AssemblyLink::synchronizeComponents()`
+fragt bewusst denselben Wunschnamen an) - bei einer zweiten Instanz vergibt FreeCAD dem zweiten
+Spiegelsatz automatisch einen Namenszusatz (`BoxB` → `BoxB001`), den es im inneren, verlinkten
+Dokument nie gibt. Die Namenssuche schlug fehl, die Funktion fiel fälschlich auf "Spiegel bleibt
+Spiegel" zurück, statt das echte Objekt zu liefern - ein stiller Fehlschlag, kein Absturz, der
+sich aber durch jede Erdungs-/Verbindungs-/Joint-Endpunkt-Prüfung zog, die über diese Funktion
+läuft. **Fix:** `AssemblyLink::objLinkMap` (bereits vorhanden, identitätsbasiert, Quelle→Spiegel,
+pro `AssemblyLink`-Instanz eigenständig in `synchronizeComponents()` gepflegt) bekam eine inverse
+Ergänzung `mirrorToSourceMap`/`getSourceForMirror()` (Spiegel→Quelle) - `canonicalizeForMbD()`
+löst jede Ebene jetzt darüber auf, nie mehr über einen String.
+
+**Bug B - `jointNestingPrefixMap` verwarf den Instanz-Kontext:** `getJoints()` liefert für zwei
+Geschwister-`AssemblyLink`-Instanzen, die dasselbe Dokument spiegeln, bereits korrekt zwei
+`JointRef{joint, nestingPrefix}`-Einträge mit demselben realen Joint-Zeiger, aber
+unterschiedlichem `nestingPrefix` (z.B. `"SubLink."`/`"SubLink001."`). Die vormalige
+`jointNestingPrefixMap` (Member-Variable) war jedoch nur nach Joint-**Zeiger** geschlüsselt und
+konnte deshalb nur einen der beiden Werte gleichzeitig halten - der zweite Eintrag überschrieb
+den ersten kommentarlos. Das ließ `resolvePartForMbD()` eine der beiden Instanzen mit dem
+falschen Prefix auflösen, UND führte dazu, dass derselbe reale Joint zweimal mit **identischem**
+ASMT-Namen (`joint->getFullName()`) an den Solver ging - eine echte Namenskollision, live
+bestätigt am Warnungstext `Solve of '...' finished with 2 redundant joint(s): Joint001, Joint`
+(vor dem Fix nicht unterscheidbar, welche Instanz gemeint war) gegenüber danach
+`.../SubLink.Sub#Joint has the following constraint(s) removed` (jetzt eindeutig pro Instanz
+benannt). **Fix:** `jointNestingPrefixMap` ersatzlos entfernt - das `nestingPrefix` reist seitdem
+explizit durch die gesamte Aufrufkette (`resolvePartForMbD()`/`isMbDJointValid()`/
+`handleOneSideOfJoint()`/`getRackPinionMarkers()`/`makeMbdJoint()`, sowie `jointParts()`/
+`removeUnconnectedJoints()`/`traverseAndMarkConnectedParts()`/`getConnectedParts()` über
+`vector<JointRef>` statt `vector<DocumentObject*>`). Ein neuer Helfer `jointInstanceName(joint,
+nestingPrefix)` ersetzt jedes bisher bare `joint->getFullName()` an ASMT-Namensgebungsstellen -
+bei leerem Prefix (unveränderter, nicht verschachtelter Fall) byte-identisch zum bisherigen
+Namen.
+
+**Nicht mit angefasst (bewusst deferriert, gleiche Fehlerklasse):** die Getriebe-/
+Riemen-Trägermarker-Benennung (`setGearJointCarrierMarkerIfAvailable()`/
+`findRotationCarrierForGearSide()`) bildet Markernamen ebenfalls aus rohem
+`joint->getFullName()` ohne `nestingPrefix` - eigener Folge-Commit vorgesehen, isoliert von der
+Kernfix-Verifikation.
+
+**Verifikation:** neuer Testfall `standalone-check/kinematic-tests/test_fixed_duplicate_instance_flat/`
+(zwei Instanzen derselben Sub-Baugruppe, je ein eigener äußerer Fixed-Joint mit identischen
+Placement-Werten - ein physikalisch konsistentes, aber für den Solver redundantes Duplikat) -
+PASS auf patched, FAIL auf vanilla (vanilla hat die adressierungsbasierte Auflösung aus §4/§5
+gar nicht). Volle bestehende 15er-Testmatrix patched weiterhin exakt auf bekannter Baseline
+(keine neue Regression). **Nicht verifiziert:** der Mehrebenen-Fall (Verschachtelungstiefe ≥ 3
+MIT Duplikation auf einer Zwischenebene) - Bug As Fix behandelt jede Ebene strukturell gleich
+(kein tiefenspezifischer Code), ist also nach Konstruktion auch dafür korrekt, wurde aber nicht
+durch einen eigenen Testfall bestätigt (siehe Patch
+`patches/2026.09.14-freecad-assembly-multi-instance-identity.patch`).
+
+**Ebenfalls nicht untersucht (Umfang bewusst eingegrenzt):** GUI-Baumdarstellung bei zwei
+gleichzeitig sichtbaren Spiegelbäumen derselben Unterbaugruppe
+(`ViewProviderAssemblyLink::claimChildren()`), Undo/Redo-Wechselwirkung mit zwei Spiegelbäumen
+desselben realen Objekts, sowie `RigidGroupJoint`/`getRigidGroups()` bei duplizierten Instanzen
+(bereits als eigene, unabhängige Einschränkung in §6 dokumentiert).
+
+**Testmethodik-Korrektur (Nutzerauftrag 2026-09-14, direkt im Anschluss an diesen Fix):** die
+gesamte Kinematik-Testmatrix (alle 15 bestehenden Fixtures + der neue Testfall oben) vergab
+interne Objekt-Namen bisher per Hand (`doc.addObject("Part::Box", "BoxA")`,
+`newObject("Assembly::AssemblyLink", "SubLink")` usw.) - ein Test-Artefakt, das FreeCAD in echter
+Nutzung so nie erzeugt (die reale Part-Werkbank fragt beim Erstellen schlicht "Box" an,
+`CommandInsertLink.py::onItemClicked()` fragt das Label der verlinkten Baugruppe an, NICHT einen
+frei erfundenen Bezeichner wie "SubLink") und das genau die Namenskollision verdeckt hat, die
+Bug A ausgelöst hat. Umgestellt: der interne `Name` wird jetzt ÜBERALL FreeCAD selbst überlassen
+(`addObject("Part::Box")`/`newObject(type, sub_assembly.Label)`, exakt wie die echten GUI-
+Kommandos), das `Label` bleibt weiterhin explizit gesetzt ("BoxA"/"SubLink"/... - Labels DÜRFEN
+laut Nutzerkorrektur gleich sein, das ist kein Fehler) und dient als stabiler Bezugspunkt für
+Testskripte nach einem Neuladen (neuer Helfer `joint_test_utils.get_by_label()`,
+`nested_test_utils.get_mirror()` von namens- auf label-basiert umgestellt). Alle 10 bereits
+gebauten `.FCStd`-Fixtures wurden mit dieser Umstellung neu gebaut und committet; die volle
+Testmatrix läuft patched UND vanilla weiterhin exakt auf der bekannten, dokumentierten Baseline
+(keine neue Regression, keine Verhaltensänderung am Solver selbst - reine Testinfrastruktur).
 
 ---
 
@@ -425,7 +512,7 @@ alten Kopier-Pipeline, bis zuletzt):
 
 | # | Schritt | Status | Beleg |
 |---|---|---|---|
-| 1 | `subJoints=true` + Diagnose-Erweiterung (Sub-Pfad aus `PropertyXLinkSub` extrahieren) | ✅ erledigt | `getJoints()` hat `nestingPrefix`-Parameter, `jointNestingPrefixMap` |
+| 1 | `subJoints=true` + Diagnose-Erweiterung (Sub-Pfad aus `PropertyXLinkSub` extrahieren) | ✅ erledigt | `getJoints()` hat `nestingPrefix`-Parameter (Rückgabewert `JointRef{joint, nestingPrefix}`, seit 2026-09-14 der EINZIGE Transportweg - die vormalige separate `jointNestingPrefixMap` ist entfernt, siehe §4.1) |
 | 2 | `resolveJointReference()`-Äquivalent (gemeinsame Segment-Walk-Funktion) | ✅ erledigt (anderer Name) | `canonicalizeForMbD()`/`resolvePartForMbD()` übernehmen diese Rolle, 10 Bugs seit 2026-09-02 |
 | 3 | `objectPartMap`/`getJoints()`-Rückgabetyp umstellen | ✅ **erledigt** (3.1-3.2, 3.3 bewusst zurückgestellt) | `getJoints()` liefert seit 2026-09-11 `JointRef{joint, nestingPrefix}` statt rohem `DocumentObject*` (Teilschritt 3.1, reiner Typ-Umbau, verhaltensneutral). Teilschritt 3.1b/c (ebenfalls 2026-09-11): die zuvor unbedingt laufenden `FCPROJECT-DEBUG`-Logs in `getJoints()`, `isPartConnected()`, `getMovingPartFromSel()` laufen jetzt nur noch hinter `verboseLog` (Default `false`) - relevant, da alle drei Funktionen aus dem interaktiven `preDrag()`/Selektions-Heisspfad pro Mausereignis aufgerufen werden. **Teilschritt 3.2 (Audit statt Codeänderung, 2026-09-11):** geprüft, ob `objectPartMap` kanonische Identität "by construction" statt reaktiv über `canonicalizeForMbD()`-Fallback bekommt - Befund: **strukturell bereits erfüllt**. Alle 4 Schreibzugriffe auf `objectPartMap` liegen ausschließlich innerhalb von `getMbDData()`, die JEDEN Schlüssel an ihrem Anfang kanonisiert (`part = canonicalizeForMbD(part);`); alle Aufrufer (`resolvePartForMbD()`, `rebuildRigidClusters()`'s Rigid-Cluster-Mitglieder, bereits am 2026-09-09 gefixt) liefern zusätzlich schon selbst kanonische Objekte. `objectPartMap` bleibt bewusst über `DocumentObject*` geschlüsselt (kein `(obj, subPath)` - würde denselben Körper bei mehreren Joint-Anschlusspunkten in mehrere `ASMTPart`-Instanzen zerfallen lassen). Ein Versuch, `fixGroundedParts()` (den einzigen Pfad, der noch auf den `getMbDData()`-Fallback statt eigener Vor-Kanonisierung angewiesen ist) ebenfalls umzustellen, wurde verworfen: `fixGroundedPart()` braucht bewusst die Platzierung des ROHEN Spiegel-Objekts (nicht des kanonischen), ein Umbau hätte zwei Identitätsräume neu vermischt, ohne einen bestehenden Bug zu fixen - reines Architektur-Aufräumen mit Regressionsrisiko, kein Korrektheitsgewinn. **Teilschritt 3.3** (exploratives `getGlobalPlacement()`-Experiment, Verdacht auf Mitverursacher des 180°-Rests) bleibt bewusst zurückgestellt - explizit als riskant/isoliert markiert, kein Auftrag dafür. |
 | 4 | Kopier-Pipeline entfernen (`synchronizeJoints()` → `ensureNoJointGroup()` auch im Flexibel-Zweig) | ✅ **erledigt** (4.1-4.5, Migration abgeschlossen) | **Teilschritt 4.5 (2026-09-11, Cleanup):** `synchronizeJoints()`, `handleJointReference()`, `findLocalAncestor()` sowie das bereits deaktivierte `synchronizeGroundedAndRigidJoints()`/`mapToLocalComponent()` (GroundedJoint/RigidGroupJoint-Spiegelung) vollständig entfernt (ohne verbleibende Aufrufer seit 4.3) - inkl. des dadurch mit-toten `copyPropertyIfDifferent()`-Helfers. Zusätzlich toten `reachabilityJoints`/`reachableFromLocalGrounding`-Code in `getGroundedParts()` entfernt (berechnet, nie gelesen - Überbleibsel der 2026-09-09-Entscheidung, den zugehörigen Rekursionsblock zu entfernen). Dangling `patches/README.md`-Verweise (Datei existiert nicht) auf `docs/JOURNAL.md`/Git-Historie umgebogen. Build + volle 15er-Testmatrix weiterhin exakt auf Baseline. **Teilschritt 4.4 (2026-09-11):** `AssemblyLinkPy::getJoints()` (Python-Getter der `Joints`-Property, `obj.Joints`) las bisher `AssemblyLink::getJoints()` (die lokale Kopie) - lieferte seit 4.3 still `[]` statt einer sinnvollen Liste. Umgestellt auf `getLinkedAssembly()->getJoints(false, false)` (echte Joints). Verifiziert per Skript: `SubLink.Joints` liefert nach dem Fix `['Joint']` statt `[]`, volle Testmatrix weiterhin exakt auf Baseline. **Teilschritt 4.2 (2026-09-11):** `ViewProviderAssemblyLink::claimChildren()` neu eingeführt - zeigt für eine flexible `AssemblyLink` die ECHTE `JointGroup` der verlinkten `AssemblyObject` als zusätzliches Baum-Kind (kein Klon), mit Doppel-Anzeige-Schutz. **Teilschritt 4.3 (2026-09-11, der eigentliche Torwächter-Schritt):** `AssemblyLink::updateContents()` ruft im Flexibel-Zweig jetzt wie im Rigid-Zweig `ensureNoJointGroup()` statt `synchronizeJoints()` - die lokale Kopie der Joints entfällt vollständig, `synchronizeComponents()` (Teile-Spiegel) bleibt unverändert aktiv. **Teilschritt 4.1** (zusammen mit 4.3 statt davor, siehe vorherige Analyse) gleichzeitig erledigt: `AssemblyLink.cpp:227` (`redrawJointPlacements()` beim Rigid→Flexibel-Übergang) auf die echten Joints der verlinkten Baugruppe umgestellt, da `AssemblyLink::getJoints()` seit 4.3 immer leer liefert (keine lokale Gruppe mehr). **Verifikation:** volle 15er-Testmatrix (patched) exakt auf bekannter Baseline - besonders aussagekräftig, weil alle `*_nested_flex`/`*_double_nested_flex`-Fixtures (10 von 15) beim Bau tatsächlich `AssemblyLink.LinkedObject`/`.Rigid` real setzen und damit `updateContents()` echt durchlaufen (kein Mocking) - keine Tracebacks/Crashes in allen 15 Logs. Gezielt zusätzlich verifiziert: eine mit der ALTEN Pipeline gebaute Fixture-Datei (enthielt eine gespeicherte lokale JointGroup) räumt sich beim Laden automatisch selbst auf (`ensureNoJointGroup()` via `onDocumentRestored()`) - das ist bereits die "Nichtstun"-Migration aus Schritt 5 in Aktion; `claimChildren()` zeigt danach korrekt die echte Gruppe, Solve läuft fehlerfrei. `synchronizeJoints()`/`handleJointReference()`/`findLocalAncestor()` sind seit Teilschritt 4.5 vollständig entfernt. |
@@ -451,6 +538,16 @@ separate Untersuchung.
 **Nicht zu verwechseln:** der 2026-09-09-Fix an `getGroundedParts()` (§6, "Grounding-Leak") ist
 ein **eigenständiges, angrenzendes** Problem (wann gilt ein Teil als geerdet), keiner dieser 5
 Migrationsschritte selbst.
+
+**Nachtrag (2026-09-14):** die "Migration abgeschlossen"-Einordnung oben bezog sich ausdrücklich
+auf die 5 geplanten Teilschritte - sie deckte NICHT ab, ob die entstandene Identitätsauflösung
+auch bei **mehreren Instanzen derselben verlinkten Baugruppe** korrekt ist (dieses Szenario war
+in keinem der 10 Bugs, keinem Testfixture, keinem der 5 Schritte je adressiert - siehe §4.1 für
+die volle Herleitung). War es nicht: zwei unabhängige Bugs gefunden und gefixt
+(`canonicalizeForMbD()`s namensbasierte Auflösung, `jointNestingPrefixMap`s Verlust des
+Instanz-Kontexts). Kein Widerspruch zur obigen Einordnung, aber eine wichtige Ergänzung: "die
+Migration ist fertig" bedeutete "die Kopier-Pipeline ist weg", nicht "jede denkbare
+Verschachtelungs-/Instanzkonstellation ist geprüft".
 
 ---
 

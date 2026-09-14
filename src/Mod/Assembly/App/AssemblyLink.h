@@ -94,12 +94,27 @@ public:
 
     std::unordered_map<App::DocumentObject*, App::DocumentObject*> objLinkMap;
 
+    // FCPROJECT-PATCH (Mehrfachinstanz-Fix, siehe docs/ARCHITECTURE.md Abschnitt 4/5): inverse
+    // Ergaenzung zu objLinkMap (Spiegel -> Quelle statt Quelle -> Spiegel), im Gleichschritt in
+    // synchronizeComponents() gepflegt. Wird von AssemblyObject::canonicalizeForMbD() gebraucht,
+    // um eine lokale Spiegelkopie identitaetsbasiert (Zeiger, nicht Name) auf ihr echtes
+    // Quellobjekt zurueckzufuehren - das bisherige namensbasierte getObject()-Nachschlagen
+    // schlaegt fehl, sobald dieselbe verlinkte Baugruppe ein zweites Mal eingefuegt wird und
+    // FreeCAD den zweiten Satz Spiegel automatisch umbenennt (z.B. "BoxB" -> "BoxB001"), da im
+    // inneren Dokument nie ein gleichnamiges Objekt existiert. objLinkMap selbst ist dafuer nicht
+    // nutzbar, weil sie in der falschen Richtung geschluesselt ist.
+    App::DocumentObject* getSourceForMirror(App::DocumentObject* mirror) const;
+
 protected:
     /// get called by the container whenever a property has been changed
     void onChanged(const App::Property* prop) override;
     void onDocumentRestored() override;
 
 private:
+    // FCPROJECT-PATCH (Mehrfachinstanz-Fix): siehe getSourceForMirror()-Kommentar oben, gepflegt
+    // an denselben Stellen in synchronizeComponents() wie objLinkMap.
+    std::unordered_map<App::DocumentObject*, App::DocumentObject*> mirrorToSourceMap;
+
     // Reentrancy guard for updateContents(). synchronizeComponents() adds/removes objects in
     // this AssemblyLink's own Group, which synchronously re-enters onChanged(&Group) ->
     // updateContents(). That re-entry is not limited to the same instance: onChanged(&Group)
