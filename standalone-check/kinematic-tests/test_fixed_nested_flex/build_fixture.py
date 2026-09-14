@@ -62,8 +62,8 @@ def main():
         "FixedNestedFlexGrand", sub_asm, sub_path, grand_path
     )
 
-    mirror_boxA = ntu.get_mirror(sublink, subA.Name)
-    mirror_boxB = ntu.get_mirror(sublink, subB.Name)
+    mirror_boxA = ntu.get_mirror(sublink, subA.Label)
+    mirror_boxB = ntu.get_mirror(sublink, subB.Label)
     assert mirror_boxA is not None, "Spiegel von BoxA nicht in SubLink.Group gefunden"
     assert mirror_boxB is not None, "Spiegel von BoxB nicht in SubLink.Group gefunden"
 

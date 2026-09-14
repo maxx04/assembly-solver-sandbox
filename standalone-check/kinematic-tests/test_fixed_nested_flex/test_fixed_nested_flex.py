@@ -101,8 +101,8 @@ def load_fixture_and_solve():
 
     grand_doc = App.openDocument(grand_path)
     grand_asm = grand_doc.getObject("Assembly")
-    boxC = grand_doc.getObject("BoxC")
-    sublink = grand_doc.getObject("SubLink")
+    boxC = jtu.get_by_label(grand_doc, "BoxC")
+    sublink = jtu.get_by_label(grand_doc, "SubLink")
 
     # Die Fixture enthaelt BoxB (Spiegel) absichtlich an einer falschen Position (siehe
     # build_fixture_test_fixed_nested_flex.py) - simuliert einen "Treiber"-Versuch/Drag, der
@@ -173,8 +173,8 @@ def main():
     # Verschachtelungsfall (siehe Moduldocstring/README.md fuer die Chronologie eines frueheren,
     # sich als Testartefakt herausstellenden Befunds).
     sub_doc = App.getDocument(mirror_boxA.LinkedObject.Document.Name)
-    subA = sub_doc.getObject(mirror_boxA.Name)
-    subB = sub_doc.getObject(mirror_boxB.Name)
+    subA = mirror_boxA.LinkedObject
+    subB = mirror_boxB.LinkedObject
     sync_diff_A = (subA.Placement.Base - mirror_boxA.Placement.Base).Length
     sync_diff_B = (subB.Placement.Base - mirror_boxB.Placement.Base).Length
     print(f"\nSub<->Spiegel-Sync-Differenz BoxA: {sync_diff_A:.9f} mm")
@@ -184,8 +184,8 @@ def main():
     # Namen VOR dem Schliessen cachen - nach App.closeDocument() sind die alten Python-Objekte
     # (mirror_boxA/mirror_boxB) tote Referenzen (ReferenceError: "Cannot access attribute 'Name'
     # of deleted object"), live so gefunden.
-    mirror_boxA_name = mirror_boxA.Name
-    mirror_boxB_name = mirror_boxB.Name
+    mirror_boxA_name = mirror_boxA.Label
+    mirror_boxB_name = mirror_boxB.Label
 
     grand_doc.save()
     print("\nGrandTop gespeichert:", grand_path)
@@ -212,8 +212,8 @@ def main():
     # sorgt, unabhaengig vom Patch. Diese zweite Pruefung, rein ueber recompute() nach dem
     # Neuladen, ist die schaerfere Kontrolle.
     sub_doc2 = App.getDocument(mirror_boxA2.LinkedObject.Document.Name)
-    subA2 = sub_doc2.getObject(mirror_boxA2.Name)
-    subB2 = sub_doc2.getObject(mirror_boxB2.Name)
+    subA2 = mirror_boxA2.LinkedObject
+    subB2 = mirror_boxB2.LinkedObject
     sync_diff_A2 = (subA2.Placement.Base - mirror_boxA2.Placement.Base).Length
     sync_diff_B2 = (subB2.Placement.Base - mirror_boxB2.Placement.Base).Length
     print(f"\nSub<->Spiegel-Sync-Differenz BoxA (nach Neuladen, nur recompute()): {sync_diff_A2:.9f} mm")

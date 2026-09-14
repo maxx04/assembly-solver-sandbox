@@ -136,8 +136,8 @@ def load_fixture_and_solve():
     jtu.copy_fixture_to_output(fixture_file, out_path)
 
     doc = App.openDocument(out_path)
-    boxA = doc.getObject("BoxA")
-    boxB = doc.getObject("BoxB")
+    boxA = jtu.get_by_label(doc, "BoxA")
+    boxB = jtu.get_by_label(doc, "BoxB")
     assembly = doc.getObject("Assembly")
 
     doc.recompute()
@@ -179,8 +179,8 @@ def main():
     doc.save()
     App.closeDocument(docname)
     doc2 = App.openDocument(out_path)
-    boxA2 = doc2.getObject("BoxA")
-    boxB2 = doc2.getObject("BoxB")
+    boxA2 = jtu.get_by_label(doc2, "BoxA")
+    boxB2 = jtu.get_by_label(doc2, "BoxB")
     reload_exception = None
     try:
         doc2.recompute()

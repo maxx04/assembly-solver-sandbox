@@ -102,8 +102,8 @@ def load_fixture_and_solve():
 
     grand_doc = App.openDocument(out_grand)
     grand_asm = grand_doc.getObject("Assembly")
-    boxC = grand_doc.getObject("BoxC")
-    midlink = grand_doc.getObject("MidLink")
+    boxC = jtu.get_by_label(grand_doc, "BoxC")
+    midlink = jtu.get_by_label(grand_doc, "MidLink")
 
     grand_doc.recompute()
     grand_asm.solve(False)
@@ -172,9 +172,9 @@ def main():
         "Direkt nach dem Solve", boxC.Placement, boxD_mirror.Placement, mirror_boxA.Placement, mirror_boxB.Placement
     )
 
-    mirror_boxA_name = mirror_boxA.Name
-    mirror_boxB_name = mirror_boxB.Name
-    boxD_mirror_name = boxD_mirror.Name
+    mirror_boxA_name = mirror_boxA.Label
+    mirror_boxB_name = mirror_boxB.Label
+    boxD_mirror_name = boxD_mirror.Label
 
     grand_doc.save()
     print("\nGespeichert:", out_sub, out_mid, out_grand)

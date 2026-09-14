@@ -157,20 +157,25 @@ def new_grand_assembly_with_sublink(
 
     box_name/link_name (Nutzerauftrag "doppelt verschachtelte Tests", 2026-09-09): bei EINER
     Verschachtelungsebene sind die Defaults immer eindeutig - bei ZWEI Ebenen (Sub -> Mid ->
-    GrandTop, diese Funktion zweimal aufgerufen) wuerden Mid's EIGENE "BoxC"/"SubLink"-Objekte
-    beim Einbetten in GrandTop sonst mit GLEICHNAMIGEN Objekten kollidieren, die GrandTop selbst
-    per Default ebenfalls "BoxC"/"SubLink" nennt - FreeCAD loest das automatisch durch stille
-    Umbenennung des chronologisch zweiten Objekts (z.B. zu "BoxC001"/"SubLink001"), was
-    Namens-basiertes get_mirror()-Nachschlagen auf der AEUSSEREN Ebene unbrauchbar macht (live
-    gefunden: sonst muesste man stattdessen ueber TypeId + Ausschlussliste suchen, fehleranfaellig
-    und schwerer lesbar). Sauberer: beim Aufbau von Mid bewusst ANDERE Namen vergeben (z.B.
-    box_name="BoxD"), damit auf der GrandTop-Ebene keine Kollision entsteht und get_mirror()
-    weiterhin direkt per Namen funktioniert."""
+    GrandTop, diese Funktion zweimal aufgerufen) wuerden Mid's EIGENE Objekte beim Einbetten in
+    GrandTop sonst mit GLEICHNAMIGEN Objekten kollidieren. Seit dem Mehrfachinstanz-Fix
+    (Nutzerauftrag 2026-09-14, siehe docs/ARCHITECTURE.md Abschnitt 4.1) ist das kein Problem
+    mehr, das umgangen werden muss - box_name/link_name landen nur noch im LABEL (Lesbarkeit,
+    Lookup ueber get_mirror()/get_by_label()), waehrend der interne NAME jetzt IMMER FreeCAD
+    selbst ueberlaesst: boxC bekommt den generischen Part::Box-Namen "Box" (kollidiert bewusst
+    mit BoxC einer aeusseren Ebene, FreeCAD haengt selbst einen Zaehler an), und sublink bekommt
+    exakt den Namen, den auch CommandInsertLink.py::onItemClicked() fuer den Nutzer anfragen
+    wuerde (das Label der verlinkten Baugruppe, typischerweise "Assembly" - kollidiert bewusst
+    mit GrandTops EIGENEM Top-Level-AssemblyObject und wird von FreeCAD selbst umbenannt, z.B.
+    zu "Assembly001"). Genau diese vom Nutzer beobachtete, per Hand nie gewaehlte Namensvergabe
+    ist Teil dessen, was Bug A/B abdecken sollten - ein test-eigener, "sauberer" Name haette das
+    verdeckt."""
     allow_duplicate_labels()
     sub_assembly.Document.saveAs(sub_doc_save_path)
 
     grand_doc = App.newDocument(doc_name)
-    boxC = grand_doc.addObject("Part::Box", box_name)
+    boxC = grand_doc.addObject("Part::Box", "Box")
+    boxC.Label = box_name
     grand_doc.recompute()
 
     grand_asm = grand_doc.addObject("Assembly::AssemblyObject", "Assembly")
@@ -182,20 +187,31 @@ def new_grand_assembly_with_sublink(
     # gesetzt wird (derselbe Save-Check gilt fuer beide Seiten).
     grand_doc.saveAs(grand_doc_save_path)
 
-    sublink = grand_asm.newObject("Assembly::AssemblyLink", link_name)
+    # FCPROJECT-PATCH (Mehrfachinstanz-Fix, Nutzerauftrag 2026-09-14): exakt wie
+    # CommandInsertLink.py::onItemClicked() - Name-Wunsch ist das Label der verlinkten
+    # Baugruppe, nicht ein test-eigener Bezeichner. link_name geht nur noch ins Label.
+    sublink = grand_asm.newObject("Assembly::AssemblyLink", sub_assembly.Label)
     sublink.LinkedObject = sub_assembly
     sublink.Rigid = False
+    sublink.Label = link_name
     grand_asm.addObject(sublink)
     grand_doc.recompute()
 
     return grand_doc, grand_asm, boxC, sublink
 
 
-def get_mirror(sublink, name):
+def get_mirror(sublink, label):
     """Findet das Spiegel-Kind (App::Link, von AssemblyLink::updateContents() automatisch
-    angelegt) mit gegebenem Namen in sublink.Group - z.B. get_mirror(sublink, "BoxB")."""
+    angelegt) mit gegebenem LABEL in sublink.Group - z.B. get_mirror(sublink, "BoxB").
+
+    FCPROJECT-PATCH (Mehrfachinstanz-Fix, Nutzerauftrag 2026-09-14): vormals namensbasiert
+    (child.Name == name) - seit new_flat_two_box_assembly()/new_grand_assembly_with_sublink()
+    den internen Namen nicht mehr selbst vergeben, sondern FreeCAD ueberlassen, ist der Name
+    keine stabile Testreferenz mehr. Das LABEL wird von AssemblyLink::synchronizeComponents()
+    vom Quellobjekt uebernommen (newLink->Label = obj->Label) - bleibt deshalb "BoxA"/"BoxB",
+    unabhaengig davon, wie der interne Name lautet."""
     for child in sublink.Group:
-        if child.Name == name:
+        if child.Label == label:
             return child
     return None
 
@@ -239,8 +255,8 @@ def build_fixture_generic(test_name, inner_type_index, inner_plc1, inner_plc2, o
     grand_doc, grand_asm, boxC, sublink = new_grand_assembly_with_sublink(
         f"{test_name}Grand", sub_asm, sub_path, grand_path
     )
-    mirror_boxA = get_mirror(sublink, subA.Name)
-    mirror_boxB = get_mirror(sublink, subB.Name)
+    mirror_boxA = get_mirror(sublink, subA.Label)
+    mirror_boxB = get_mirror(sublink, subB.Label)
     assert mirror_boxA is not None, "Spiegel von BoxA nicht in SubLink.Group gefunden"
     assert mirror_boxB is not None, "Spiegel von BoxB nicht in SubLink.Group gefunden"
 
@@ -276,8 +292,8 @@ def load_fixture_and_solve_generic(test_name):
 
     grand_doc = App.openDocument(out_grand)
     grand_asm = grand_doc.getObject("Assembly")
-    boxC = grand_doc.getObject("BoxC")
-    sublink = grand_doc.getObject("SubLink")
+    boxC = jtu.get_by_label(grand_doc, "BoxC")
+    sublink = jtu.get_by_label(grand_doc, "SubLink")
 
     grand_doc.recompute()
     grand_asm.solve(False)
@@ -328,10 +344,15 @@ def check_sync(label, mirror_boxA, mirror_boxB):
     """Prueft, ob Sub's EIGENES Dokumentobjekt mit seinem Spiegel in GrandTop uebereinstimmt
     (`syncLocalMirrorPlacement()`, docs/ARCHITECTURE.md Abschnitt 3, Bug 8) - siehe
     Moduldocstring fuer die Einordnung (frueher vermuteter Vanilla-Bug erwies sich als
-    Testartefakt, siehe [[reference-nested-fixture-methodology]])."""
-    sub_doc = App.getDocument(mirror_boxA.LinkedObject.Document.Name)
-    subA = sub_doc.getObject(mirror_boxA.Name)
-    subB = sub_doc.getObject(mirror_boxB.Name)
+    Testartefakt, siehe [[reference-nested-fixture-methodology]]).
+
+    FCPROJECT-PATCH (Mehrfachinstanz-Fix, Nutzerauftrag 2026-09-14): das echte Quellobjekt wird
+    jetzt direkt ueber LinkedObject genommen statt per Namens-Nachschlagen im Sub-Dokument -
+    seit der interne Name nicht mehr per Hand auf "BoxA"/"BoxB" gesetzt wird, ist er zwischen
+    Spiegel und Original ohnehin nicht mehr identisch (jedes Dokument vergibt unabhaengig eigene
+    Namen), ein Namens-Lookup ueber Dokumentgrenzen war also nie eine stabile Referenz."""
+    subA = mirror_boxA.LinkedObject
+    subB = mirror_boxB.LinkedObject
     diff_A = (subA.Placement.Base - mirror_boxA.Placement.Base).Length
     diff_B = (subB.Placement.Base - mirror_boxB.Placement.Base).Length
     print(f"--- {label}: Sub<->Spiegel-Sync ---")
@@ -356,9 +377,9 @@ def save_close_reopen_recompute_nested(grand_doc, grand_doc_path, box_c_name="Bo
     App.closeDocument(docname)
 
     grand_doc2 = App.openDocument(grand_doc_path)
-    boxC2 = grand_doc2.getObject(box_c_name)
+    boxC2 = jtu.get_by_label(grand_doc2, box_c_name)
     grand_asm2 = grand_doc2.getObject("Assembly")
-    sublink2 = grand_doc2.getObject(link_name)
+    sublink2 = jtu.get_by_label(grand_doc2, link_name)
 
     exc = None
     try:

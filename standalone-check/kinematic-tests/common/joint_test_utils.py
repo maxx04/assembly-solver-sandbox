@@ -184,14 +184,43 @@ def copy_fixture_to_output(fixture_file_path, out_path):
     shutil.copy2(fixture_file_path, out_path)
 
 
+def get_by_label(doc, label):
+    """Findet GENAU EIN Objekt mit gegebenem Label in 'doc' (Nutzerauftrag 2026-09-14: interne
+    Namen sollen FreeCAD selbst vergeben, wie es beim echten Einfuegen/Erstellen ueblich ist -
+    siehe new_flat_two_box_assembly()/nested_test_utils.py::new_grand_assembly_with_sublink() -
+    Objekte werden deshalb nach einem Neuladen ueber ihr LABEL wiedergefunden, nicht mehr ueber
+    einen fest angenommenen internen Namen). Labels DUERFEN laut Nutzerkorrektur gleich sein -
+    hier wird das bewusst NICHT als Fehler behandelt, sondern als klarer, sofort sichtbarer
+    Fehlerfall (der Testfall selbst haelt seine Labels eindeutig, damit dieser Helfer eindeutig
+    bleibt)."""
+    matches = doc.getObjectsByLabel(label)
+    if len(matches) != 1:
+        raise AssertionError(
+            f"get_by_label({doc.Name!r}, {label!r}): erwartet genau 1 Treffer, gefunden {len(matches)}"
+        )
+    return matches[0]
+
+
 def new_flat_two_box_assembly(doc_name):
     """Baut die in dieser Testmatrix immer gleiche Grundlage: ein Assembly-Objekt mit zwei
     NICHT verschachtelten Part::Box, BoxA geerdet. Der eigentliche Joint wird vom
-    Aufrufer per make_joint() ergaenzt."""
+    Aufrufer per make_joint() ergaenzt.
+
+    FCPROJECT-PATCH (Mehrfachinstanz-Fix, Nutzerauftrag 2026-09-14): der interne Name (Name,
+    NICHT Label) wird seit diesem Fix NICHT mehr per Hand auf "BoxA"/"BoxB" gesetzt - das war
+    ein Test-Artefakt, das FreeCAD nie so vergeben wuerde (die reale Part-Werkbank fragt beim
+    Erstellen eines Wuerfels schlicht "Box" an, FreeCAD haengt bei einer Kollision selbst einen
+    Zaehler an, z.B. "Box001" - siehe docs/ARCHITECTURE.md Abschnitt 4.1 fuer die volle
+    Herleitung, warum ein von Hand gewaehlter interner Name die eigentliche Kollisionsbehandlung
+    verdeckt hat). Das Label bleibt weiterhin explizit "BoxA"/"BoxB" - fuer die Lesbarkeit im
+    Baum UND als stabiler Bezugspunkt fuer Testskripte nach einem Neuladen (get_by_label() oben),
+    Labels duerfen laut Nutzerkorrektur ohnehin gleich sein, muessen es hier aber nicht."""
     doc = App.newDocument(doc_name)
 
-    boxA = doc.addObject("Part::Box", "BoxA")
-    boxB = doc.addObject("Part::Box", "BoxB")
+    boxA = doc.addObject("Part::Box", "Box")
+    boxA.Label = "BoxA"
+    boxB = doc.addObject("Part::Box", "Box")
+    boxB.Label = "BoxB"
     doc.recompute()
 
     assembly = doc.addObject("Assembly::AssemblyObject", "Assembly")
@@ -333,7 +362,7 @@ def save_close_reopen_recompute(doc, out_path, box_b_name="BoxB"):
     docname = doc.Name
     App.closeDocument(docname)
     doc2 = App.openDocument(out_path)
-    boxB2 = doc2.getObject(box_b_name)
+    boxB2 = get_by_label(doc2, box_b_name)
 
     exc = None
     try:

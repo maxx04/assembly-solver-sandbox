@@ -71,8 +71,8 @@ def load_fixture_and_solve():
 
     grand_doc = App.openDocument(grand_path)
     grand_asm = grand_doc.getObject("Assembly")
-    boxC = grand_doc.getObject("BoxC")
-    sublink = grand_doc.getObject("SubLink")
+    boxC = jtu.get_by_label(grand_doc, "BoxC")
+    sublink = jtu.get_by_label(grand_doc, "SubLink")
 
     grand_doc.recompute()
     grand_asm.solve(False)
@@ -138,16 +138,16 @@ def main():
     )
 
     sub_doc = App.getDocument(mirror_boxA.LinkedObject.Document.Name)
-    subA = sub_doc.getObject(mirror_boxA.Name)
-    subB = sub_doc.getObject(mirror_boxB.Name)
+    subA = mirror_boxA.LinkedObject
+    subB = mirror_boxB.LinkedObject
     sync_diff_A = (subA.Placement.Base - mirror_boxA.Placement.Base).Length
     sync_diff_B = (subB.Placement.Base - mirror_boxB.Placement.Base).Length
     print(f"\nSub<->Spiegel-Sync-Differenz BoxA: {sync_diff_A:.9f} mm")
     print(f"Sub<->Spiegel-Sync-Differenz BoxB: {sync_diff_B:.9f} mm")
     ok_sync = sync_diff_A <= 1e-6 and sync_diff_B <= 1e-6
 
-    mirror_boxA_name = mirror_boxA.Name
-    mirror_boxB_name = mirror_boxB.Name
+    mirror_boxA_name = mirror_boxA.Label
+    mirror_boxB_name = mirror_boxB.Label
 
     grand_doc.save()
     print("\nGrandTop gespeichert:", grand_path)
@@ -167,8 +167,8 @@ def main():
         return 1
 
     sub_doc2 = App.getDocument(mirror_boxA2.LinkedObject.Document.Name)
-    subA2 = sub_doc2.getObject(mirror_boxA2.Name)
-    subB2 = sub_doc2.getObject(mirror_boxB2.Name)
+    subA2 = mirror_boxA2.LinkedObject
+    subB2 = mirror_boxB2.LinkedObject
     sync_diff_A2 = (subA2.Placement.Base - mirror_boxA2.Placement.Base).Length
     sync_diff_B2 = (subB2.Placement.Base - mirror_boxB2.Placement.Base).Length
     print(f"\nSub<->Spiegel-Sync-Differenz BoxA (nach Neuladen, nur recompute()): {sync_diff_A2:.9f} mm")

@@ -46,8 +46,8 @@ def try_angle(angle_deg):
         f"SweepGrand{angle_deg}".replace(".", "_"), sub_asm,
         f"/tmp/sweep_sub_{angle_deg}.FCStd", f"/tmp/sweep_grand_{angle_deg}.FCStd"
     )
-    mirror_boxA = ntu.get_mirror(sublink, subA.Name)
-    mirror_boxB = ntu.get_mirror(sublink, subB.Name)
+    mirror_boxA = ntu.get_mirror(sublink, subA.Label)
+    mirror_boxB = ntu.get_mirror(sublink, subB.Label)
 
     outer_joint = jtu.make_joint(grand_asm, 0, boxC, mirror_boxB, OUTER_PLC1, OUTER_PLC2)
     outer_joint.Label = "Joint"

@@ -75,8 +75,8 @@ def load_fixture_and_solve():
     jtu.copy_fixture_to_output(fixture_file, out_path)
 
     doc = App.openDocument(out_path)
-    boxA = doc.getObject("BoxA")
-    boxB = doc.getObject("BoxB")
+    boxA = jtu.get_by_label(doc, "BoxA")
+    boxB = jtu.get_by_label(doc, "BoxB")
     assembly = doc.getObject("Assembly")
 
     doc.recompute()
@@ -111,7 +111,7 @@ def main():
         print(f"RESULT: FAIL (Exception beim Neuladen+Recompute: {reload_exc!r})")
         return 1
 
-    boxA2 = doc2.getObject("BoxA")
+    boxA2 = jtu.get_by_label(doc2, "BoxA")
     ok_reload = check("Nach Speichern+Schliessen+Neuladen+Recompute", boxA2, boxB2)
 
     if ok_initial and ok_reload:

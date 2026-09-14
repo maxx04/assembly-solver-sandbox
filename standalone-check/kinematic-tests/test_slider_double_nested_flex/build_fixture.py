@@ -39,7 +39,7 @@ def main():
     mid_doc, mid_asm, boxD, sublink = ntu.new_grand_assembly_with_sublink(
         "SliderDoubleNestedFlexMid", sub_asm, sub_path, mid_path, box_name="BoxD", link_name="SubLink"
     )
-    mirror_boxB_mid = ntu.get_mirror(sublink, subB.Name)
+    mirror_boxB_mid = ntu.get_mirror(sublink, subB.Label)
     assert mirror_boxB_mid is not None, "Spiegel von BoxB nicht in SubLink.Group gefunden"
     middle_joint = jtu.make_joint(mid_asm, 0, boxD, mirror_boxB_mid, MIDDLE_PLC1, MIDDLE_PLC2)
     middle_joint.Label = "Joint"
@@ -52,11 +52,11 @@ def main():
     grand_doc, grand_asm, boxC, midlink = ntu.new_grand_assembly_with_sublink(
         "SliderDoubleNestedFlexGrand", mid_asm, mid_path, grand_path, box_name="BoxC", link_name="MidLink"
     )
-    boxD_mirror = ntu.get_mirror(midlink, boxD.Name)
-    sublink_mirror = ntu.get_mirror(midlink, sublink.Name)
+    boxD_mirror = ntu.get_mirror(midlink, boxD.Label)
+    sublink_mirror = ntu.get_mirror(midlink, sublink.Label)
     assert boxD_mirror is not None, "Spiegel von BoxD nicht in MidLink.Group gefunden"
     assert sublink_mirror is not None, "Spiegel von SubLink nicht in MidLink.Group gefunden"
-    mirror_boxB_grand = ntu.get_mirror(sublink_mirror, subB.Name)
+    mirror_boxB_grand = ntu.get_mirror(sublink_mirror, subB.Label)
     assert mirror_boxB_grand is not None, "Doppelt gespiegeltes BoxB nicht gefunden"
 
     outer_joint = jtu.make_joint(grand_asm, 0, boxC, mirror_boxB_grand, OUTER_PLC1, OUTER_PLC2)
