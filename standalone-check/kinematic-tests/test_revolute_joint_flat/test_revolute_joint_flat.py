@@ -46,7 +46,8 @@ def build_fixture():
     """Baut die feste Ausgangsdatei EINMALIG (aufgerufen von build_all_fixtures.py) - laesst
     BoxB an der absichtlich falschen Startposition stehen (kein solve()), damit patched UND
     vanilla exakt denselben, unkorrigierten Ausgangszustand bekommen."""
-    doc, assembly, boxA, boxB = jtu.new_flat_two_box_assembly(TEST_NAME)
+    fixture_file = jtu.fixture_path(THIS_DIR)
+    doc, assembly, boxA, boxB = jtu.new_flat_two_box_assembly(TEST_NAME, fixture_file)
     jtu.make_joint(assembly, JOINT_TYPE_INDEX, boxA, boxB, PLC1, PLC2, elem1="Edge9", elem2="Edge9")
 
     # Absichtlich falsche Startposition fuer BoxB - simuliert einen "Treiber"-Versuch/Drag, der
@@ -66,9 +67,7 @@ def build_fixture():
     boxB.Placement = App.Placement(App.Vector(999, -999, 999), start_rotation)
     doc.recompute()
 
-    fixture_file = jtu.fixture_path(THIS_DIR)
-    os.makedirs(os.path.dirname(fixture_file), exist_ok=True)
-    doc.saveAs(fixture_file)
+    doc.save()
     print("Fixture geschrieben:", fixture_file)
     return doc
 

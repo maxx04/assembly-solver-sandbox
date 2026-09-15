@@ -44,7 +44,7 @@ def main():
     for p in (sub_path, grand_path):
         os.makedirs(os.path.dirname(p), exist_ok=True)
 
-    sub_doc, sub_asm, subA, subB = ntu.new_sub_assembly_doc("FixedNestedFlexSub")
+    sub_doc, sub_asm, subA, subB = ntu.new_sub_assembly_doc("FixedNestedFlexSub", sub_path)
     jtu.make_joint(sub_asm, 0, subA, subB, INNER_PLC1, INNER_PLC2)  # Fixed
     # WICHTIG (Nutzerauftrag 2026-09-09, siehe test_fixed_joint_flat.py fuer die volle
     # Begruendung): der INNERE Joint hat ebenfalls entgegengesetzte JCS-Z-Achsen

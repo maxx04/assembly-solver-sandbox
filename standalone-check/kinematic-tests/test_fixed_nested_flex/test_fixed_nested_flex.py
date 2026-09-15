@@ -99,6 +99,7 @@ def load_fixture_and_solve():
     sub_path, grand_path = _output_paths()
     ntu.copy_fixture_to_output(fixture_sub, fixture_grand, sub_path, grand_path)
 
+    jtu.open_other_documents_in_dir(os.path.dirname(grand_path), skip_path=grand_path)
     grand_doc = App.openDocument(grand_path)
     grand_asm = grand_doc.getObject("Assembly")
     boxC = jtu.get_by_label(grand_doc, "BoxC")

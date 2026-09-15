@@ -176,12 +176,149 @@ def fixture_path(test_dir):
     return os.path.join(test_dir, "fixtures", f"{test_name}.FCStd")
 
 
-def copy_fixture_to_output(fixture_file_path, out_path):
+def copy_fixture_to_output(fixture_file_path, out_path, box_labels=("BoxA", "BoxB")):
     """Kopiert die feste Fixture in den per-Installation eigenen Ausgabepfad
     (fcstd-output/<testfall>/<installationsname>.FCStd) - der eigentliche Testlauf arbeitet NUR
-    auf dieser Kopie, damit die Fixture selbst unangetastet bleibt."""
+    auf dieser Kopie, damit die Fixture selbst unangetastet bleibt.
+
+    FCPROJECT-PATCH (Nutzerauftrag 2026-09-15): box_labels-Parameter ergaenzt - die externen
+    Koerper-Dateien (BoxA.FCStd/BoxB.FCStd, siehe ensure_box_bodies_in()) muessen JEDES MAL mit
+    umziehen, wenn die Fixture kopiert wird (gleicher Dateiname, gleiches Verzeichnis wie das
+    Assembly-Dokument - sonst bricht der relative XLink, siehe "Wichtige Lektion zur
+    Kopie-Benennung" in nested_test_utils.py)."""
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     shutil.copy2(fixture_file_path, out_path)
+    for label in box_labels:
+        src = os.path.join(os.path.dirname(fixture_file_path), f"{label}.FCStd")
+        dst = os.path.join(os.path.dirname(out_path), f"{label}.FCStd")
+        shutil.copy2(src, dst)
+
+
+# FCPROJECT-PATCH (Nutzerauftrag 2026-09-15, "Tests naeher zur Realitaet... jede Koerper und
+# jede Assembly soll ein eigenes Datei bekommen damit xlinks spielen mit"): die kanonischen
+# Master-Koerperdateien (common/build_box_bodies.py, einmalig gebaut) - jede Testfixture bekommt
+# beim Bauen ihre EIGENE Kopie davon (siehe ensure_box_bodies_in()), niemals eine direkte
+# Verlinkung hierher (Verzeichnisabstand wuerde sich sonst zwischen "gerade gebaut" und "spaeter
+# fuer einen Testlauf kopiert" aendern - siehe nested_test_utils.py's "Wichtige Lektion zur
+# Kopie-Benennung").
+BOX_BODIES_MASTER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
+
+
+def ensure_box_bodies_in(dest_dir, labels):
+    """Kopiert die kanonischen Koerper-Bibliotheksdateien (common/fixtures/<label>.FCStd) nach
+    dest_dir, falls dort noch nicht vorhanden - eine TestFixture bekommt dadurch ihre EIGENE,
+    git-getrackte Kopie im selben Verzeichnis wie ihre eigene(n) Assembly-Datei(en), damit der
+    von link_external_box() gesetzte XLink ein stabiles, sich nie aenderndes relatives Layout
+    hat (gleicher Dateiname, gleiches Verzeichnis - dasselbe bewaehrte Muster wie Sub/Grand/Mid).
+    Gibt {label: zielpfad} zurueck."""
+    os.makedirs(dest_dir, exist_ok=True)
+    paths = {}
+    for label in labels:
+        src = os.path.join(BOX_BODIES_MASTER_DIR, f"{label}.FCStd")
+        dst = os.path.join(dest_dir, f"{label}.FCStd")
+        if os.path.abspath(src) != os.path.abspath(dst):
+            shutil.copy2(src, dst)
+        paths[label] = dst
+    return paths
+
+
+def _find_open_document_for_path(path):
+    """Sucht unter den bereits offenen Dokumenten eines, dessen Datei GENAU 'path' ist -
+    NICHT ueber einen aus dem Dateinamen geratenen Dokumentnamen (siehe link_external_box()):
+    baut z.B. build_all_fixtures.py mehrere Testfaelle nacheinander im selben Python-Prozess,
+    hat jeder seine EIGENE Kopie von "BoxA.FCStd" in seinem eigenen Verzeichnis - ein
+    namensbasierter Treffer wuerde dann faelschlich die FALSCHE, bereits offene Kopie eines
+    anderen Testfalls wiederverwenden."""
+    target = os.path.abspath(path)
+    for doc in App.listDocuments().values():
+        if doc.FileName and os.path.abspath(doc.FileName) == target:
+            return doc
+    return None
+
+
+def link_external_box(doc, label, box_path):
+    """Erstellt in 'doc' (muss bereits gespeichert sein - App::PropertyXLink verlangt das,
+    siehe Fehlermeldung "Owner document not saved") einen App::Link auf das Koerper-Dokument
+    unter box_path - EXAKT wie CommandInsertLink.py::onItemClicked() das fuer eine externe
+    Nicht-Assembly-Datei tut (objType = "App::Link", Name-Wunsch = Label des Quellobjekts,
+    Label = Label des Quellobjekts). Oeffnet box_path falls noch nicht offen."""
+    box_doc = _find_open_document_for_path(box_path) or App.openDocument(box_path)
+    real_box = None
+    for obj in box_doc.Objects:
+        if obj.TypeId == "Part::Box":
+            real_box = obj
+            break
+    if real_box is None:
+        raise AssertionError(f"Keine Part::Box in {box_path!r} gefunden")
+
+    assert real_box.Label == label, (
+        f"link_external_box(label={label!r}): Master-Datei {box_path!r} enthaelt ein "
+        f"Part::Box mit abweichendem Label {real_box.Label!r} - siehe common/build_box_bodies.py"
+    )
+
+    link = doc.addObject("App::Link", real_box.Label)
+    link.LinkedObject = real_box
+    link.Label = real_box.Label
+    return link
+
+
+def open_other_documents_in_dir(directory, skip_path=None):
+    """Oeffnet JEDE .FCStd-Datei in 'directory' EXPLIZIT (ausser 'skip_path', falls angegeben),
+    falls noch nicht offen - VOR dem eigentlichen Oeffnen des obersten Assembly-Dokuments
+    aufzurufen.
+
+    FCPROJECT-PATCH (Nutzerauftrag 2026-09-15, live gefunden beim Umstieg auf externe
+    App::Link-Koerper + verschachtelte Baugruppen): oeffnet man NUR das oberste
+    Assembly-Dokument (z.B. "grand.FCStd") und laesst FreeCAD dessen transitive XLink-Ziele
+    (verlinkte Koerper-Dateien UND eine verlinkte Unterbaugruppe, die selbst wieder externe
+    Koerper verlinkt) automatisch nachladen, ist diese automatische Aufloesung beim ALLERERSTEN
+    automatischen Solve waehrend restore() nicht zuverlaessig bereits vollstaendig - live
+    beobachtet: getGroundedParts() sah dabei ein App::Link-Objekt, dessen getLinkedObject() in
+    genau diesem Moment noch auf sich selbst zurueckfiel statt auf das echte, externe
+    Zielobjekt. Das geerdete Teil wurde dadurch nicht erkannt, der zugehoerige Joint faelschlich
+    als "nicht erreichbar" entfernt - und zwar dauerhaft fuer den gesamten weiteren Testlauf,
+    nicht nur fuer diesen einen ersten Solve (ein spaeteres explizites recompute()/solve()
+    aendert daran nichts mehr). Bei den flachen Tests (nur EIN Verzeichnisebene an externen
+    Koerpern) trat das nie auf - erst bei verschachtelten Baugruppen (Assembly-Dokument
+    referenziert sowohl eigene externe Koerper ALS AUCH eine Unterbaugruppe, die selbst wieder
+    externe Koerper referenziert) wurde es sichtbar. Explizites Vor-Oeffnen ALLER anderen
+    Dateien im selben Ausgabeverzeichnis (Koerper- UND Sub-/Mid-Dokumente, die
+    copy_fixture_to_output()-aehnliche Helfer ohnehin schon dorthin kopiert haben) behebt das
+    zuverlaessig."""
+    if not os.path.isdir(directory):
+        return
+    skip_abspath = os.path.abspath(skip_path) if skip_path else None
+    for name in sorted(os.listdir(directory)):
+        if not name.endswith(".FCStd"):
+            continue
+        path = os.path.join(directory, name)
+        if skip_abspath and os.path.abspath(path) == skip_abspath:
+            continue
+        if _find_open_document_for_path(path) is None:
+            App.openDocument(path)
+
+
+def ground_object(obj):
+    """Erdet 'obj' (Placement schreibgeschuetzt, dann legt syncGroundedJoints() via solve()
+    automatisch ein GroundedJoint-Objekt an - docs/ARCHITECTURE.md Abschnitt 1.1).
+
+    FCPROJECT-PATCH (Nutzerauftrag 2026-09-15, live gefunden beim Umstieg auf externe
+    App::Link-Koerper): 'Placement'.ReadOnly ALLEIN reicht bei einem App::Link NICHT -
+    AssemblyObject::getGroundedParts() prueft ueber die generische
+    DocumentObject::getPlacementProperty()-API (src/App/DocumentObject.cpp), die fuer einen Link
+    dessen EIGENE, separate 'LinkPlacement'-Property zurueckliefert, sobald eine existiert -
+    nicht die schlichte 'Placement'-Property. Ohne das zusaetzliche ReadOnly auf
+    'LinkPlacement' erkennt getGroundedParts() den Link nicht als geerdet, der ihn haltende
+    Joint gilt dann faelschlich als "nicht erreichbar" und wird komplett ignoriert (live
+    reproduziert: BoxB bewegte sich trotz augenscheinlich korrekt geerdeter BoxA nicht). Exakt
+    dasselbe Muster wie die ECHTE GroundedJoint.setReadOnly() in JointObject.py (Zeile ~1547) -
+    kein Produktivcode-Bug, unsere Testskripte hatten diesen Schritt nur bisher nie gebraucht,
+    weil geerdete Objekte bislang immer native Part::Box waren, nie ein App::Link."""
+    prop_list = obj.PropertiesList
+    if "Placement" in prop_list:
+        obj.setPropertyStatus("Placement", "ReadOnly")
+    if "LinkPlacement" in prop_list:
+        obj.setPropertyStatus("LinkPlacement", "ReadOnly")
 
 
 def get_by_label(doc, label):
@@ -201,26 +338,33 @@ def get_by_label(doc, label):
     return matches[0]
 
 
-def new_flat_two_box_assembly(doc_name):
+def new_flat_two_box_assembly(doc_name, save_path):
     """Baut die in dieser Testmatrix immer gleiche Grundlage: ein Assembly-Objekt mit zwei
-    NICHT verschachtelten Part::Box, BoxA geerdet. Der eigentliche Joint wird vom
-    Aufrufer per make_joint() ergaenzt.
+    NICHT verschachtelten Koerpern, BoxA geerdet. Der eigentliche Joint wird vom Aufrufer per
+    make_joint() ergaenzt.
 
     FCPROJECT-PATCH (Mehrfachinstanz-Fix, Nutzerauftrag 2026-09-14): der interne Name (Name,
-    NICHT Label) wird seit diesem Fix NICHT mehr per Hand auf "BoxA"/"BoxB" gesetzt - das war
-    ein Test-Artefakt, das FreeCAD nie so vergeben wuerde (die reale Part-Werkbank fragt beim
-    Erstellen eines Wuerfels schlicht "Box" an, FreeCAD haengt bei einer Kollision selbst einen
-    Zaehler an, z.B. "Box001" - siehe docs/ARCHITECTURE.md Abschnitt 4.1 fuer die volle
-    Herleitung, warum ein von Hand gewaehlter interner Name die eigentliche Kollisionsbehandlung
-    verdeckt hat). Das Label bleibt weiterhin explizit "BoxA"/"BoxB" - fuer die Lesbarkeit im
-    Baum UND als stabiler Bezugspunkt fuer Testskripte nach einem Neuladen (get_by_label() oben),
-    Labels duerfen laut Nutzerkorrektur ohnehin gleich sein, muessen es hier aber nicht."""
-    doc = App.newDocument(doc_name)
+    NICHT Label) wird NICHT per Hand auf "BoxA"/"BoxB" gesetzt - das war ein Test-Artefakt, das
+    FreeCAD nie so vergeben wuerde. Das Label bleibt weiterhin explizit "BoxA"/"BoxB" - fuer die
+    Lesbarkeit im Baum UND als stabiler Bezugspunkt fuer Testskripte nach einem Neuladen
+    (get_by_label() oben), Labels duerfen laut Nutzerkorrektur ohnehin gleich sein, muessen es
+    hier aber nicht.
 
-    boxA = doc.addObject("Part::Box", "Box")
-    boxA.Label = "BoxA"
-    boxB = doc.addObject("Part::Box", "Box")
-    boxB.Label = "BoxB"
+    FCPROJECT-PATCH (Nutzerauftrag 2026-09-15, "jede Koerper... ein eigenes Datei... damit
+    xlinks spielen mit"): BoxA/BoxB sind seitdem KEINE nativen Part::Box mehr, sondern
+    App::Link-Verweise auf externe Koerper-Dateien (ensure_box_bodies_in()/
+    link_external_box()) - naeher an echter Mehrdatei-PDM-Nutzung, testet zusaetzlich den
+    externen-Koerper-Referenzpfad, der bisher (nur AssemblyLink auf Unterbaugruppen) gar nicht
+    abgedeckt war. 'save_path' NEU: das Dokument muss VOR jedem XLink bereits gespeichert sein
+    ("Owner document not saved"), deshalb jetzt hier fruehzeitig gespeichert statt erst am Ende
+    des jeweiligen build_fixture()."""
+    doc = App.newDocument(doc_name)
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    doc.saveAs(save_path)
+
+    box_paths = ensure_box_bodies_in(os.path.dirname(save_path), ["BoxA", "BoxB"])
+    boxA = link_external_box(doc, "BoxA", box_paths["BoxA"])
+    boxB = link_external_box(doc, "BoxB", box_paths["BoxB"])
     doc.recompute()
 
     assembly = doc.addObject("Assembly::AssemblyObject", "Assembly")
@@ -228,9 +372,7 @@ def new_flat_two_box_assembly(doc_name):
     assembly.addObject(boxB)
     doc.recompute()
 
-    # BoxA erden: Placement schreibgeschuetzt setzen, dann syncGroundedJoints() (via solve())
-    # legt automatisch das GroundedJoint-Objekt an (siehe docs/ARCHITECTURE.md, Abschnitt 1.1).
-    boxA.setPropertyStatus("Placement", "ReadOnly")
+    ground_object(boxA)
 
     return doc, assembly, boxA, boxB
 

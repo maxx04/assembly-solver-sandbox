@@ -30,7 +30,7 @@ def main():
         os.makedirs(os.path.dirname(p), exist_ok=True)
 
     # --- Sub: BoxA (geerdet) -[innerster Revolute-Joint]- BoxB ---
-    sub_doc, sub_asm, subA, subB = ntu.new_sub_assembly_doc("RevoluteDoubleNestedFlexSub")
+    sub_doc, sub_asm, subA, subB = ntu.new_sub_assembly_doc("RevoluteDoubleNestedFlexSub", sub_path)
     jtu.make_joint(sub_asm, 1, subA, subB, INNER_PLC1, INNER_PLC2, elem1="Edge9", elem2="Edge9")
     subB.Placement = subA.Placement.multiply(INNER_PLC1).multiply(INNER_PLC2.inverse())
     sub_doc.recompute()

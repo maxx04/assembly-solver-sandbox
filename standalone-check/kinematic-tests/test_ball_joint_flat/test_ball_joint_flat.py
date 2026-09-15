@@ -56,15 +56,14 @@ INITIAL_BASE = App.Vector(10, -8, 6).normalize() * 4.5  # Laenge 4.5mm
 
 def build_fixture():
     """Baut die feste Ausgangsdatei EINMALIG (aufgerufen von build_all_fixtures.py)."""
-    doc, assembly, boxA, boxB = jtu.new_flat_two_box_assembly(TEST_NAME)
+    fixture_file = jtu.fixture_path(THIS_DIR)
+    doc, assembly, boxA, boxB = jtu.new_flat_two_box_assembly(TEST_NAME, fixture_file)
     jtu.make_joint(assembly, JOINT_TYPE_INDEX, boxA, boxB, PLC1, PLC2, elem1="Vertex2", elem2="Vertex2")
 
     boxB.Placement = App.Placement(INITIAL_BASE, App.Rotation(App.Vector(0, 1, 0), 77))
     doc.recompute()
 
-    fixture_file = jtu.fixture_path(THIS_DIR)
-    os.makedirs(os.path.dirname(fixture_file), exist_ok=True)
-    doc.saveAs(fixture_file)
+    doc.save()
     print("Fixture geschrieben:", fixture_file)
     return doc
 

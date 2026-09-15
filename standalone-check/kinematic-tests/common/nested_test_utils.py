@@ -102,26 +102,45 @@ def fixture_paths(test_dir):
     )
 
 
-def copy_fixture_to_output(fixture_sub_path, fixture_grand_path, out_sub_path, out_grand_path):
+def copy_fixture_to_output(
+    fixture_sub_path, fixture_grand_path, out_sub_path, out_grand_path,
+    box_labels=("BoxA", "BoxB", "BoxC")
+):
     """Kopiert die feste Fixture (sub.FCStd + grand.FCStd) in die per-Installation eigenen
     Ausgabepfade (fcstd-output/<testfall>/<installationsname>__{sub,grand}.FCStd) - der
     eigentliche Testlauf arbeitet NUR auf dieser Kopie, damit die Fixture selbst unangetastet
     bleibt und jeder Installations-Lauf sein eigenes Endergebnis behaelt (analog zu den
-    flachen Tests, die ebenfalls je Installation eine eigene Ausgabedatei behalten)."""
+    flachen Tests, die ebenfalls je Installation eine eigene Ausgabedatei behalten).
+
+    FCPROJECT-PATCH (Nutzerauftrag 2026-09-15): box_labels-Parameter ergaenzt - die externen
+    Koerper-Dateien (BoxA/BoxB/BoxC, siehe joint_test_utils.py::ensure_box_bodies_in()) liegen
+    im selben Verzeichnis wie fixture_sub_path/fixture_grand_path und muessen bei JEDEM
+    Kopiervorgang mit umziehen (gleicher Dateiname, gleiches Verzeichnis wie die Assembly-
+    Dokumente - sonst bricht der relative XLink, siehe "Wichtige Lektion zur
+    Kopie-Benennung" oben im Moduldocstring)."""
     for p in (out_sub_path, out_grand_path):
         os.makedirs(os.path.dirname(p), exist_ok=True)
     shutil.copy2(fixture_sub_path, out_sub_path)
     shutil.copy2(fixture_grand_path, out_grand_path)
+    fixtures_dir = os.path.dirname(fixture_sub_path)
+    out_dir = os.path.dirname(out_grand_path)
+    for label in box_labels:
+        shutil.copy2(
+            os.path.join(fixtures_dir, f"{label}.FCStd"), os.path.join(out_dir, f"{label}.FCStd")
+        )
 
 
-def new_sub_assembly_doc(doc_name, box_a_name="BoxA", box_b_name="BoxB"):
-    """Baut die Sub-Baugruppe: zwei Part::Box in einem EIGENEN Dokument, BoxA GEERDET (der
-    interne Referenz-/Befestigungspunkt dieser Unterbaugruppe - siehe Moduldocstring fuer die
-    Begruendung, warum das kein Widerspruch zum aeusseren Joint in GrandTop ist). Reine
-    Delegation an joint_test_utils.new_flat_two_box_assembly() (identisches Muster wie die
-    flachen Tests), unter eigenem Namen hier fuer die Lesbarkeit des Verschachtelungs-Codes.
-    Der eigentliche innere Joint wird vom Aufrufer per jtu.make_joint() ergaenzt."""
-    doc, assembly, boxA, boxB = jtu.new_flat_two_box_assembly(doc_name)
+def new_sub_assembly_doc(doc_name, save_path, box_a_name="BoxA", box_b_name="BoxB"):
+    """Baut die Sub-Baugruppe: zwei Koerper (seit Nutzerauftrag 2026-09-15 externe App::Link-
+    Referenzen statt nativer Part::Box, siehe joint_test_utils.py::new_flat_two_box_assembly())
+    in einem EIGENEN Dokument, BoxA GEERDET (der interne Referenz-/Befestigungspunkt dieser
+    Unterbaugruppe - siehe Moduldocstring fuer die Begruendung, warum das kein Widerspruch zum
+    aeusseren Joint in GrandTop ist). Reine Delegation an
+    joint_test_utils.new_flat_two_box_assembly() (identisches Muster wie die flachen Tests),
+    unter eigenem Namen hier fuer die Lesbarkeit des Verschachtelungs-Codes. 'save_path' wird
+    direkt durchgereicht (das Dokument muss VOR dem Setzen der Box-XLinks bereits gespeichert
+    sein). Der eigentliche innere Joint wird vom Aufrufer per jtu.make_joint() ergaenzt."""
+    doc, assembly, boxA, boxB = jtu.new_flat_two_box_assembly(doc_name, save_path)
     if box_a_name != "BoxA":
         boxA.Label = box_a_name
     if box_b_name != "BoxB":
@@ -169,23 +188,31 @@ def new_grand_assembly_with_sublink(
     mit GrandTops EIGENEM Top-Level-AssemblyObject und wird von FreeCAD selbst umbenannt, z.B.
     zu "Assembly001"). Genau diese vom Nutzer beobachtete, per Hand nie gewaehlte Namensvergabe
     ist Teil dessen, was Bug A/B abdecken sollten - ein test-eigener, "sauberer" Name haette das
-    verdeckt."""
+    verdeckt.
+
+    FCPROJECT-PATCH (Nutzerauftrag 2026-09-15, "jede Koerper... ein eigenes Datei... damit
+    xlinks spielen mit"): boxC ist seitdem KEIN natives Part::Box mehr, sondern ein App::Link
+    auf eine externe Koerper-Datei (BoxC.FCStd bzw. BoxD.FCStd fuer die Mid-Ebene der doppelt
+    verschachtelten Tests, siehe box_name) - ensure_box_bodies_in()/link_external_box() aus
+    joint_test_utils.py, identisches Muster wie new_flat_two_box_assembly(). Grounding jetzt
+    ueber ground_object() statt eines rohen setPropertyStatus("Placement", ...) - ein
+    App::Link braucht ZUSAETZLICH LinkPlacement.ReadOnly, siehe dortige Begruendung."""
     allow_duplicate_labels()
     sub_assembly.Document.saveAs(sub_doc_save_path)
 
     grand_doc = App.newDocument(doc_name)
-    boxC = grand_doc.addObject("Part::Box", "Box")
-    boxC.Label = box_name
+    # Frueh speichern - noetig fuer JEDEN XLink unten (sowohl boxC als auch sublink weiter
+    # unten verlangen "Owner document not saved" andernfalls).
+    grand_doc.saveAs(grand_doc_save_path)
+
+    box_paths = jtu.ensure_box_bodies_in(os.path.dirname(grand_doc_save_path), [box_name])
+    boxC = jtu.link_external_box(grand_doc, box_name, box_paths[box_name])
     grand_doc.recompute()
 
     grand_asm = grand_doc.addObject("Assembly::AssemblyObject", "Assembly")
     grand_asm.addObject(boxC)
     grand_doc.recompute()
-    boxC.setPropertyStatus("Placement", "ReadOnly")
-
-    # GrandTop selbst muss ebenfalls gespeichert sein, BEVOR der dokumentuebergreifende Link
-    # gesetzt wird (derselbe Save-Check gilt fuer beide Seiten).
-    grand_doc.saveAs(grand_doc_save_path)
+    jtu.ground_object(boxC)
 
     # FCPROJECT-PATCH (Mehrfachinstanz-Fix, Nutzerauftrag 2026-09-14): exakt wie
     # CommandInsertLink.py::onItemClicked() - Name-Wunsch ist das Label der verlinkten
@@ -248,7 +275,7 @@ def build_fixture_generic(test_name, inner_type_index, inner_plc1, inner_plc2, o
     sub_path, grand_path = fixture_paths(test_name)
     os.makedirs(os.path.dirname(sub_path), exist_ok=True)
 
-    sub_doc, sub_asm, subA, subB = new_sub_assembly_doc(f"{test_name}Sub")
+    sub_doc, sub_asm, subA, subB = new_sub_assembly_doc(f"{test_name}Sub", sub_path)
     jtu.make_joint(sub_asm, inner_type_index, subA, subB, inner_plc1, inner_plc2)
     sub_doc.recompute()
 

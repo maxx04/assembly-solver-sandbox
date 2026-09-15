@@ -24,7 +24,7 @@ def main():
     for p in (sub_path, grand_path):
         os.makedirs(os.path.dirname(p), exist_ok=True)
 
-    sub_doc, sub_asm, subA, subB = ntu.new_sub_assembly_doc("DupInstFlatSub")
+    sub_doc, sub_asm, subA, subB = ntu.new_sub_assembly_doc("DupInstFlatSub", sub_path)
     jtu.make_joint(sub_asm, 0, subA, subB, INNER_PLC1, INNER_PLC2)  # Fixed
     # Analytisch korrekte Zielplatzierung vorbelegen (siehe test_fixed_nested_flex/build_fixture.py
     # fuer die Begruendung, warum das HIER - anders als bei GrandTops absichtlich falscher

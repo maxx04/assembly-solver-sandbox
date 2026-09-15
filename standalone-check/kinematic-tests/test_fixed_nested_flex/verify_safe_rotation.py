@@ -37,14 +37,15 @@ from test_fixed_nested_flex import INNER_PLC1, INNER_PLC2, OUTER_PLC1, OUTER_PLC
 
 
 def try_angle(angle_deg):
-    sub_doc, sub_asm, subA, subB = ntu.new_sub_assembly_doc(f"SweepSub{angle_deg}".replace(".", "_"))
+    sub_path = f"/tmp/sweep_sub_{angle_deg}.FCStd"
+    grand_path = f"/tmp/sweep_grand_{angle_deg}.FCStd"
+    sub_doc, sub_asm, subA, subB = ntu.new_sub_assembly_doc(f"SweepSub{angle_deg}".replace(".", "_"), sub_path)
     jtu.make_joint(sub_asm, 0, subA, subB, INNER_PLC1, INNER_PLC2)
     subB.Placement = subA.Placement.multiply(INNER_PLC1).multiply(INNER_PLC2.inverse())
     sub_doc.recompute()
 
     grand_doc, grand_asm, boxC, sublink = ntu.new_grand_assembly_with_sublink(
-        f"SweepGrand{angle_deg}".replace(".", "_"), sub_asm,
-        f"/tmp/sweep_sub_{angle_deg}.FCStd", f"/tmp/sweep_grand_{angle_deg}.FCStd"
+        f"SweepGrand{angle_deg}".replace(".", "_"), sub_asm, sub_path, grand_path
     )
     mirror_boxA = ntu.get_mirror(sublink, subA.Label)
     mirror_boxB = ntu.get_mirror(sublink, subB.Label)

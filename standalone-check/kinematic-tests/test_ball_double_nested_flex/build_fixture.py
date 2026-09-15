@@ -30,7 +30,7 @@ def main():
         os.makedirs(os.path.dirname(p), exist_ok=True)
 
     # --- Sub: BoxA (geerdet) -[innerster Ball-Joint]- BoxB ---
-    sub_doc, sub_asm, subA, subB = ntu.new_sub_assembly_doc("BallDoubleNestedFlexSub")
+    sub_doc, sub_asm, subA, subB = ntu.new_sub_assembly_doc("BallDoubleNestedFlexSub", sub_path)
     jtu.make_joint(sub_asm, 4, subA, subB, INNER_PLC1, INNER_PLC2, elem1="Vertex2", elem2="Vertex2")
     subB.Placement = subA.Placement.multiply(INNER_PLC1).multiply(INNER_PLC2.inverse())
     sub_doc.recompute()

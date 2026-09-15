@@ -99,7 +99,19 @@ def load_fixture_and_solve():
     for src, dst in ((fixture_sub, out_sub), (fixture_mid, out_mid), (fixture_grand, out_grand)):
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         shutil.copy2(src, dst)
+    # FCPROJECT-PATCH (Nutzerauftrag 2026-09-15): externe Koerper-Dateien (BoxA/BoxB/BoxC/BoxD,
+    # siehe joint_test_utils.py::ensure_box_bodies_in()) liegen in FIXTURES_DIR neben sub/mid/
+    # grand - muessen bei jedem Kopiervorgang mit umziehen, sonst bricht der relative XLink.
+    for name in os.listdir(FIXTURES_DIR):
+        if name.endswith(".FCStd") and name not in (
+            os.path.basename(fixture_sub), os.path.basename(fixture_mid), os.path.basename(fixture_grand)
+        ):
+            shutil.copy2(os.path.join(FIXTURES_DIR, name), os.path.join(os.path.dirname(out_grand), name))
 
+    # Siehe joint_test_utils.py::open_other_documents_in_dir() - noetig, damit FreeCAD alle
+    # transitiven XLink-Ziele (Koerper- UND Sub-/Mid-Dokumente) bereits aufgeloest hat, BEVOR der
+    # allererste automatische Solve waehrend restore() laeuft.
+    jtu.open_other_documents_in_dir(os.path.dirname(out_grand), skip_path=out_grand)
     grand_doc = App.openDocument(out_grand)
     grand_asm = grand_doc.getObject("Assembly")
     boxC = jtu.get_by_label(grand_doc, "BoxC")

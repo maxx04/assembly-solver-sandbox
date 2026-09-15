@@ -30,7 +30,7 @@ def main():
         os.makedirs(os.path.dirname(p), exist_ok=True)
 
     # --- Sub: BoxA (geerdet) -[innerster Fixed-Joint]- BoxB ---
-    sub_doc, sub_asm, subA, subB = ntu.new_sub_assembly_doc("FixedDoubleNestedFlexSub")
+    sub_doc, sub_asm, subA, subB = ntu.new_sub_assembly_doc("FixedDoubleNestedFlexSub", sub_path)
     jtu.make_joint(sub_asm, 0, subA, subB, INNER_PLC1, INNER_PLC2)
     # subB analytisch korrekt relativ zu subA vorbelegen (reiner interner Sub-Aufbau, kein
     # Treiber-Testfall - siehe test_fixed_nested_flex/build_fixture.py fuer die Begruendung,

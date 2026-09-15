@@ -305,6 +305,48 @@ Skript unter der jeweils getesteten FreeCAD-Version neu erzeugt. Siehe
   (eigener Unterordner pro Installation statt umbenannter Dateien im selben Ordner) - sonst
   brechen dokumentübergreifende Links (siehe Methodik-Korrektur Schritt 3 oben).
 
+## Koerper als externe Dateien (Nutzerauftrag 2026-09-15, "naeher zur Realitaet")
+
+Bis 2026-09-14 wurden BoxA/BoxB/BoxC (usw.) als NATIVE `Part::Box`-Objekte direkt INNERHALB des
+jeweiligen Assembly-Dokuments angelegt - realitätsfremd, da echte Mehrdatei-Nutzung (PDM-Alltag)
+jeden Koerper als eigene Datei haelt, per `App::Link`-XLink in die Baugruppe eingebunden. Seit
+diesem Umbau gilt: **jeder Koerper eine eigene Datei, jede Baugruppe eine eigene Datei** (bereits
+vorher der Fall). Die vier kanonischen Master-Koerper (`BoxA`/`BoxB`/`BoxC`/`BoxD`, gebaut per
+`common/build_box_bodies.py`, git-getrackt unter `common/fixtures/`) werden von JEDEM Testfall
+per eigener, git-getrackter KOPIE verwendet (`joint_test_utils.py::ensure_box_bodies_in()`) - "die
+gleiche Datei fuer alle Tests benutzen" heisst hier: ein gemeinsamer Ursprung, den jeder Testfall
+kopiert, NICHT eine gemeinsam-referenzierte Datei ueber Ordnergrenzen hinweg (der relative XLink
+wuerde sonst bei jeder Neu-Kopie brechen, siehe "Wichtige Lektion zur Kopie-Benennung" oben).
+Interner Name kommt seit dem Mehrfachinstanz-Fix (2026-09-14) ohnehin von FreeCAD selbst - das
+Label bleibt "BoxA"/"BoxB"/... fuer Lesbarkeit und als stabiler Bezugspunkt
+(`get_by_label()`/`get_mirror()`).
+
+**Zwei echte, bisher nie geprüfte App::Link-Eigenheiten dabei gefunden** (beide inzwischen in den
+Testskripten behoben):
+
+1. **Erdung eines App::Link braucht `LinkPlacement`, nicht nur `Placement`.**
+   `AssemblyObject::getGroundedParts()` prüft über die generische
+   `DocumentObject::getPlacementProperty()`-API, die für einen Link dessen EIGENE, separate
+   `LinkPlacement`-Property zurückliefert, sobald eine existiert - nicht die schlichte
+   `Placement`-Property. Ohne `LinkPlacement.ReadOnly` erkennt `getGroundedParts()` einen
+   "geerdeten" Link nicht, der zugehörige Joint gilt fälschlich als nicht erreichbar und wird
+   komplett ignoriert. **Kein Produktivcode-Bug** - die echte `GroundedJoint.setReadOnly()` in
+   `JointObject.py` (Zeile ~1547) setzt bereits korrekt beide Properties; unsere Testskripte
+   brauchten das nur bisher nie, weil geerdete Objekte immer native `Part::Box` waren. Fix:
+   `joint_test_utils.py::ground_object()` (statt eines rohen `setPropertyStatus`).
+2. **Öffnet man nur das oberste Assembly-Dokument und lässt FreeCAD dessen transitive
+   XLink-Ziele automatisch nachladen, ist diese Auflösung beim allerersten automatischen Solve
+   während `restore()` nicht zuverlässig bereits vollständig** - live beobachtet:
+   `getGroundedParts()` sah dabei ein `App::Link`-Objekt, dessen `getLinkedObject()` in genau
+   diesem Moment noch auf sich selbst zurückfiel statt auf das echte, externe Zielobjekt. Trat
+   bei den flachen Tests (nur eine Verzeichnisebene an externen Körpern) nie auf - erst bei
+   verschachtelten Baugruppen (Assembly-Dokument referenziert sowohl eigene externe Körper ALS
+   AUCH eine Unterbaugruppe, die selbst wieder externe Körper referenziert) wurde es sichtbar,
+   und zwar dauerhaft für den gesamten weiteren Testlauf (ein späteres `recompute()`/`solve()`
+   ändert daran nichts mehr). Fix: `joint_test_utils.py::open_other_documents_in_dir()` - öffnet
+   jede `.FCStd`-Datei im Ausgabeverzeichnis explizit, BEVOR das oberste Assembly-Dokument
+   geöffnet wird.
+
 ## Geplante Erweiterung (Testmatrix)
 
 Bewusst zurückgestellt (Nutzerauftrag "180-Grad-Problem ignorieren, weitermachen"): die

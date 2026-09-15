@@ -55,20 +55,8 @@ def build_fixture():
     Struktur exakt wie zuvor, laesst aber BoxB an der absichtlich falschen Startposition
     stehen (kein abschliessender solve()), damit patched UND vanilla exakt denselben,
     unkorrigierten Ausgangszustand bekommen."""
-    doc = App.newDocument("FixedJointFlatTest")
-
-    boxA = doc.addObject("Part::Box", "BoxA")
-    boxB = doc.addObject("Part::Box", "BoxB")
-    doc.recompute()
-
-    assembly = doc.addObject("Assembly::AssemblyObject", "Assembly")
-    assembly.addObject(boxA)
-    assembly.addObject(boxB)
-    doc.recompute()
-
-    # BoxA erden: Placement schreibgeschuetzt setzen, dann syncGroundedJoints() (via solve())
-    # legt automatisch das GroundedJoint-Objekt an (siehe docs/ARCHITECTURE.md, Abschnitt 1.1).
-    boxA.setPropertyStatus("Placement", "ReadOnly")
+    fixture_file = jtu.fixture_path(THIS_DIR)
+    doc, assembly, boxA, boxB = jtu.new_flat_two_box_assembly("FixedJointFlatTest", fixture_file)
 
     import UtilsAssembly
     import JointObject
@@ -123,9 +111,7 @@ def build_fixture():
     boxB.Placement = App.Placement(App.Vector(999, -999, 999), start_rotation)
     doc.recompute()
 
-    fixture_file = jtu.fixture_path(THIS_DIR)
-    os.makedirs(os.path.dirname(fixture_file), exist_ok=True)
-    doc.saveAs(fixture_file)
+    doc.save()
     print("Fixture geschrieben:", fixture_file)
     return doc
 

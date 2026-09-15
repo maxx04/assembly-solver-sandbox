@@ -29,7 +29,7 @@ def main():
     for p in (sub_path, grand_path):
         os.makedirs(os.path.dirname(p), exist_ok=True)
 
-    sub_doc, sub_asm, subA, subB = ntu.new_sub_assembly_doc("RevoluteNestedFlexSub")
+    sub_doc, sub_asm, subA, subB = ntu.new_sub_assembly_doc("RevoluteNestedFlexSub", sub_path)
     jtu.make_joint(sub_asm, 1, subA, subB, INNER_PLC1, INNER_PLC2, elem1="Edge9", elem2="Edge9")  # Revolute
     # WICHTIG (Nutzerauftrag 2026-09-09, siehe test_fixed_nested_flex/build_fixture.py fuer die
     # volle Begruendung): subB wird hier NUR fuer den internen Aufbau der Sub-Fixture korrekt
