@@ -129,6 +129,7 @@ enum class DistanceType
 };
 
 class AssemblyObject;
+class AssemblyLink;
 class JointGroup;
 
 AssemblyExport void swapJCS(const App::DocumentObject* joint);
@@ -203,7 +204,44 @@ struct ResolvedJointRef
 {
     App::DocumentObject* obj = nullptr;
     std::string subPath;
+
+    // FCPROJECT-PATCH (Bug C, "Instanz-Identitaet innerhalb einer duplizierten flexiblen
+    // Unterbaugruppe", 2026-09-16): siehe docs/ARCHITECTURE.md §4.1 "Bug C" fuer die volle
+    // Herleitung. Wird true, wenn 'obj' NICHT der rohe, im geteilten Dokument gefundene Zeiger ist,
+    // sondern per Vorwaertslookup in AssemblyLink::objLinkMap durch den Spiegel DIESER konkreten
+    // aeusseren Instanz ersetzt wurde (siehe hasSiblingInstances() unten) - Aufrufer duerfen 'obj'
+    // in diesem Fall NICHT mehr durch AssemblyObject::canonicalizeForMbD() schicken, das wuerde die
+    // Ersetzung sofort wieder rueckgaengig machen (getSourceForMirror() uebersetzt den Spiegel
+    // zurueck auf den geteilten, instanzblinden Zeiger). Bleibt "" nestingPrefix oder keine
+    // Duplikation vor, bleibt dieses Feld immer false - keine Verhaltensaenderung fuer die
+    // bestehende, nicht-duplizierte Testmatrix.
+    bool resolvedViaInstanceMirror = false;
 };
+
+// FCPROJECT-PATCH (Bug C, 2026-09-16): true, wenn 'asmLink' eine von MEHREREN
+// Assembly::AssemblyLink-Geschwistern in 'solvingAssembly' ist, die alle dieselbe
+// getLinkedAssembly() (dasselbe echte, verlinkte Dokument) spiegeln - der Nachweis "diese Instanz
+// ist tatsaechlich dupliziert", nicht bloss irgendeine verschachtelte Unterbaugruppe (der
+// gewoehnliche, bereits korrekt behandelte Tiefen-Fall). Dient als Torwaechter fuer
+// resolveJointReference()/getMovingPartFromSel(), damit die dortige Spiegel-Substitution fuer die
+// gesamte bestehende, nicht-duplizierte Testmatrix niemals greift (dort hat jedes verlinkte
+// Dokument genau eine Instanz).
+AssemblyExport bool hasSiblingInstances(const AssemblyObject* solvingAssembly, AssemblyLink* asmLink);
+
+// FCPROJECT-PATCH (Bug C, 2026-09-17): generische Fassung fuer verschachtelte Duplikation -
+// prueft dieselbe Bedingung wie oben, aber gegen eine beliebige Kandidatenliste statt zwingend
+// gegen solvingAssembly->getSubAssemblies(). Noetig, weil eine Duplikation nicht nur auf der
+// AEUSSERSTEN Ebene auftreten kann (zwei AssemblyLink-Instanzen direkt in 'this'), sondern auch
+// EINE EBENE TIEFER: eine der bereits mehrfach vorhandenen Instanzen kann selbst wieder eine
+// bereits im verlinkten Dokument dupliziert vorliegende Unterbaugruppe spiegeln (z.B. FreeCAD-
+// Datei BG25 hat intern schon zwei eigene Halterbaugruppe-Instanzen - wird BG25 selbst nochmal
+// eingefuegt, muss JEDE Ebene einzeln auf Duplikation geprueft werden, nicht nur die aeusserste).
+// candidates sollte hierfuer 'parentLink->Group.getValues()' sein (die lokalen Spiegel-Kinder
+// DIESER konkreten Instanz), analog zu getSubAssemblies() auf der obersten Ebene.
+AssemblyExport bool hasSiblingInstances(
+    const std::vector<App::DocumentObject*>& candidates,
+    AssemblyLink* asmLink
+);
 
 // Loest Reference1/Reference2 (die pName-Property, ein App::PropertyXLinkSub) des uebergebenen
 // Joint-Objekts auf - relativ zu solvingAssembly, unter der Annahme, dass 'joint' unter dem Pfad

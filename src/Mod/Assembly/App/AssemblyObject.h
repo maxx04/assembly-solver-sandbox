@@ -158,7 +158,16 @@ public:
         Base::Placement plc = Base::Placement(),
         double mass = 1.0
     );
-    std::shared_ptr<MbD::ASMTPart> getMbDPart(App::DocumentObject* obj);
+    // FCPROJECT-PATCH (Bug C, "Instanz-Identitaet innerhalb einer duplizierten flexiblen
+    // Unterbaugruppe", 2026-09-16): 'alreadyResolved' Default false = unveraendertes
+    // Altverhalten (kanonisiert 'obj'/'part' intern via canonicalizeForMbD()). true nur von
+    // resolvePartForMbD()-Aufrufern (handleOneSideOfJoint()/isMbDJointValid()/
+    // getRackPinionMarkers()) gesetzt: deren Eingabe ist bereits vollstaendig aufgeloest (echtes
+    // kanonisches Objekt ODER, bei Duplikation, bewusst ein instanzeigener Spiegel) - ein erneutes
+    // canonicalizeForMbD() waere im Normalfall nur redundant, wuerde aber im Spiegel-Fall die
+    // Bug-C-Ersetzung sofort per getSourceForMirror() rueckgaengig machen (siehe
+    // docs/ARCHITECTURE.md §4.1 "Bug C").
+    std::shared_ptr<MbD::ASMTPart> getMbDPart(App::DocumentObject* obj, bool alreadyResolved = false);
     // To help the solver, during dragging, we are bundling parts connected by a fixed joint.
     // So several assembly components are bundled in a single ASMTPart.
     // So we need to store the plc of each bundled object relative to the bundle origin (first obj
@@ -168,7 +177,7 @@ public:
         std::shared_ptr<MbD::ASMTPart> part;
         Base::Placement offsetPlc;  // This is the offset within the bundled parts
     };
-    MbDPartData getMbDData(App::DocumentObject* part);
+    MbDPartData getMbDData(App::DocumentObject* part, bool alreadyResolved = false);
     std::shared_ptr<MbD::ASMTMarker> makeMbdMarker(std::string& name, Base::Placement& plc);
     // FCPROJECT-PATCH (Mehrfachinstanz-Fix - siehe
     // docs/ARCHITECTURE.md Abschnitt 4/5): nestingPrefix-Parameter ergaenzt. Ohne ihn wurde die
@@ -287,6 +296,19 @@ public:
     // laufen. Default false, kein bestehender Aufrufer muss angepasst werden.
     bool isPartConnected(App::DocumentObject* part, bool verboseLog = false);
 
+    // FCPROJECT-PATCH (Fix-Ansatz D, "flexible Unterbaugruppe als Ganzes ziehbar, wenn
+    // unverbunden", Nutzerauftrag 2026-09-16/17): isPartConnected(containerObj) allein reicht
+    // NICHT aus, um zu pruefen, ob eine flexible AssemblyLink "als Ganzes unverbunden" ist - ein
+    // Joint referenziert immer ein KIND im Container (z.B. eine Halterbaugruppe darin), NIE den
+    // Container selbst, daher liefert isPartConnected(container) IMMER false, unabhaengig davon,
+    // ob eines seiner Kinder laengst korrekt extern angeschlossen ist (live beobachtet: nach
+    // Anlegen eines Joints auf ein Kind blieb die ganze Instanz trotzdem frei ziehbar). Steigt
+    // rekursiv durch jede verschachtelte flexible AssemblyLink ab (rigide werden wie ein Blatt
+    // behandelt - sie sind fuer den Solver bereits die atomare Einheit) und prueft JEDES Blatt
+    // einzeln per isPartConnected() - true nur, wenn WIRKLICH kein einziges Kind irgendwo
+    // angeschlossen ist.
+    bool isSubAssemblyFullyUnconnected(App::DocumentObject* obj);
+
     std::vector<ObjRef> getDownstreamParts(
         App::DocumentObject* part,
         App::DocumentObject* joint = nullptr
@@ -301,7 +323,12 @@ public:
     double getObjMass(App::DocumentObject* obj);
     void setObjMasses(std::vector<std::pair<App::DocumentObject*, double>> objectMasses);
 
-    std::vector<AssemblyLink*> getSubAssemblies();
+    // FCPROJECT-PATCH (Bug C, "Instanz-Identitaet innerhalb einer duplizierten flexiblen
+    // Unterbaugruppe", 2026-09-16): const gemacht (aendert kein Verhalten, hasObject() und
+    // getDocument() sind bereits const) - wird jetzt auch von AssemblyUtils::hasSiblingInstances()
+    // ueber einen 'const AssemblyObject*' aufgerufen (resolveJointReference()/getMovingPartFromSel()
+    // erhalten die loesende Baugruppe nur als const-Zeiger).
+    std::vector<AssemblyLink*> getSubAssemblies() const;
 
     // FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix,
     // 2026-09-03, Nutzerentscheidung "oben nach unten"): das Gegenstueck zu getSubAssemblies() -

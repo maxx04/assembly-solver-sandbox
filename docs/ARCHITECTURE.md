@@ -502,6 +502,77 @@ gebauten `.FCStd`-Fixtures wurden mit dieser Umstellung neu gebaut und committet
 Testmatrix läuft patched UND vanilla weiterhin exakt auf der bekannten, dokumentierten Baseline
 (keine neue Regression, keine Verhaltensänderung am Solver selbst - reine Testinfrastruktur).
 
+### 4.2 Bug C - Instanz-Identität INNERHALB einer duplizierten flexiblen Unterbaugruppe (2026-09-16/17)
+
+**Befund (real am BG22/BG25-Projekt reproduziert):** §4.1s "Mehrebenen-Fall" war tatsächlich eine
+Lücke - nicht bei `canonicalizeForMbD()`s eigener Rekursion (die ist strukturell tiefenunabhängig
+und korrekt), sondern bei einem benachbarten Fall: lebt der referenzierte Joint SELBST im
+geteilten, echten Dokument einer duplizierten Unterbaugruppe (z.B. BG25s eigener interner
+"Joint"/"Joint001", der Führung↔Halterbaugruppe verbindet), verliert `resolveJointReference()`
+den Instanz-Kontext genau an der Stelle, wo die Auflösung vom äußeren, lokalen Dokument ins echte
+geteilte Dokument wechselt - beide Instanzen landen auf demselben MbD-Körper. Live beobachtet als
+"2 redundant joint(s)"-Meldung UND als Nicht-bewegbarkeit der zweiten Instanz per Drag.
+
+**Fix (im Arbeitsverzeichnis, noch nicht final verifiziert - siehe unten):**
+- `AssemblyUtils::hasSiblingInstances()` (neu, zwei Überladungen: gegen `getSubAssemblies()` der
+  obersten Ebene, und generisch gegen eine beliebige Kandidatenliste für tiefere Ebenen) - stellt
+  fest, ob eine `AssemblyLink`-Instanz tatsächlich eine von mehreren Geschwistern ist.
+- `resolveJointReference()`/`getMovingPartFromSel()`: merken sich beim Dokumentwechsel die
+  gekreuzte duplizierte Instanz und ersetzen das Ergebnis per `objLinkMap`-Vorwärtslookup durch
+  den Spiegel DIESER Instanz (`ResolvedJointRef.resolvedViaInstanceMirror`).
+- `canonicalizeForMbD()`: **universelle** Regel statt Spezialfall - JEDE Ebene der
+  Verschachtelungskette wird einzeln, im jeweils richtigen Kontext (this für Ebene 0, sonst
+  `path[i-1]`s eigene Group) auf Duplikation geprüft, nicht nur die äußerste. Grund: eine
+  Duplikation kann auf MEHREREN Ebenen gleichzeitig auftreten (BG25 selbst zweimal eingefügt,
+  UND BG25 hat selbst schon zwei eigene Halterbaugruppe-Instanzen) - ein reiner "letzte Ebene"-
+  Check (erster Versuch) griff bei so einer verschachtelten Duplikation nicht.
+- **Bewusste Design-Entscheidung, kein Fallunterscheidungs-Hack:** zwei `AssemblyLink`-Instanzen
+  desselben verlinkten Dokuments sind IMMER unabhängige physische Exemplare (wie Block-Instanzen
+  in anderer CAD-Software) - unabhängig davon, ob ihre Joints zufällig dieselbe oder
+  unterschiedliche Zielwerte verlangen. Ein früherer Versuch, das von den tatsächlichen
+  Zielwerten abhängig zu machen, wurde verworfen (siehe unten, `test_fixed_duplicate_instance_flat`).
+
+**Fix-Ansatz D (Nutzerauftrag, dasselbe Arbeitspaket):** `canDragObjectIn3d()`/
+`collectMovableObjects()`/`getMovingPartFromSel()` erlauben eine flexible `AssemblyLink` jetzt
+als GANZES per Drag, wenn sie komplett unverbunden ist - neuer Helfer
+`AssemblyObject::isSubAssemblyFullyUnconnected()` (rekursiv durch alle - auch verschachtelte -
+Kinder, statt `isPartConnected(container)` direkt: ein Joint referenziert nie den Container
+selbst, sondern immer ein Kind darin, `isPartConnected(container)` liefert deshalb IMMER `false`
+unabhängig davon, ob ein Kind längst korrekt extern angeschlossen ist - live als "Joint angelegt,
+Instanz bleibt trotzdem frei ziehbar" beobachtet, bevor der rekursive Helfer das behob).
+
+**Verifikation, Stand 2026-09-17 Abend:**
+- Volle 15+1-Testmatrix: nur `test_fixed_duplicate_instance_flat` (siehe unten) zusätzlich zu den
+  4 bekannten 180°-Fällen betroffen - keine sonstige Regression.
+- Live am echten BG22-Projekt bestätigt: Fix-Ansatz D funktioniert (zweite, unverbundene BG25-
+  Instanz per Drag verschiebbar, wird nach Anlegen eines Joints korrekt wieder gesperrt). Bug-C-
+  Identitätstrennung funktioniert über mehrere Ebenen (Halterbaugruppe002 bekommt jetzt korrekt
+  einen eigenen MbD-Körper statt auf das geteilte Original zu kollabieren).
+- **Live NICHT gelöst:** nach Anlegen eines Joints auf ein Bauteil innerhalb einer verschachtelten
+  starren Unterbaugruppe (Rahmen↔Halterbaugruppe002.CNC3018_006_B_Halter002) landet die Instanz
+  weiterhin an der falschen Position. Root Cause gefunden, aber NICHT mehr Bug C: das referenzierte
+  Blatt-Teil `CNC3018_006_B_Halter002` (ein `App::Link`) hat `Placement = (0,0,0)/(0,0,0)` - nie
+  synchronisiert. Vermutung: der Sync-Mechanismus für Kinder einer VERSCHACHTELTEN starren
+  `AssemblyLink` läuft nur beim initialen Erzeugen, nicht (erneut) für eine frisch per "Insert
+  Component" eingefügte äußere Instanz, die selbst schon verschachtelte starre Unterbaugruppen
+  enthält - eigenständiger, dritter Fund, noch nicht root-cause-analysiert. Siehe Memory
+  `todo-bugc-duplicate-instance-drag-fix.md` für den vollen Stand.
+
+**Bekannte, akzeptierte Nebenwirkung:** `test_fixed_duplicate_instance_flat` (Bug-A/B-Test,
+2026-09-14) schlägt mit diesem Fix neu fehl - KEIN neuer Bug, sondern derselbe, bereits
+2026-09-09 gefundene und zurückgestellte "180-Grad-Rest" bei einem inneren Joint einer
+flexiblen Unterbaugruppe (siehe `todo-nested-fixed-mirror-placement-quirk`), der bisher nur durch
+das (jetzt korrigierte) Kollabieren versteckt war - die innere Führung↔Anker-Verbindung wurde nie
+wirklich in den kombinierten Solve einbezogen. Der Test braucht eine Überarbeitung (z.B. anderer
+innerer Jointtyp ohne diese Mehrdeutigkeit), um Bug C unabhängig von diesem unrelated 180°-Thema
+zu verifizieren - noch offen.
+
+**Operative Lektion (hat mehrfach zu falschen Fährten geführt):** `cmake --install .` aktualisiert
+`AssemblyGui.so` unter `/home/maxx/freecad-sandbox/install/lib/` nicht zuverlässig - nach jedem
+Build explizit beide `.so`-Dateien (`install/Mod/Assembly/AssemblyApp.so`,
+`install/lib/AssemblyGui.so`) force-kopieren, sonst läuft eine alte Gui-Bibliothek gegen eine neue
+App-Bibliothek und täuscht scheinbar tief liegende Solver-Bugs vor.
+
 ---
 
 ## 5. "Adressieren statt Kopieren" - Migrationsstatus

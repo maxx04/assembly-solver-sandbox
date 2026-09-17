@@ -657,6 +657,45 @@ App::DocumentObject* getLinkedObjFromRef(const App::DocumentObject* joint, const
     return nullptr;
 }
 
+// FCPROJECT-PATCH (Bug C, "Instanz-Identitaet innerhalb einer duplizierten flexiblen
+// Unterbaugruppe", 2026-09-16/17): siehe Deklaration in AssemblyUtils.h fuer die volle
+// Begruendung. Generische Fassung - dies ist seit 2026-09-17 die einzige Implementierung, die
+// AssemblyObject-Fassung darunter ist nur noch ein duenner Wrapper (candidates =
+// solvingAssembly->getSubAssemblies() als oberste Ebene).
+bool hasSiblingInstances(const std::vector<App::DocumentObject*>& candidates, AssemblyLink* asmLink)
+{
+    if (!asmLink) {
+        return false;
+    }
+
+    auto* linkedAssembly = asmLink->getLinkedAssembly();
+    if (!linkedAssembly) {
+        return false;
+    }
+
+    int matches = 0;
+    for (auto* candidate : candidates) {
+        auto* sibling = freecad_cast<AssemblyLink*>(candidate);
+        if (sibling && sibling->getLinkedAssembly() == linkedAssembly) {
+            ++matches;
+            if (matches >= 2) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool hasSiblingInstances(const AssemblyObject* solvingAssembly, AssemblyLink* asmLink)
+{
+    if (!solvingAssembly) {
+        return false;
+    }
+    auto subAssemblies = solvingAssembly->getSubAssemblies();
+    std::vector<App::DocumentObject*> candidates(subAssemblies.begin(), subAssemblies.end());
+    return hasSiblingInstances(candidates, asmLink);
+}
+
 App::DocumentObject* getMovingPartFromSel(
     const AssemblyObject* assemblyObject,
     App::DocumentObject* obj,
@@ -674,6 +713,14 @@ App::DocumentObject* getMovingPartFromSel(
     names.insert(names.begin(), obj->getNameInDocument());
 
     bool assemblyPassed = false;
+
+    // FCPROJECT-PATCH (Bug C, 2026-09-16): siehe resolveJointReference() fuer die volle
+    // Herleitung - identischer Mechanismus fuer den GUI-Auswahl-/Drag-Pfad. Anders als dort
+    // braucht diese Funktion kein separates "realObj" (keine JCS-Offset-Versoehnung noetig -
+    // ein Drag manipuliert direkt die Placement-Property des zurueckgegebenen Objekts, ein
+    // Spiegel hat eine eigene, echte Placement-Property, die genuegt) - deshalb genuegt die
+    // Ersetzung inline, ohne Signaturaenderung.
+    Assembly::AssemblyLink* lastDuplicatedCrossing = nullptr;
 
     // FCPROJECT-PATCH (Teilschritt 3.1b): der Namens-Walk aus der urspruenglichen
     // Befund-3-Live-Diagnose 2026-09-03 ist inzwischen nachvollzogen - Logs bleiben fuer
@@ -745,35 +792,75 @@ App::DocumentObject* getMovingPartFromSel(
         if (obj->isDerivedFrom<Assembly::AssemblyLink>()) {
             const auto* pRigid = obj->getPropertyByName<App::PropertyBool>("Rigid");
             if (pRigid && !pRigid->getValue()) {
-                // FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix,
-                // 2026-09-03, live durch Nutzer-Maus-Drag aufgedeckt): derselbe Fehler wie in
-                // resolveJointReference() (siehe dortiger Kommentar) - Assembly::AssemblyLink
-                // erbt von App::Part, NICHT von App::Link, der obj->isLink()-Zweig weiter oben
-                // schaltet 'doc' fuer eine verschachtelte FLEXIBLE AssemblyLink deshalb NIE um.
-                // Ohne diesen Fix sucht der naechste Namens-Schritt des Walks weiterhin im
-                // AEUSSEREN Dokument statt im echten, verlinkten - liefert entweder nullptr
-                // (Klick/Zug bewegt gar nichts) oder trifft zufaellig eine gleichnamige lokale
-                // Spiegel-Kopie (Klick/Zug bewegt das FALSCHE Objekt, keine Joint-Einschraenkung
-                // greift - beobachtet als frei in jede Richtung ziehbare Box, 2 Ebenen tief
-                // verschachtelt).
-                if (auto* asmLink = freecad_cast<Assembly::AssemblyLink*>(obj)) {
-                    if (auto* linkedAssembly = asmLink->getLinkedAssembly()) {
-                        doc = linkedAssembly->getDocument();
-                        if (verboseLog) {
+                // FCPROJECT-PATCH (Fix-Ansatz D, "flexible Unterbaugruppe als Ganzes ziehbar,
+                // wenn unverbunden", Nutzerauftrag 2026-09-16/17): eine KOMPLETT unverbundene
+                // flexible AssemblyLink wird NICHT mehr transparent durchlaufen, sondern selbst
+                // als gefundenes Objekt behandelt (wie eine starre) - sonst bekommt
+                // canDragObjectIn3d() sie beim eigentlichen Maus-Drag (dieser Pfad hier, ueber
+                // die Preselection, NICHT collectMovableObjects()) nie zu Gesicht, weil der
+                // Sub-Pfad ohnehin schon in eines ihrer Kinder hineinzeigt. Eine TEILWEISE/voll
+                // verbundene Instanz bleibt beim bisherigen, transparenten Verhalten.
+                // isSubAssemblyFullyUnconnected() statt isPartConnected(asmLink) direkt
+                // (2026-09-17) - ein Joint referenziert nie den Container selbst, sondern immer
+                // ein Kind darin, siehe Deklaration in AssemblyObject.h.
+                auto* asmLink = freecad_cast<Assembly::AssemblyLink*>(obj);
+                if (asmLink
+                    && const_cast<AssemblyObject*>(assemblyObject)
+                           ->isSubAssemblyFullyUnconnected(asmLink)) {
+                    if (verboseLog) {
+                        Base::Console().log(
+                            "FCPROJECT-DEBUG     flexible AssemblyLink '%s' unverbunden -> als "
+                            "Ganzes behandelt (nicht durchlaufen)\n",
+                            asmLink->getNameInDocument()
+                        );
+                    }
+                    // Faellt durch zum "gefunden"-Fall unten, wie eine starre AssemblyLink.
+                }
+                else {
+                    // FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix,
+                    // 2026-09-03, live durch Nutzer-Maus-Drag aufgedeckt): derselbe Fehler wie in
+                    // resolveJointReference() (siehe dortiger Kommentar) - Assembly::AssemblyLink
+                    // erbt von App::Part, NICHT von App::Link, der obj->isLink()-Zweig weiter oben
+                    // schaltet 'doc' fuer eine verschachtelte FLEXIBLE AssemblyLink deshalb NIE um.
+                    // Ohne diesen Fix sucht der naechste Namens-Schritt des Walks weiterhin im
+                    // AEUSSEREN Dokument statt im echten, verlinkten - liefert entweder nullptr
+                    // (Klick/Zug bewegt gar nichts) oder trifft zufaellig eine gleichnamige lokale
+                    // Spiegel-Kopie (Klick/Zug bewegt das FALSCHE Objekt, keine Joint-Einschraenkung
+                    // greift - beobachtet als frei in jede Richtung ziehbare Box, 2 Ebenen tief
+                    // verschachtelt).
+                    if (asmLink) {
+                        if (auto* linkedAssembly = asmLink->getLinkedAssembly()) {
+                            doc = linkedAssembly->getDocument();
+                            if (hasSiblingInstances(assemblyObject, asmLink)) {
+                                lastDuplicatedCrossing = asmLink;
+                            }
+                            if (verboseLog) {
+                                Base::Console().log(
+                                    "FCPROJECT-DEBUG     flexible AssemblyLink -> doc switched to "
+                                    "'%s'\n",
+                                    doc->getName()
+                                );
+                            }
+                        }
+                        else if (verboseLog) {
                             Base::Console().log(
-                                "FCPROJECT-DEBUG     flexible AssemblyLink -> doc switched to "
-                                "'%s'\n",
-                                doc->getName()
+                                "FCPROJECT-DEBUG     flexible AssemblyLink but getLinkedAssembly()==null!\n"
                             );
                         }
                     }
-                    else if (verboseLog) {
-                        Base::Console().log(
-                            "FCPROJECT-DEBUG     flexible AssemblyLink but getLinkedAssembly()==null!\n"
-                        );
-                    }
+                    continue;
                 }
-                continue;
+            }
+        }
+
+        // FCPROJECT-PATCH (Bug C, 2026-09-16): siehe resolveJointReference() fuer die
+        // Begruendung - 'obj' liegt im geteilten, echten Dokument der zuletzt gekreuzten
+        // duplizierten Instanz; ist es ein direktes Top-Level-Group-Kind dieser Instanz, liefert
+        // objLinkMap den Spiegel DIESER Instanz statt des rohen, instanzblinden Zeigers.
+        if (lastDuplicatedCrossing) {
+            auto it = lastDuplicatedCrossing->objLinkMap.find(obj);
+            if (it != lastDuplicatedCrossing->objLinkMap.end()) {
+                obj = it->second;
             }
         }
 
@@ -856,6 +943,14 @@ ResolvedJointRef resolveJointReference(
         return {};
     }
 
+    // FCPROJECT-PATCH (Bug C, "Instanz-Identitaet innerhalb einer duplizierten flexiblen
+    // Unterbaugruppe", 2026-09-16): merkt sich die zuletzt gekreuzte AssemblyLink-Instanz, aber
+    // NUR wenn sie tatsaechlich dupliziert ist (hasSiblingInstances()) - siehe
+    // docs/ARCHITECTURE.md §4.1 "Bug C" fuer die volle Herleitung. Wird am Ende genutzt, um das
+    // gefundene, sonst instanzblinde reale Objekt per Vorwaertslookup in objLinkMap durch den
+    // Spiegel DIESER konkreten Instanz zu ersetzen.
+    Assembly::AssemblyLink* lastDuplicatedCrossing = nullptr;
+
     for (size_t i = 0; i < names.size(); ++i) {
         const std::string& objName = names[i];
         if (objName.empty()) {
@@ -895,6 +990,11 @@ ResolvedJointRef resolveJointReference(
         if (auto* assemblyLink = freecad_cast<Assembly::AssemblyLink*>(obj)) {
             if (auto* linkedAssembly = assemblyLink->getLinkedAssembly()) {
                 doc = linkedAssembly->getDocument();
+                if (hasSiblingInstances(solvingAssembly, assemblyLink)) {
+                    // "letzte" gekreuzte duplizierte Instanz - passend zu objLinkMaps
+                    // Ein-Hop-Reichweite (siehe Deklaration in AssemblyUtils.h).
+                    lastDuplicatedCrossing = assemblyLink;
+                }
             }
         }
 
@@ -925,6 +1025,21 @@ ResolvedJointRef resolveJointReference(
                 result.subPath += ".";
             }
             result.subPath += names[j];
+        }
+
+        // FCPROJECT-PATCH (Bug C, 2026-09-16): 'obj' liegt im GETEILTEN, echten Dokument der
+        // zuletzt gekreuzten duplizierten Instanz - per sich selbst instanzblind. Ist 'obj' ein
+        // direktes Top-Level-Group-Kind dieser Instanz (objLinkMap kennt es), liefert der
+        // Vorwaertslookup den Spiegel DIESER Instanz - ein echtes, persistentes Objekt statt des
+        // rohen geteilten Zeigers. Findet sich kein Eintrag (Objekt liegt tiefer als ein Hop
+        // innerhalb der verlinkten Baugruppe), bleibt 'result.obj' unveraendert - der Aufrufer
+        // faellt dann auf die bestehende, instanzblinde canonicalizeForMbD()-Behandlung zurueck.
+        if (lastDuplicatedCrossing) {
+            auto it = lastDuplicatedCrossing->objLinkMap.find(obj);
+            if (it != lastDuplicatedCrossing->objLinkMap.end()) {
+                result.obj = it->second;
+                result.resolvedViaInstanceMirror = true;
+            }
         }
         return result;
     }

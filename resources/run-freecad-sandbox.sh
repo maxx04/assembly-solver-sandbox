@@ -53,4 +53,16 @@ LOG_FILE="${LOG_DIR}/freecad-sandbox-${TS}.log"
 
 echo "Starte FreeCAD-Sandbox (/home/maxx/freecad-sandbox/install), Logfile: $LOG_FILE"
 
+# WICHTIG (2026-09-15, nach echtem SIGSEGV-Absturz ohne Backtrace): per Default ist die
+# Core-Dump-Groesse fuer diese Shell (und damit fuer den exec'ten FreeCAD-Prozess) auf 0
+# begrenzt. /proc/sys/kernel/core_pattern leitet Abstuerze zwar bereits an apport weiter
+# (systemweit, per systemctl aktiv) - apport ignoriert einen Crash aber komplett ("does not
+# belong to a package, ignoring"), wenn der crashende Prozess selbst ein Core-Limit von 0 hat,
+# UNABHAENGIG davon, dass die Binary hier nicht aus einem System-Paket stammt. ulimit -c
+# unlimited hier hebt das NUR fuer diesen einen Prozess auf (kein systemweiter Eingriff, keine
+# Root-Rechte noetig) - danach sollte ein Absturz unter /var/crash/*.crash (apport) bzw. per
+# `coredumpctl list` (falls systemd-coredump zusaetzlich aktiv ist) einen echten Kern-Dump samt
+# Backtrace liefern.
+ulimit -c unlimited
+
 exec "$FC_BIN" -l --log-file "$LOG_FILE" "$@"

@@ -2343,6 +2343,46 @@ bool AssemblyObject::isPartConnected(App::DocumentObject* obj, bool verboseLog)
     return false;
 }
 
+// FCPROJECT-PATCH (Fix-Ansatz D, "flexible Unterbaugruppe als Ganzes ziehbar, wenn unverbunden",
+// Nutzerauftrag 2026-09-16/17): siehe Deklaration in AssemblyObject.h fuer die volle Begruendung -
+// isPartConnected(containerObj) allein erkennt ein bereits an EIN Kind angeschlossenes Kind
+// nicht, weil ein Joint nie den Container selbst referenziert. Steigt rekursiv durch jede eigene
+// flexible AssemblyLink ab, behandelt eine rigide wie ein Blatt (atomare Solver-Einheit, direkt
+// per isPartConnected() geprueft).
+bool AssemblyObject::isSubAssemblyFullyUnconnected(App::DocumentObject* obj)
+{
+    if (!obj) {
+        return true;
+    }
+
+    if (auto* asmLink = freecad_cast<Assembly::AssemblyLink*>(obj)) {
+        if (!asmLink->isRigid()) {
+            for (auto* child : asmLink->Group.getValues()) {
+                if (!child) {
+                    continue;
+                }
+                if (child->isDerivedFrom<App::Link>() && child->isLinkGroup()) {
+                    auto* link = static_cast<App::Link*>(child);
+                    for (auto* elt : link->ElementList.getValues()) {
+                        if (!isSubAssemblyFullyUnconnected(elt)) {
+                            return false;
+                        }
+                    }
+                    continue;
+                }
+                if (!isSubAssemblyFullyUnconnected(child)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+
+    // Blatt (oder rigide AssemblyLink, fuer den Solver bereits atomar) - echte Konnektivitaets-
+    // pruefung.
+    return !isPartConnected(obj);
+}
+
 void AssemblyObject::jointParts(const std::vector<JointRef>& joints)
 {
     for (auto& jr : joints) {
@@ -2895,7 +2935,9 @@ std::string AssemblyObject::handleOneSideOfJoint(
         return "";
     }
 
-    MbDPartData data = getMbDData(part);
+    // alreadyResolved=true: 'part' kommt direkt aus resolvePartForMbD() (s.o.), ist also bereits
+    // vollstaendig aufgeloest (siehe Bug-C-Kommentar an getMbDData()'s Deklaration).
+    MbDPartData data = getMbDData(part, /*alreadyResolved=*/true);
     std::shared_ptr<ASMTPart> mbdPart = data.part;
     Base::Placement plc = getPlacementFromProp(joint, propPlcName);
     // Now we have plc which is the JCS placement, but its relative to the Object, not to the
@@ -3005,7 +3047,9 @@ void AssemblyObject::getRackPinionMarkers(
     plc1.setRotation(adjustedRotation);
 
     // Then end of processing similar to handleOneSideOfJoint :
-    MbDPartData data1 = getMbDData(part1);
+    // alreadyResolved=true: part1 kommt aus resolvePartForMbD() (s.o.), siehe Bug-C-Kommentar an
+    // getMbDData()'s Deklaration.
+    MbDPartData data1 = getMbDData(part1, /*alreadyResolved=*/true);
     std::shared_ptr<ASMTPart> mbdPart = data1.part;
     if (obj1->getNameInDocument() != part1->getNameInDocument()) {
         plc1 = rack_global_plc * plc1;
@@ -3191,8 +3235,31 @@ App::DocumentObject* AssemblyObject::canonicalizeForMbD(App::DocumentObject* obj
     // Ebene bereits die atomare Einheit fuer den Solver und wird unveraendert zurueckgegeben
     // (Rigid-Sub-Baugruppe verhaelt sich wie ein einziges starres Teil, siehe getJoints()'
     // subJoints-Rekursion).
+    // FCPROJECT-PATCH (Bug C, "Instanz-Identitaet innerhalb einer duplizierten flexiblen
+    // Unterbaugruppe", 2026-09-16/17): Duplikation kann auf JEDER Ebene dieser Kette auftreten,
+    // nicht nur auf der aeussersten - z.B. wenn eine bereits mehrfach eingefuegte Unterbaugruppe
+    // (BG25 zweimal in BG22) selbst wieder eine im verlinkten Dokument bereits duplizierte
+    // Unterbaugruppe spiegelt (BG25 hat selbst schon zwei eigene Halterbaugruppe-Instanzen) -
+    // live am echten Projekt gefunden: ein Joint auf ein Bauteil INNERHALB einer solchen
+    // zweifach verschachtelten Duplikation kollabierte weiterhin auf das eine geteilte, echte
+    // Objekt, weil die fruehere Pruefung nur path.back() gegen 'this' pruefte (was nur bei
+    // Verschachtelungstiefe 1 zufaellig richtig war). Jede Ebene wird deshalb jetzt EINZELN,
+    // im jeweils richtigen Kontext (this fuer Ebene 0, sonst path[i-1]s eigene Group) geprueft -
+    // siehe docs/ARCHITECTURE.md §4.1 "Bug C" fuer die volle Herleitung.
+    auto siblingCandidatesFor = [this](Assembly::AssemblyLink* parent) {
+        if (parent) {
+            return parent->Group.getValues();
+        }
+        auto subs = getSubAssemblies();
+        return std::vector<App::DocumentObject*>(subs.begin(), subs.end());
+    };
+
     Assembly::AssemblyLink* previousLink = nullptr;
     for (auto* mirrorLink : path) {
+        if (hasSiblingInstances(siblingCandidatesFor(previousLink), mirrorLink)) {
+            return obj;
+        }
+
         App::DocumentObject* levelReal = mirrorLink;
         if (previousLink) {
             levelReal = previousLink->getSourceForMirror(mirrorLink);
@@ -3220,8 +3287,14 @@ App::DocumentObject* AssemblyObject::canonicalizeForMbD(App::DocumentObject* obj
         return obj;
     }
 
-    // Blatt: 'obj' lebt direkt in path.back()s eigener Group - dessen eigene objLinkMap
-    // uebersetzt 'obj' identitaetsbasiert auf sein echtes Quellobjekt.
+    // Blatt: 'obj' lebt direkt in path.back()s eigener Group - zuerst pruefen, ob 'obj' SELBST
+    // (falls es eine AssemblyLink ist, z.B. eine direkt referenzierte Halterbaugruppe002) dort
+    // dupliziert vorliegt, dann erst dessen eigene objLinkMap befragen.
+    if (auto* asmLinkObj = freecad_cast<Assembly::AssemblyLink*>(obj)) {
+        if (hasSiblingInstances(path.back()->Group.getValues(), asmLinkObj)) {
+            return obj;
+        }
+    }
     App::DocumentObject* resolved = path.back()->getSourceForMirror(obj);
     return resolved ? resolved : obj;
 }
@@ -3253,6 +3326,17 @@ App::DocumentObject* AssemblyObject::resolvePartForMbD(
         // Pointer als unverbunden - der tatsaechlich erreichbare Sub-Joint wurde faelschlich als
         // "nicht erreichbar" entfernt (live per Log bestaetigt, nachdem eine redundante
         // Erdung in Sub entfernt wurde, die das vorher zufaellig kaschiert hatte).
+        //
+        // FCPROJECT-PATCH (Bug C, "Instanz-Identitaet innerhalb einer duplizierten flexiblen
+        // Unterbaugruppe", 2026-09-16): 'resolvedViaInstanceMirror' bedeutet, resolveJointReference()
+        // hat 'resolved.obj' bereits per objLinkMap-Vorwaertslookup durch den Spiegel DIESER
+        // konkreten aeusseren Instanz ersetzt - ein canonicalizeForMbD() DARAUF wuerde das per
+        // getSourceForMirror() sofort wieder auf den geteilten, instanzblinden Zeiger zurueckdrehen
+        // (siehe docs/ARCHITECTURE.md §4.1 "Bug C"). Deshalb hier NICHT kanonisieren - der Spiegel
+        // IST bereits die korrekte, instanzeigene Identitaet.
+        if (resolved.resolvedViaInstanceMirror) {
+            return resolved.obj;
+        }
         return canonicalizeForMbD(resolved.obj);
     }
 
@@ -3280,7 +3364,9 @@ bool AssemblyObject::isMbDJointValid(App::DocumentObject* joint, const std::stri
     }
 
     // If this joint is self-referential it must be ignored.
-    if (getMbDPart(part1) == getMbDPart(part2)) {
+    // alreadyResolved=true: part1/part2 kommen aus resolvePartForMbD() (s.o.), siehe
+    // Bug-C-Kommentar an getMbDData()'s Deklaration.
+    if (getMbDPart(part1, /*alreadyResolved=*/true) == getMbDPart(part2, /*alreadyResolved=*/true)) {
         // FCPROJECT-PATCH (10): getJointContextName() statt getFullLabel() - Label ist fuer JEDEN
         // gleichartigen Joint identisch (z.B. "Parallel" fuer jeden Parallel-Joint), der blosse
         // Name allein (z.B. "Joint005") ist zwar eindeutig, verraet aber nicht, in welcher (ggf.
@@ -3317,7 +3403,7 @@ bool AssemblyObject::isMbDJointValid(App::DocumentObject* joint, const std::stri
     return true;
 }
 
-AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part)
+AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part, bool alreadyResolved)
 {
     // FCPROJECT-PATCH (Befund 3, Teilschritt 2e): zentraler Kanonisierungs-Punkt - jeder Aufrufer
     // (Joints via resolvePartForMbD(), geerdete Teile via fixGroundedPart(), etc.) landet dadurch
@@ -3326,7 +3412,14 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
     // ausfuehrliche Begruendung. Ohne das legte objectPartMap (pointer-keyed) fuer beide Wege
     // getrennte MbD-Teile an, wodurch ein geerdetes Teil und der es bewegende Joint nie im selben
     // Constraint-Graphen landeten.
-    part = canonicalizeForMbD(part);
+    //
+    // FCPROJECT-PATCH (Bug C, 2026-09-16): 'alreadyResolved' (siehe Deklaration in
+    // AssemblyObject.h) ueberspringt genau dieses canonicalizeForMbD() - noetig, weil es einen
+    // von resolvePartForMbD() bewusst instanzspezifisch ersetzten Spiegel sonst sofort per
+    // getSourceForMirror() auf den geteilten, instanzblinden Zeiger zurueckdrehen wuerde.
+    if (!alreadyResolved) {
+        part = canonicalizeForMbD(part);
+    }
 
     auto it = objectPartMap.find(part);
     if (it != objectPartMap.end()) {
@@ -3434,12 +3527,12 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
     return data;
 }
 
-std::shared_ptr<ASMTPart> AssemblyObject::getMbDPart(App::DocumentObject* part)
+std::shared_ptr<ASMTPart> AssemblyObject::getMbDPart(App::DocumentObject* part, bool alreadyResolved)
 {
     if (!part) {
         return nullptr;
     }
-    return getMbDData(part).part;
+    return getMbDData(part, alreadyResolved).part;
 }
 
 std::shared_ptr<ASMTPart> AssemblyObject::makeMbdPart(std::string& name, Base::Placement plc, double mass)
@@ -3568,7 +3661,7 @@ void AssemblyObject::setObjMasses(std::vector<std::pair<App::DocumentObject*, do
     objMasses = objectMasses;
 }
 
-std::vector<AssemblyLink*> AssemblyObject::getSubAssemblies()
+std::vector<AssemblyLink*> AssemblyObject::getSubAssemblies() const
 {
     std::vector<AssemblyLink*> subAssemblies = {};
 

@@ -208,10 +208,26 @@ unbekannter Nebeneffekt unseres eigenen Sync-Fixes). Root-Cause-Analyse ist als 
 vertagt, siehe [[todo-nested-outer-joint-180-degree-rotation]].
 
 Alle Tests zusammen laufen lassen: `common/run-all-tests.sh <install-dir>` (bzw. die CMake-Targets
-`kinematic-test-patched`/`kinematic-test-vanilla`, die die komplette Matrix ausführen). **Beide
-Targets zeigen aktuell 3 bekannte FEHLER** (Revolute/Cylindrical/Ball nested, s.o.) - das ist
-kein CI-Alarmsignal, sondern ein dokumentierter, offener Befund; ein NEUER, bisher unbekannter
-Fehlschlag (andere Testfälle, oder eine Änderung der bekannten Differenz) wäre dagegen ein
+`kinematic-test-patched`/`kinematic-test-vanilla`, die die komplette Matrix ausführen).
+
+**Korrigierter Stand (2026-09-16, ersetzt die vorherige "3 bekannte FEHLER"-Angabe hier, die
+unvollständig war):** aktuell zeigen BEIDE Targets **4 bekannte FEHLER** -
+`test_fixed_nested_flex`, `test_cylindrical_nested_flex`, `test_revolute_nested_flex`,
+`test_slider_nested_flex` (NICHT `test_ball_nested_flex` - Ball hat 3 freie Rotations-DOF, also
+keine Orientierungs-Zwangsbedingung, bei der eine falsche Wurzel ueberhaupt moeglich waere).
+Ursache in allen vier Faellen identisch und bereits 2026-09-09 gefunden (siehe
+[[todo-nested-fixed-mirror-placement-quirk]], dort als "innerer 180-Grad-Rest bewusst
+zurueckgestellt" vermerkt): der innere, 0-Freiheitsgrad-Joint (subA<->subB) waehlt beim
+kombinierten Solve der aeusseren, verschachtelten flexiblen Baugruppe deterministisch (nicht
+zufaellig/winkelabhaengig) die falsche von zwei gueltigen Wurzeln - das reale `subA`-Objekt
+landet exakt 180 Grad von der analytisch erwarteten Rotation entfernt, unabhaengig vom
+Startwinkel des aeusseren Joints. **2026-09-16 gegengeprueft:** per Vergleichsexperiment mit
+nativer `Part::Box` statt `App::Link` reproduzierbar identisch - der Fund ist UNABHAENGIG vom
+"Koerper als externe Dateien"-Umbau (2026-09-15), keine neue Regression, sondern derselbe,
+schon damals bewusst zurueckgestellte Befund, dessen vollen Umfang (4 Jointtypen, nicht nur 3)
+die bisherige Zeile hier nie vollstaendig erfasst hatte. Weiterhin kein CI-Alarmsignal, aber ab
+sofort mit dem korrekten Umfang dokumentiert; ein NEUER, bisher unbekannter Fehlschlag (andere
+Testfälle, oder eine Änderung der bekannten Differenz/des betroffenen Objekts) wäre dagegen ein
 echtes Alarmsignal.
 
 ### Stufe 3: zwei Ebenen Verschachtelung (Sub -> Mid -> GrandTop)

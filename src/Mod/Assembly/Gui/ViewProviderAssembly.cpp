@@ -712,13 +712,22 @@ bool ViewProviderAssembly::canDragObjectIn3d(App::DocumentObject* obj) const
         return false;
     }
 
+    auto* assemblyPart = getObject<AssemblyObject>();
+
     if (auto* asmLink = dynamic_cast<Assembly::AssemblyLink*>(obj)) {
-        if (!asmLink->isRigid()) {
+        // FCPROJECT-PATCH (Fix-Ansatz D, "flexible Unterbaugruppe als Ganzes ziehbar, wenn
+        // unverbunden", Nutzerauftrag 2026-09-16/17): siehe collectMovableObjects() fuer die
+        // volle Begruendung - nur eine TEILWEISE oder voll verbundene flexible AssemblyLink
+        // bleibt vom Drag als GANZES ausgeschlossen (ihre einzelnen Kinder werden stattdessen
+        // einzeln geprueft); eine komplett unverbundene faellt durch zu den unten stehenden,
+        // generischen Pruefungen (hasRealObject/Placement/ObjectToGround/isPartGrounded).
+        // isSubAssemblyFullyUnconnected() statt isPartConnected(asmLink) direkt - ein Joint
+        // referenziert nie den Container selbst, sondern immer ein Kind darin, siehe Deklaration
+        // in AssemblyObject.h.
+        if (!asmLink->isRigid() && !assemblyPart->isSubAssemblyFullyUnconnected(asmLink)) {
             return false;
         }
     }
-
-    auto* assemblyPart = getObject<AssemblyObject>();
 
     // FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix, 2026-09-03,
     // live durch Nutzer-Maus-Drag aufgedeckt): auf hasRealObject() umgestellt statt des rohen
@@ -865,8 +874,22 @@ void ViewProviderAssembly::collectMovableObjects(
     auto* assemblyPart = getObject<AssemblyObject>();
 
     // Handling of special case: flexible AssemblyLink
+    //
+    // FCPROJECT-PATCH (Fix-Ansatz D, "flexible Unterbaugruppe als Ganzes ziehbar, wenn
+    // unverbunden", Nutzerauftrag 2026-09-16): eine flexible AssemblyLink wird nur noch
+    // TRANSPARENT in ihre Kinder aufgeloest, wenn sie tatsaechlich an irgendetwas angeschlossen
+    // ist (isPartConnected()) - eine KOMPLETT unverbundene Instanz (z.B. frisch per "Insert
+    // Component" eingefuegt, noch kein Joint) faellt stattdessen durch zum Basisfall unten und
+    // wird selbst zum Drag-Kandidaten, analog zu einer starren AssemblyLink. Ist sie TEILWEISE
+    // verbunden (irgendein eigenes Kind haengt an einem externen Joint), bleibt das bisherige
+    // Verhalten (nur einzelne Kinder ziehbar) unveraendert - das Zusammenspiel mit einem
+    // teilweise verbundenen Container ist bewusst nicht Teil dieses Fixes (siehe
+    // docs/ARCHITECTURE.md §4.1 fuer die Abgrenzung).
+    // isSubAssemblyFullyUnconnected() statt isPartConnected(asmLink) direkt (2026-09-17) - ein
+    // Joint referenziert nie den Container selbst, sondern immer ein Kind darin, siehe
+    // Deklaration in AssemblyObject.h.
     auto* asmLink = dynamic_cast<Assembly::AssemblyLink*>(currentObject);
-    if (asmLink && !asmLink->isRigid()) {
+    if (asmLink && !asmLink->isRigid() && !assemblyPart->isSubAssemblyFullyUnconnected(asmLink)) {
         std::vector<App::DocumentObject*> children = asmLink->Group.getValues();
         for (auto* child : children) {
             // Recurse on children, appending the child's name to the subName prefix
