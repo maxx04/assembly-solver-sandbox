@@ -1276,6 +1276,22 @@ def getComponentReference(assembly, root_obj, sub_string):
             continue
         if obj.isDerivedFrom("Assembly::AssemblyLink"):
             if hasattr(obj, "Rigid") and not obj.Rigid:
+                # FCPROJECT-PATCH (2026-09-18): Assembly::AssemblyLink erbt von App::Part, NICHT
+                # von App::Link - anders als bei einem echten App::Link (siehe isLink()-Zweig
+                # unten) bleibt 'doc' beim Ueberspringen einer verschachtelten, flexiblen
+                # AssemblyLink hier bisher IMMER beim aeusseren Dokument stehen. Der naechste
+                # Pfadabschnitt (z.B. der Name des tatsaechlichen Kindes innerhalb dieser
+                # Unterbaugruppe) wird dadurch im FALSCHEN, aeusseren Dokument gesucht. Exakt
+                # derselbe Bug-Typ wie in resolveJointReference() (AssemblyUtils.cpp, C++) - dort
+                # bereits gefixt, hier nie nachgezogen. Eigenstaendig korrekt, aber NICHT die
+                # alleinige Ursache eines am selben Tag untersuchten, tiefer liegenden Symptoms
+                # ("aeusserer Joint bewegt nur einen Teil einer flexiblen Unterbaugruppe korrekt") -
+                # dieses besteht auch nach diesem Fix weiter, siehe
+                # requirement-flexible-subassembly-any-anchor-point (Projekt-Memory) fuer den
+                # ungeloesten Rest.
+                linkedAssembly = obj.getLinkedObject()
+                if linkedAssembly:
+                    doc = linkedAssembly.Document
                 continue
         if isLinkGroup(obj):
             continue
