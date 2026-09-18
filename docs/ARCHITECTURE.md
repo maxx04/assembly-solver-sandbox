@@ -567,11 +567,17 @@ wirklich in den kombinierten Solve einbezogen. Der Test braucht eine Überarbeit
 innerer Jointtyp ohne diese Mehrdeutigkeit), um Bug C unabhängig von diesem unrelated 180°-Thema
 zu verifizieren - noch offen.
 
-**Operative Lektion (hat mehrfach zu falschen Fährten geführt):** `cmake --install .` aktualisiert
-`AssemblyGui.so` unter `/home/maxx/freecad-sandbox/install/lib/` nicht zuverlässig - nach jedem
-Build explizit beide `.so`-Dateien (`install/Mod/Assembly/AssemblyApp.so`,
-`install/lib/AssemblyGui.so`) force-kopieren, sonst läuft eine alte Gui-Bibliothek gegen eine neue
-App-Bibliothek und täuscht scheinbar tief liegende Solver-Bugs vor.
+**Operative Lektion, am 2026-09-18 endgültig korrigiert:** die ursprüngliche Vermutung hier
+("`cmake --install .` aktualisiert `AssemblyGui.so` nicht zuverlässig") war eine
+Fehldiagnose - reines `cmake --install .` (ohne `--component`-Filter) installiert beide
+Bibliotheken zuverlässig korrekt nach `install/lib/`. Die tatsächliche Ursache der beobachteten
+"undefined symbol"-Fehler war `install/Mod/Assembly/AssemblyApp.so` - eine nie von CMake
+verwaltete, versehentlich manuell gepflegte Datei-Leiche (entstanden durch einen früheren,
+`--component`-gefilterten `cmake --install`-Aufruf, der fälschlich für den echten Installationsort
+gehalten wurde), die tagelang veraltet blieb, während der tatsächlich geladene Pfad
+(`install/lib/AssemblyApp.so`) unangetastet und aktuell war. Datei gelöscht. Seither gilt wieder
+ausnahmslos [[feedback-cmake-scope-boundary]]: nur `cmake --build ... && cmake --install .`, keine
+manuellen Kopien.
 
 ---
 
@@ -682,6 +688,31 @@ Verschachtelungs-/Instanzkonstellation ist geprüft".
   bleibt nach einem `GrandTop`-only-Solve unsynchronisiert, wenn `Top` separat vom übergeordneten
   `GrandTop` geöffnet/angezeigt wird. Für `GrandTop`s eigene 3D-Ansicht irrelevant. Nicht verfolgt,
   bis ein konkreter Anwendungsfall gemeldet wird.
+- **Anforderung (Nutzerauftrag 2026-09-18, noch nicht erfüllt): externe Fixierung eines
+  BELIEBIGEN Mitglieds einer flexiblen Unterbaugruppe muss die GANZE Unterbaugruppe korrekt
+  positionieren - unabhängig davon, ob das von außen referenzierte Mitglied das intern geerdete
+  ist oder ein anderes, nur über einen internen Joint damit verbundenes.** Live reproduziert
+  (BG25 = FuerungsBaugruppe: intern `Führung330` geerdet, per Fixed- bzw. Slider-Joint mit zwei
+  `Halterbaugruppe`-Instanzen verbunden): ein äußerer Fixed-Joint, der `Führung330` selbst
+  referenziert, positioniert die ganze eingebettete Baugruppe korrekt (das ist der bereits in
+  [[reference-nested-grounding-not-redundant]] verifizierte Fall). Ein äußerer Fixed-Joint, der
+  stattdessen eine der `Halterbaugruppe`-Instanzen referenziert (das andere Ende derselben
+  internen Verbindung), positioniert NUR diese eine Halterbaugruppe korrekt -
+  `Führung330` bleibt an seiner alten, intern berechneten Position hängen, obwohl beide Teile
+  über einen aktiven internen Joint verbunden sind und dieser laut Solve-Log nicht als redundant
+  verworfen wird. **Nutzerkorrektur, explizit als Kernanforderung markiert (kein Sonderfall, den
+  man vermeiden soll):** "als Konstrukteur mache ich mir keine Gedanken, wo die Erdung
+  durchläuft - das ist Aufgabe des Programms. Beide Anschlusspunkte MÜSSEN funktionieren." **Root
+  Cause per Debug-Print bestätigt:** `resolvePartForMbD()` liefert für dasselbe Teil
+  (`Halterbaugruppe`, hat ein Geschwister `Halterbaugruppe001` innerhalb BG25) zwei
+  VERSCHIEDENE Zeiger, je nachdem ob die Auflösung über den kurzen, Bug-C-Spiegel-Pfad (unser
+  äußerer Joint) oder über `getJoints()`s `subJoints`-Rekursion (BG25s eigener interner Joint,
+  wird bei flexiblen Sub-Assemblies mit in den äußeren Solve gezogen,
+  AssemblyObject.cpp:1633-1656) läuft. `getConnectedParts()` vergleicht Zeiger direkt - findet
+  keine Übereinstimmung, BG25s interner Joint gilt fälschlich als "nicht erreichbar" und wird
+  verworfen, Führung330 bekommt die äußere Randbedingung nie mit. Siehe Projekt-Memory
+  `requirement-flexible-subassembly-any-anchor-point.md` für den vollen Live-Reproduktionsverlauf
+  inkl. der beiden konkreten Zeigerwerte.
 
 ---
 
