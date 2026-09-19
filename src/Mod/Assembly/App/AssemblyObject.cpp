@@ -3238,7 +3238,11 @@ bool findLocalGroupPath(
 // AssemblyLink-Instanz eigenstaendig von synchronizeComponents() gepflegt) ersetzt jede
 // Namenssuche durch eine Zeiger-Aufloesung - immun gegen Namenskollisionen, weil sie nie einen
 // String, sondern immer das tatsaechlich gefundene Zeiger-Objekt weiterreicht.
-App::DocumentObject* AssemblyObject::canonicalizeForMbD(App::DocumentObject* obj)
+// FCPROJECT-PATCH (2026-09-19, IdentityGraph-Umbau Phase 3): Altimplementierung TEMPORAER als
+// eigene Funktion erhalten, ausschliesslich fuer den Aequivalenz-Verifikationslauf gegen die
+// neue, graphbasierte canonicalizeForMbD() (siehe deren neue Definition unten) - wird entfernt,
+// sobald diese Phase per voller Testmatrix + Aequivalenzskript bestaetigt ist (siehe Plan-Datei).
+App::DocumentObject* AssemblyObject::canonicalizeForMbDLegacy(App::DocumentObject* obj)
 {
     if (!obj) {
         return obj;
@@ -3277,7 +3281,7 @@ App::DocumentObject* AssemblyObject::canonicalizeForMbD(App::DocumentObject* obj
             if (!nested || nested == this || nested->getDocument() != obj->getDocument()) {
                 continue;
             }
-            return nested->canonicalizeForMbD(obj);
+            return nested->canonicalizeForMbDLegacy(obj);
         }
         return obj;
     }
@@ -3378,6 +3382,54 @@ App::DocumentObject* AssemblyObject::canonicalizeForMbD(App::DocumentObject* obj
     return resolved ? resolved : obj;
 }
 
+// FCPROJECT-PATCH (2026-09-19, IdentityGraph-Umbau Phase 3): objectPartMap ist (vor der fuer
+// eine spaetere Phase geplanten vollstaendigen IdentityHandle-Umstellung) weiterhin nach rohem
+// Zeiger geschluesselt - bei einer echten Instanz-Duplikation (duplicateInstancePath nicht
+// leer) MUSS deshalb weiterhin ein PRO INSTANZ eindeutiger Zeiger materialisiert werden (sonst
+// kollabieren zwei Duplikat-Instanzen auf denselben MbD-Teil, Bug C laesst gruessen) -
+// graph.mirrorsOf() liefert genau diesen instanzeigenen lokalen Spiegel. Ohne Duplikation bleibt
+// es beim tiefen ECHTEN Objekt, exakt wie "Adressieren statt Kopieren"
+// (docs/ARCHITECTURE.md §5) es fuer den Solver will. Von canonicalizeForMbD() UND
+// resolvePartForMbD() gemeinsam genutzt.
+namespace
+{
+App::DocumentObject* materializeForObjectPartMap(IdentityGraph& graph, const IdentityHandle& handle)
+{
+    if (!handle.templateObj) {
+        return nullptr;
+    }
+    if (handle.duplicateInstancePath.empty()) {
+        return handle.templateObj;
+    }
+    auto mirrors = graph.mirrorsOf(handle);
+    // Defensiver Ruecksfall (mirrors.empty()) sollte praktisch nie eintreten - jede tatsaechlich
+    // dupliziert erkannte Ebene hat per Konstruktion einen lokalen Spiegel.
+    return mirrors.empty() ? handle.templateObj : mirrors.front();
+}
+}  // namespace
+
+// FCPROJECT-PATCH (2026-09-19, IdentityGraph-Umbau Phase 3, siehe
+// /home/maxx/.claude/plans/enumerated-roaming-river.md): ersetzt die obige, handgeschriebene
+// canonicalizeForMbDLegacy() durch den Graphen - IdentityGraph::resolveObject() bildet exakt
+// denselben Top-Down-Struktursuche-Algorithmus nach (siehe dessen Kommentar in
+// AssemblyIdentityGraph.cpp), aber tiefengenerell statt mit Bug-C's fruehem Aufgeben bei JEDER
+// Instanz-Duplikation. Da canonicalizeForMbD() als "zentrale Wahrheitsquelle"
+// (docs/ARCHITECTURE.md §4) von sehr vielen Stellen genutzt wird (rebuildRigidClusters(),
+// getGroundedParts(), getConnectedParts()/traverseAndMarkConnectedParts(), hasRealObject(),
+// isPartConnected(), ...), behebt dieser EINE Austausch §6s "beliebiger Anschlusspunkt"-
+// Anforderung strukturell an ALLEN diesen Stellen gleichzeitig, ohne dass sie einzeln angefasst
+// werden muessen - sie rufen bereits alle nur canonicalizeForMbD(obj) auf.
+App::DocumentObject* AssemblyObject::canonicalizeForMbD(App::DocumentObject* obj)
+{
+    if (!obj) {
+        return obj;
+    }
+    IdentityGraph graph(this);
+    IdentityHandle handle = graph.resolveObject(obj);
+    App::DocumentObject* materialized = materializeForObjectPartMap(graph, handle);
+    return materialized ? materialized : obj;
+}
+
 // FCPROJECT-PATCH (Teilschritt 2 "adressieren statt kopieren", solver-root-cause-fix, siehe
 // patches/assembly-architecture-overview.md, Abschnitt "Teilschritt 2 - Umsetzung"): siehe
 // ausfuehrliche Erklaerung (inkl. der bewussten Abweichung beim subPath - wird derzeit nirgends
@@ -3399,23 +3451,6 @@ App::DocumentObject* AssemblyObject::canonicalizeForMbD(App::DocumentObject* obj
 // genau diesen instanzeigenen lokalen Spiegel. Ohne Duplikation bleibt es beim tiefen ECHTEN
 // Objekt, exakt wie "Adressieren statt Kopieren" (docs/ARCHITECTURE.md §5) es fuer den Solver
 // will.
-namespace
-{
-App::DocumentObject* materializeForObjectPartMap(IdentityGraph& graph, const IdentityHandle& handle)
-{
-    if (!handle.templateObj) {
-        return nullptr;
-    }
-    if (handle.duplicateInstancePath.empty()) {
-        return handle.templateObj;
-    }
-    auto mirrors = graph.mirrorsOf(handle);
-    // Defensiver Ruecksfall (mirrors.empty()) sollte praktisch nie eintreten - jede tatsaechlich
-    // dupliziert erkannte Ebene hat per Konstruktion einen lokalen Spiegel.
-    return mirrors.empty() ? handle.templateObj : mirrors.front();
-}
-}  // namespace
-
 App::DocumentObject* AssemblyObject::resolvePartForMbD(
     App::DocumentObject* joint,
     const char* propRefName,
@@ -3878,9 +3913,14 @@ std::vector<std::string> AssemblyObject::verifyIdentityGraphEquivalence()
     };
 
     for (auto* obj : getGroundedParts()) {
-        App::DocumentObject* oldResolved = canonicalizeForMbD(obj);
+        // FCPROJECT-PATCH (2026-09-19, Phase 3): 'newResolved' ruft die ECHTE, jetzt
+        // graphbasierte canonicalizeForMbD() direkt auf (nicht nur graph.resolveObject()+
+        // materialize(resolveForSolver()), das den mirrorsOf()-Fallback bei Duplikation
+        // NICHT mitmacht) - sonst vergleicht dieser Test etwas anderes als das, was
+        // tatsaechlich produktiv laeuft.
+        App::DocumentObject* oldResolved = canonicalizeForMbDLegacy(obj);
+        App::DocumentObject* newResolved = canonicalizeForMbD(obj);
         IdentityHandle handle = graph.resolveObject(obj);
-        App::DocumentObject* newResolved = graph.materialize(graph.resolveForSolver(handle));
         classify(
             "grounded '" + describe(obj) + "'",
             oldResolved,
@@ -3905,8 +3945,9 @@ std::vector<std::string> AssemblyObject::verifyIdentityGraphEquivalence()
             // per canonicalizeForMbD() weiterkanonisieren) - graph.resolveJointRef() macht
             // dieselbe Nachbehandlung inzwischen INTERN (siehe refineNestedMirrorTarget()), die
             // rohe Altfunktion allein tut das nie.
-            App::DocumentObject* oldResolved
-                = oldRef.resolvedViaInstanceMirror ? oldRef.obj : canonicalizeForMbD(oldRef.obj);
+            App::DocumentObject* oldResolved = oldRef.resolvedViaInstanceMirror
+                ? oldRef.obj
+                : canonicalizeForMbDLegacy(oldRef.obj);
             IdentityHandle handle
                 = graph.resolveJointRef(jointRef.joint, propName, jointRef.nestingPrefix);
             App::DocumentObject* newResolved = graph.materialize(graph.resolveForSolver(handle));

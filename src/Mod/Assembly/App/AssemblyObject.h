@@ -522,6 +522,10 @@ private:
     // separat als buggy bekannt (project_fcproject_redundant_fixed_joint_rigidgroup_fix-Memory)
     // und wird hier bewusst nicht mitgeloest.
     App::DocumentObject* canonicalizeForMbD(App::DocumentObject* obj);
+    // FCPROJECT-PATCH (2026-09-19, IdentityGraph-Umbau Phase 3): TEMPORAER, nur fuer den
+    // Aequivalenz-Verifikationslauf gegen die neue, graphbasierte canonicalizeForMbD() - siehe
+    // Definition in AssemblyObject.cpp.
+    App::DocumentObject* canonicalizeForMbDLegacy(App::DocumentObject* obj);
 
     // FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix, 2026-09-03,
     // live durch Nutzer-Maus-Drag aufgedeckt): AssemblyLink::synchronizeComponents() spiegelt die
