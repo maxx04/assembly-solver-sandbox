@@ -2286,9 +2286,22 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
 
         self.blockOffsetRotation = True
         self.jForm.offsetSpinbox.setProperty("rawValue", pos.z)
-        self.jForm.rotationSpinbox.setProperty(
-            "rawValue", self.joint.Offset2.Rotation.getYawPitchRoll()[0]
-        )
+        # FCPROJECT-PATCH (2026-09-19, "Drehung springt bei 180 Grad" - siehe
+        # bugreports/joint-offset-rotation-spinbox-jump/BUGREPORT.md): getYawPitchRoll()[0]
+        # liefert den Winkel IMMER kanonisch gewickelt im Bereich (-180, 180] - schreibt man
+        # das ungefragt in die Spinbox zurueck, springt die Anzeige schlagartig um 360 Grad,
+        # sobald der Nutzer ueber 180 Grad hinausdreht, obwohl die tatsaechliche 3D-Drehung
+        # sich vollkommen stetig aendert. Fix: statt des rohen kanonischen Werts denjenigen
+        # zu diesem kongruenten Winkel waehlen, der am naechsten am AKTUELL angezeigten
+        # Spinbox-Wert liegt (Entpacken relativ zum letzten Anzeigewert, nicht relativ zu
+        # einem festen Fenster) - macht die Anzeige fuer den Nutzer durchgehend stetig.
+        current_display = self.jForm.rotationSpinbox.property("rawValue")
+        canonical_yaw = self.joint.Offset2.Rotation.getYawPitchRoll()[0]
+        if current_display is not None:
+            continuous_yaw = canonical_yaw + 360.0 * round((current_display - canonical_yaw) / 360.0)
+        else:
+            continuous_yaw = canonical_yaw
+        self.jForm.rotationSpinbox.setProperty("rawValue", continuous_yaw)
         self.blockOffsetRotation = False
 
     def advancedOffsetToggled(self, on):
