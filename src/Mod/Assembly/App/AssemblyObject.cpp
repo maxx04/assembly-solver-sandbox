@@ -3255,8 +3255,10 @@ App::DocumentObject* AssemblyObject::canonicalizeForMbD(App::DocumentObject* obj
     };
 
     Assembly::AssemblyLink* previousLink = nullptr;
+    bool lastContainerHasSiblings = false;
     for (auto* mirrorLink : path) {
-        if (hasSiblingInstances(siblingCandidatesFor(previousLink), mirrorLink)) {
+        lastContainerHasSiblings = hasSiblingInstances(siblingCandidatesFor(previousLink), mirrorLink);
+        if (lastContainerHasSiblings) {
             return obj;
         }
 
@@ -3287,12 +3289,32 @@ App::DocumentObject* AssemblyObject::canonicalizeForMbD(App::DocumentObject* obj
         return obj;
     }
 
-    // Blatt: 'obj' lebt direkt in path.back()s eigener Group - zuerst pruefen, ob 'obj' SELBST
-    // (falls es eine AssemblyLink ist, z.B. eine direkt referenzierte Halterbaugruppe002) dort
-    // dupliziert vorliegt, dann erst dessen eigene objLinkMap befragen.
-    if (auto* asmLinkObj = freecad_cast<Assembly::AssemblyLink*>(obj)) {
-        if (hasSiblingInstances(path.back()->Group.getValues(), asmLinkObj)) {
-            return obj;
+    // FCPROJECT-PATCH (2026-09-19, "Fuehrung bleibt haengen" - siehe Projekt-Memory
+    // requirement-flexible-subassembly-any-anchor-point): Blatt: 'obj' lebt direkt in
+    // path.back()s eigener Group. Die alte Fassung pruefte hier IMMER, ob 'obj' SELBST (falls
+    // eine AssemblyLink) innerhalb path.back()s Group ein Geschwister hat, das auf dieselbe
+    // verlinkte Datei zeigt - UNABHAENGIG davon, ob path.back() (der umschliessende Container,
+    // z.B. eine Fuehrungsbaugruppe) selbst dupliziert ist. Live am echten Projekt widerlegt: zwei
+    // BEWUSST unterschiedliche, einzeln benannte Bauteile (z.B. eine feste und eine gleitende
+    // Halterung), die zufaellig dieselbe Konstruktionsdatei verlinken, sind KEINE "Instanz A/B
+    // derselben Einfuegung" - Bug Cs "nicht kollabieren, eigene Identitaet behalten"-Regel gehoert
+    // nur zum Fall "der umschliessende CONTAINER selbst wurde mehrfach eingefuegt" (siehe
+    // hasSiblingInstances()-Aufruf oben in der Schleife). Ohne diese Einschraenkung kollabierte
+    // ein extern (per kurzem Pfad, ueber einen frischen Bug-C-Spiegel) referenziertes Bauteil
+    // NICHT auf dieselbe Identitaet wie ein intern (per subJoints-Rekursion durch die Vorlage)
+    // referenziertes Bauteil - zwei verschiedene Zeiger fuer dasselbe Bauteil, wodurch
+    // getConnectedParts() den internen Joint faelschlich als "nicht erreichbar" verwarf. Fix: die
+    // Geschwister-Pruefung fuer 'obj' selbst nur noch anwenden, wenn AUCH path.back() (der
+    // Container) selbst als dupliziert erkannt wurde (lastContainerHasSiblings, oben in der
+    // Schleife berechnet) - sonst immer ueber getSourceForMirror() auf die echte, kanonische
+    // Identitaet auflösen. Funktioniert bei beliebiger Verschachtelungstiefe, da
+    // lastContainerHasSiblings sich stets auf path.back() (das zuletzt durchquerte Element)
+    // bezieht, unabhaengig davon wie lang path ist.
+    if (lastContainerHasSiblings) {
+        if (auto* asmLinkObj = freecad_cast<Assembly::AssemblyLink*>(obj)) {
+            if (hasSiblingInstances(path.back()->Group.getValues(), asmLinkObj)) {
+                return obj;
+            }
         }
     }
     App::DocumentObject* resolved = path.back()->getSourceForMirror(obj);
