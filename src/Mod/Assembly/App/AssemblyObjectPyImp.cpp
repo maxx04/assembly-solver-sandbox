@@ -197,6 +197,21 @@ PyObject* AssemblyObjectPy::exportAsASMT(PyObject* args) const
     Py_Return;
 }
 
+PyObject* AssemblyObjectPy::verifyIdentityGraphEquivalence(PyObject* args) const
+{
+    if (!PyArg_ParseTuple(args, "")) {
+        return nullptr;
+    }
+
+    std::vector<std::string> lines = this->getAssemblyObjectPtr()->verifyIdentityGraphEquivalence();
+
+    Py::List ret;
+    for (const auto& line : lines) {
+        ret.append(Py::String(line));
+    }
+    return Py::new_reference_to(ret);
+}
+
 Py::List AssemblyObjectPy::getJoints() const
 {
     Py::List ret;

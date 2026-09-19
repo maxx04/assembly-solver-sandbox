@@ -147,6 +147,15 @@ public:
     // letzte - siehe .cpp fuer die Herleitung anhand des Live-Bugs BG37->BG43->BG67.
     IdentityHandle resolve(App::DocumentObject* obj, const std::string& subPath = {});
 
+    // Gegenstueck fuer den canonicalizeForMbD()-Anwendungsfall: 'obj' ist bereits ein konkreter
+    // Zeiger (keine Selektions-Pfad-Zeichenkette wie bei resolve()/getMovingPartFromSel() - der
+    // Aufrufer hat z.B. ein Objekt aus getGroundedParts() oder direkt aus einer Joint-Property).
+    // Sucht 'obj' stattdessen ueber eine TOP-DOWN-Struktursuche (wie findLocalGroupPath()) und
+    // uebersetzt den gefundenen Pfad vorwaerts - tiefengenerelle Neufassung von
+    // canonicalizeForMbD(), die (anders als diese) bei einer Instanz-Duplikation nicht sofort
+    // aufgibt, sondern die Duplikation in duplicateInstancePath vermerkt und weiteruebersetzt.
+    IdentityHandle resolveObject(App::DocumentObject* obj);
+
     // Gegenstueck fuer eine Joint-Referenz (Reference1/Reference2 + nestingPrefix), ersetzt
     // AssemblyUtils::resolveJointReference()'s Kernschleife - siehe dortigen Kommentar
     // (AssemblyUtils.cpp ~1067-1073) fuer die selbst-dokumentierte Ein-Sprung-Grenze, die hier

@@ -51,6 +51,40 @@ std::vector<App::DocumentObject*> candidatesFor(AssemblyObject* solvingAssembly,
     auto subs = solvingAssembly->getSubAssemblies();
     return std::vector<App::DocumentObject*>(subs.begin(), subs.end());
 }
+
+// Top-Down-Struktursuche, analog zu AssemblyObject.cpp's gleichnamiger (dort anonymer, hier
+// nicht wiederverwendbarer) Hilfsfunktion - siehe canonicalizeForMbD()'s Kommentar fuer die
+// Begruendung (Group-Mitgliedschaft statt InList-Aufstieg, da InList auch referenzierende
+// Joints faelschlich als "Elternknoten" treffen kann).
+bool findLocalGroupPath(
+    const std::vector<App::DocumentObject*>& objects,
+    App::DocumentObject* target,
+    std::vector<AssemblyLink*>& outPath
+)
+{
+    for (auto* candidate : objects) {
+        if (!candidate) {
+            continue;
+        }
+        if (candidate == target) {
+            return true;
+        }
+        if (auto* asmLink = freecad_cast<AssemblyLink*>(candidate)) {
+            outPath.push_back(asmLink);
+            if (findLocalGroupPath(asmLink->Group.getValues(), target, outPath)) {
+                return true;
+            }
+            outPath.pop_back();
+            continue;
+        }
+        if (auto* group = freecad_cast<App::DocumentObjectGroup*>(candidate)) {
+            if (findLocalGroupPath(group->Group.getValues(), target, outPath)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
 }  // namespace
 
 bool IdentityHandle::operator==(const IdentityHandle& other) const
@@ -73,13 +107,13 @@ IdentityGraph::IdentityGraph(AssemblyObject* root)
 {}
 
 // FCPROJECT-PATCH (2026-09-19, IdentityGraph-Umbau, Phase 0): generalisiert
-// AssemblyUtils::getMovingPartFromSel()'s Segment-fuer-Segment-Namens-Walk. Der entscheidende
-// Unterschied: 'currentContainer' (die zuletzt gekreuzte, bereits INSTANZ-AUFGELOESTE
-// AssemblyLink) wird bei JEDEM weiteren Sprung ueber objLinkMap uebersetzt, nicht nur beim
-// letzten - siehe Header-Kommentar von IdentityHandle fuer die Herleitung anhand des Live-Bugs
-// BG37->BG43->BG67 (dort blieb nur die AEUSSERSTE Duplikation, BG43, korrekt erkannt, weil
-// hasSiblingInstances() in der Altfunktion IMMER gegen solvingAssembly's eigene Kinder prueft,
-// statt - wie hier - gegen den jeweils richtigen lokalen Kontext).
+// AssemblyUtils::getMovingPartFromSel()'s Segment-fuer-Segment-Namens-Walk. 'localContext' dient
+// NUR der Buchfuehrung (korrekter lokaler Kontext fuer hasSiblingInstances() + begehbare
+// Instanz-Zeiger fuer duplicateInstancePath) - der eigentliche Walk ('obj'/'doc') bleibt ROH wie
+// im Original, siehe ausfuehrliche Begruendung am selben Muster in resolveJointRef() (ein
+// frueherer Versuch, HIER ebenfalls durchgehend zu uebersetzen, lieferte bei jedem NICHT
+// duplizierten verschachtelten Fall faelschlich den aeusseren lokalen Spiegel statt des tiefen
+// echten/gerenderten Objekts).
 IdentityHandle IdentityGraph::resolve(App::DocumentObject* obj, const std::string& subPath)
 {
     if (!obj) {
@@ -91,46 +125,46 @@ IdentityHandle IdentityGraph::resolve(App::DocumentObject* obj, const std::strin
     names.insert(names.begin(), obj->getNameInDocument());
 
     bool assemblyPassed = false;
-    AssemblyLink* currentContainer = nullptr;
+    AssemblyLink* localContext = nullptr;
     App::DocumentObject* previousObj = nullptr;
     std::vector<AssemblyLink*> duplicatePath;
 
     for (const auto& objName : names) {
-        App::DocumentObject* rawObj = doc->getObject(objName.c_str());
-        if (!rawObj && previousObj) {
+        obj = doc->getObject(objName.c_str());
+        if (!obj && previousObj) {
             // Gleicher Fallback wie getMovingPartFromSel(): dieser Name gehoert zu einem
             // Top-Dokument-Spiegel, der als Kind des zuletzt aufgeloesten Objekts lebt.
             if (auto* prevAsGroup = freecad_cast<AssemblyLink*>(previousObj)) {
                 for (auto* candidate : prevAsGroup->Group.getValues()) {
                     if (candidate && objName == candidate->getNameInDocument()) {
-                        rawObj = candidate;
-                        doc = rawObj->getDocument();
+                        obj = candidate;
+                        doc = obj->getDocument();
                         break;
                     }
                 }
             }
         }
-        if (!rawObj) {
+        if (!obj) {
             continue;
         }
+        previousObj = obj;
 
-        // Uebersetzung ueber JEDE bisher gekreuzte Instanz-Grenze, nicht nur die letzte.
-        App::DocumentObject* resolvedObj = rawObj;
-        if (currentContainer) {
-            auto it = currentContainer->objLinkMap.find(rawObj);
-            if (it != currentContainer->objLinkMap.end()) {
-                resolvedObj = it->second;
+        // 'localObj' ist NUR die Buchfuehrungs-Variable - beeinflusst NICHT den rohen Walk.
+        App::DocumentObject* localObj = obj;
+        if (localContext) {
+            auto it = localContext->objLinkMap.find(obj);
+            if (it != localContext->objLinkMap.end()) {
+                localObj = it->second;
             }
         }
-        previousObj = resolvedObj;
 
-        if (resolvedObj->isLink()) {
-            if (auto* linkedObj = resolvedObj->getLinkedObject()) {
+        if (obj->isLink()) {
+            if (auto* linkedObj = obj->getLinkedObject()) {
                 doc = linkedObj->getDocument();
             }
         }
 
-        if (resolvedObj == rootAssembly) {
+        if (obj == rootAssembly) {
             assemblyPassed = true;
             continue;
         }
@@ -138,21 +172,21 @@ IdentityHandle IdentityGraph::resolve(App::DocumentObject* obj, const std::strin
             continue;
         }
 
-        if (resolvedObj->isDerivedFrom<App::DocumentObjectGroup>()) {
+        if (obj->isDerivedFrom<App::DocumentObjectGroup>()) {
             continue;
         }
-        if (resolvedObj->isLinkGroup()) {
+        if (obj->isLinkGroup()) {
             continue;
         }
 
-        if (auto* assemblyLink = freecad_cast<AssemblyLink*>(resolvedObj)) {
+        if (auto* assemblyLink = freecad_cast<AssemblyLink*>(localObj)) {
             const bool rigid = assemblyLink->isRigid();
             if (!rigid) {
                 if (auto* linkedAssembly = assemblyLink->getLinkedAssembly()) {
-                    if (hasSiblingInstances(candidatesFor(rootAssembly, currentContainer), assemblyLink)) {
+                    if (hasSiblingInstances(candidatesFor(rootAssembly, localContext), assemblyLink)) {
                         duplicatePath.push_back(assemblyLink);
                     }
-                    currentContainer = assemblyLink;
+                    localContext = assemblyLink;
                     doc = linkedAssembly->getDocument();
                 }
                 continue;
@@ -161,12 +195,84 @@ IdentityHandle IdentityGraph::resolve(App::DocumentObject* obj, const std::strin
         }
 
         IdentityHandle result;
-        result.templateObj = resolvedObj;
+        result.templateObj = obj;
         result.duplicateInstancePath = duplicatePath;
         return result;
     }
 
     return {};
+}
+
+// FCPROJECT-PATCH (2026-09-19, IdentityGraph-Umbau, Phase 0): generalisiert
+// AssemblyObject::canonicalizeForMbD() - siehe deren ausfuehrlichen Kommentar am
+// Definitionsort (AssemblyObject.cpp) fuer die volle Herleitung des Algorithmus, den diese
+// Fassung nachbildet. Einziger Verhaltensunterschied: statt bei der ERSTEN gefundenen
+// Instanz-Duplikation sofort mit dem unveraenderten Eingabe-'obj' aufzugeben, wird die
+// Duplikation in duplicateInstancePath vermerkt und die Uebersetzung fortgesetzt.
+IdentityHandle IdentityGraph::resolveObject(App::DocumentObject* obj)
+{
+    if (!obj) {
+        return {};
+    }
+
+    std::vector<AssemblyLink*> path;
+    if (!findLocalGroupPath(rootAssembly->Group.getValues(), obj, path)) {
+        // 'obj' liegt nicht im eigenen lokalen Baum - evtl. die lokale Spiegel-Kopie einer
+        // verschachtelten Unterbaugruppe (siehe canonicalizeForMbD()'s GrandTop-Fallback):
+        // an jede eigene, nicht-rigide Unterbaugruppe delegieren, deren eigenes Dokument zu
+        // 'obj' passt.
+        for (auto* asmLink : rootAssembly->getSubAssemblies()) {
+            if (!asmLink || asmLink->isRigid()) {
+                continue;
+            }
+            AssemblyObject* nested = asmLink->getLinkedAssembly();
+            if (!nested || nested == rootAssembly || nested->getDocument() != obj->getDocument()) {
+                continue;
+            }
+            IdentityGraph nestedGraph(nested);
+            return nestedGraph.resolveObject(obj);
+        }
+        IdentityHandle result;
+        result.templateObj = obj;
+        return result;
+    }
+
+    AssemblyLink* previousLink = nullptr;
+    std::vector<AssemblyLink*> duplicatePath;
+    for (auto* mirrorLink : path) {
+        if (hasSiblingInstances(candidatesFor(rootAssembly, previousLink), mirrorLink)) {
+            duplicatePath.push_back(mirrorLink);
+        }
+
+        App::DocumentObject* levelReal = mirrorLink;
+        if (previousLink) {
+            levelReal = previousLink->getSourceForMirror(mirrorLink);
+            if (!levelReal) {
+                IdentityHandle result;
+                result.templateObj = obj;
+                result.duplicateInstancePath = duplicatePath;
+                return result;
+            }
+        }
+        auto* realAsmLink = freecad_cast<AssemblyLink*>(levelReal);
+        if (!realAsmLink || realAsmLink->isRigid()) {
+            IdentityHandle result;
+            result.templateObj = levelReal;
+            result.duplicateInstancePath = duplicatePath;
+            return result;
+        }
+        previousLink = realAsmLink;
+    }
+
+    IdentityHandle result;
+    if (path.empty()) {
+        result.templateObj = obj;
+        return result;
+    }
+    App::DocumentObject* resolved = path.back()->getSourceForMirror(obj);
+    result.templateObj = resolved ? resolved : obj;
+    result.duplicateInstancePath = duplicatePath;
+    return result;
 }
 
 // FCPROJECT-PATCH (2026-09-19, IdentityGraph-Umbau, Phase 0): generalisiert
@@ -212,7 +318,23 @@ IdentityHandle IdentityGraph::resolveJointRef(
         return {};
     }
 
-    AssemblyLink* currentContainer = nullptr;
+    // FCPROJECT-PATCH (2026-09-19, Korrektur nach Verifikations-Fehlschlag gegen
+    // test_fixed_nested_flex & Co.): ZWEI getrennte Zustaende werden parallel mitgefuehrt, nicht
+    // nur einer:
+    // - 'obj'/'doc' (unten): der ROHE, ueber die geteilten/verlinkten Dokumente laufende Walk -
+    //   GENAU wie AssemblyUtils::resolveJointReference()'s bestehender Walk. Sein Endergebnis
+    //   wird als IdentityHandle::templateObj uebernommen - das tiefste ECHTE Objekt, exakt was
+    //   "Adressieren statt Kopieren" (docs/ARCHITECTURE.md §5) fuer den Solver haben will, WENN
+    //   keine Duplikation vorliegt (ein erster Versuch, hier IMMER ueber objLinkMap zu
+    //   uebersetzen, ergab bei jedem NICHT duplizierten verschachtelten Fall faelschlich den
+    //   AEUSSEREN lokalen Spiegel statt des tiefen echten Objekts - siehe Git-Historie dieses
+    //   Kommentars/Commits fuer den Befund).
+    // - 'localContext' (AssemblyLink*): NUR fuer Buchfuehrung - der zuletzt gekreuzte Container,
+    //   IMMER instanzaufgeloest (transitiv uebersetzt), genutzt um (a) hasSiblingInstances() im
+    //   jeweils korrekten lokalen Kontext zu pruefen (unabhaengig davon, ob dieser konkrete
+    //   Sprung selbst dupliziert ist) und (b) JEDE tatsaechlich als dupliziert erkannte Ebene mit
+    //   einem echten, direkt begehbaren lokalen Zeiger in duplicateInstancePath einzutragen.
+    AssemblyLink* localContext = nullptr;
     std::vector<AssemblyLink*> duplicatePath;
 
     for (size_t i = 0; i < names.size(); ++i) {
@@ -221,18 +343,20 @@ IdentityHandle IdentityGraph::resolveJointRef(
             break;
         }
 
-        App::DocumentObject* rawObj = doc->getObject(objName.c_str());
-        if (!rawObj) {
+        App::DocumentObject* obj = doc->getObject(objName.c_str());
+        if (!obj) {
             // Bewusst defensiv wie im Original: kein Rateversuch, der Aufrufer faellt auf
             // getMovingPartFromRef() zurueck.
             return {};
         }
 
-        App::DocumentObject* obj = rawObj;
-        if (currentContainer) {
-            auto it = currentContainer->objLinkMap.find(rawObj);
-            if (it != currentContainer->objLinkMap.end()) {
-                obj = it->second;
+        // 'localObj' ist NUR die Buchfuehrungs-Variable (siehe Kommentar oben) - beeinflusst
+        // NICHT den rohen Walk (doc-Umschaltung/'obj' bleiben unveraendert).
+        App::DocumentObject* localObj = obj;
+        if (localContext) {
+            auto it = localContext->objLinkMap.find(obj);
+            if (it != localContext->objLinkMap.end()) {
+                localObj = it->second;
             }
         }
 
@@ -242,13 +366,13 @@ IdentityHandle IdentityGraph::resolveJointRef(
             }
         }
 
-        if (auto* assemblyLink = freecad_cast<AssemblyLink*>(obj)) {
+        if (auto* assemblyLink = freecad_cast<AssemblyLink*>(localObj)) {
             if (auto* linkedAssembly = assemblyLink->getLinkedAssembly()) {
                 doc = linkedAssembly->getDocument();
-                if (hasSiblingInstances(candidatesFor(rootAssembly, currentContainer), assemblyLink)) {
+                if (hasSiblingInstances(candidatesFor(rootAssembly, localContext), assemblyLink)) {
                     duplicatePath.push_back(assemblyLink);
                 }
-                currentContainer = assemblyLink;
+                localContext = assemblyLink;
             }
         }
 
@@ -267,13 +391,6 @@ IdentityHandle IdentityGraph::resolveJointRef(
 
         IdentityHandle result;
         result.templateObj = obj;
-        for (size_t j = i + 1; j < names.size(); ++j) {
-            // Rest-Sub-Pfad wird bewusst nicht mitgefuehrt (anders als
-            // AssemblyUtils::ResolvedJointRef::subPath) - IdentityHandle beschreibt die
-            // Teil-Identitaet, nicht das anschliessende Geometrie-Element. Aufrufer, die den
-            // Rest brauchen, bleiben vorerst bei resolveJointReference().
-            break;
-        }
         result.duplicateInstancePath = duplicatePath;
         return result;
     }
@@ -360,7 +477,7 @@ std::vector<App::DocumentObject*> IdentityGraph::mirrorsOf(const IdentityHandle&
             result.push_back(candidate);
             continue;
         }
-        IdentityHandle candidateHandle = resolve(candidate);
+        IdentityHandle candidateHandle = resolveObject(candidate);
         if (candidateHandle == h) {
             result.push_back(candidate);
         }
@@ -372,7 +489,7 @@ bool IdentityGraph::isGrounded(const IdentityHandle& h)
 {
     if (!groundedBuilt) {
         for (auto* obj : rootAssembly->getGroundedParts()) {
-            groundedSet.insert(resolve(obj));
+            groundedSet.insert(resolveObject(obj));
         }
         groundedBuilt = true;
     }

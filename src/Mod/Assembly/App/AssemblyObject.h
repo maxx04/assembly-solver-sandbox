@@ -370,6 +370,18 @@ public:
     // erhalten die loesende Baugruppe nur als const-Zeiger).
     std::vector<AssemblyLink*> getSubAssemblies() const;
 
+    // FCPROJECT-PATCH (2026-09-19, IdentityGraph-Umbau Phase 0, siehe
+    // /home/maxx/.claude/plans/enumerated-roaming-river.md): rein diagnostische
+    // Aequivalenz-Pruefung fuer die Verifikations-Testmatrix - vergleicht IdentityGraph::resolve()/
+    // resolveJointRef() gegen canonicalizeForMbD()/AssemblyUtils::resolveJointReference() fuer
+    // JEDES geerdete Teil und JEDE Joint-Referenz dieser Baugruppe (inkl. subJoints). Liefert eine
+    // Liste menschenlesbarer Zeilen zurueck: pro geprueftem Objekt entweder "MATCH ...",
+    // "DIVERGENCE (by design, dupliziert) ..." (erwartete Abweichung, siehe Kommentar am
+    // Definitionsort) oder "MISMATCH ..." (unerwartete Abweichung - ein Bug im neuen Graphen).
+    // Wird entfernt, sobald die eigentlichen Aufrufstellen in Phase 1+ auf den Graphen umgestellt
+    // sind und dieser Vergleich gegenstandslos wird.
+    std::vector<std::string> verifyIdentityGraphEquivalence();
+
     // FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix,
     // 2026-09-03, Nutzerentscheidung "oben nach unten"): das Gegenstueck zu getSubAssemblies() -
     // sucht ueber getInList() (funktioniert dank App::PropertyXLink dokumentuebergreifend) nach

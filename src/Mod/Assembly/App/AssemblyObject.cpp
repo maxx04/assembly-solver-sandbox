@@ -80,6 +80,7 @@
 #include <OndselSolver/ExternalSystem.h>
 #include <OndselSolver/enum.h>
 
+#include "AssemblyIdentityGraph.h"
 #include "AssemblyLink.h"
 #include "AssemblyObject.h"
 #include "AssemblyObjectPy.h"
@@ -3795,6 +3796,85 @@ std::vector<AssemblyLink*> AssemblyObject::getSubAssemblies() const
     }
 
     return subAssemblies;
+}
+
+// FCPROJECT-PATCH (2026-09-19, IdentityGraph-Umbau Phase 0): siehe ausfuehrliche Erklaerung am
+// Deklarationsort in AssemblyObject.h. Rein diagnostisch, temporaer fuer die
+// Verifikations-Testmatrix (siehe /home/maxx/.claude/plans/enumerated-roaming-river.md).
+std::vector<std::string> AssemblyObject::verifyIdentityGraphEquivalence()
+{
+    std::vector<std::string> report;
+    IdentityGraph graph(this);
+
+    auto describe = [](App::DocumentObject* obj) -> std::string {
+        return obj ? obj->getFullName() : std::string("<null>");
+    };
+
+    auto classify = [&](
+                         const std::string& label,
+                         App::DocumentObject* oldResolved,
+                         App::DocumentObject* newResolved,
+                         bool graphSawDuplication,
+                         bool oldSawDuplication
+                     ) {
+        if (newResolved == oldResolved) {
+            report.push_back("MATCH " + label + " -> '" + describe(newResolved) + "'");
+        }
+        else if (graphSawDuplication || oldSawDuplication) {
+            // Erwartete Abweichung: canonicalizeForMbD()/resolveJointReference() geben bei
+            // Instanz-Duplikation bewusst frueh auf (siehe deren Kommentare), waehrend
+            // IdentityGraph tiefengenerell weiteruebersetzt - siehe Plan-Datei fuer die
+            // Herleitung, warum das die eigentliche Fehlerbehebung ist.
+            report.push_back(
+                "DIVERGENCE (by design, dupliziert) " + label + ": alt='" + describe(oldResolved)
+                + "' neu='" + describe(newResolved) + "'"
+            );
+        }
+        else {
+            report.push_back(
+                "MISMATCH " + label + ": alt='" + describe(oldResolved) + "' neu='"
+                + describe(newResolved) + "'"
+            );
+        }
+    };
+
+    for (auto* obj : getGroundedParts()) {
+        App::DocumentObject* oldResolved = canonicalizeForMbD(obj);
+        IdentityHandle handle = graph.resolveObject(obj);
+        App::DocumentObject* newResolved = graph.materialize(graph.resolveForSolver(handle));
+        classify(
+            "grounded '" + describe(obj) + "'",
+            oldResolved,
+            newResolved,
+            !handle.duplicateInstancePath.empty(),
+            false
+        );
+    }
+
+    for (const auto& jointRef : getJoints(false, true, false)) {
+        for (const char* propName : {"Reference1", "Reference2"}) {
+            ResolvedJointRef oldRef
+                = resolveJointReference(this, jointRef.joint, propName, jointRef.nestingPrefix);
+            if (!oldRef.obj) {
+                // Alte Funktion liefert hier ohnehin nichts (z.B. Joint-Typ ohne diese
+                // Referenz) - kein sinnvoller Vergleichspunkt.
+                continue;
+            }
+            IdentityHandle handle
+                = graph.resolveJointRef(jointRef.joint, propName, jointRef.nestingPrefix);
+            App::DocumentObject* newResolved = graph.materialize(graph.resolveForSolver(handle));
+            classify(
+                "joint '" + describe(jointRef.joint) + "'." + propName + " (nestingPrefix='"
+                    + jointRef.nestingPrefix + "')",
+                oldRef.obj,
+                newResolved,
+                !handle.duplicateInstancePath.empty(),
+                oldRef.resolvedViaInstanceMirror
+            );
+        }
+    }
+
+    return report;
 }
 
 // FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix, 2026-09-03):

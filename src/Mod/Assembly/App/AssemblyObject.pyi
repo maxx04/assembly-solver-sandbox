@@ -144,6 +144,20 @@ class AssemblyObject(Part):
         ...
 
     @constmethod
+    def verifyIdentityGraphEquivalence(self) -> Any:
+        """
+        FCPROJECT-PATCH (2026-09-19, IdentityGraph-Umbau Phase 0, siehe
+        /home/maxx/.claude/plans/enumerated-roaming-river.md): rein diagnostisch, temporaer fuer
+        die Verifikations-Testmatrix - vergleicht IdentityGraph::resolve()/resolveJointRef() gegen
+        canonicalizeForMbD()/resolveJointReference() fuer jedes geerdete Teil und jede
+        Joint-Referenz dieser Baugruppe.
+
+        Returns: Liste von Strings, je Zeile "MATCH ...", "DIVERGENCE (by design, dupliziert) ..."
+        (erwartete Abweichung bei Instanz-Duplikation) oder "MISMATCH ..." (unerwartete Abweichung).
+        """
+        ...
+
+    @constmethod
     def exportAsASMT(self, file_name: str, /) -> None:
         """
         Export the assembly in a text format called ASMT.
