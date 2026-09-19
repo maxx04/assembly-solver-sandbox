@@ -1439,9 +1439,10 @@ App::DocumentObject* AssemblyObject::getJointOfPartConnectingToGround(
         return nullptr;
     }
 
-    std::vector<App::DocumentObject*> joints = getJointsOfPart(part);
+    std::vector<JointRef> joints = getJointsOfPart(part);
 
-    for (auto joint : joints) {
+    for (auto& jr : joints) {
+        App::DocumentObject* joint = jr.joint;
         if (!joint) {
             continue;
         }
@@ -1450,17 +1451,21 @@ App::DocumentObject* AssemblyObject::getJointOfPartConnectingToGround(
             continue;
         }
 
-        App::DocumentObject* part1 = getMovingPartFromRef(joint, "Reference1");
-        App::DocumentObject* part2 = getMovingPartFromRef(joint, "Reference2");
+        // FCPROJECT-PATCH (2026-09-20, siehe getJointsOfPart()-Deklaration): resolvePartForMbD()
+        // mit demselben nestingPrefix statt der adressierungsblinden getMovingPartFromRef() -
+        // 'part' ist bereits die instanzeigene, kanonische Identitaet (siehe getJointsOfPart()),
+        // der Vergleich muss also denselben Aufloesungsweg fuer part1/part2 nutzen.
+        App::DocumentObject* part1 = resolvePartForMbD(joint, "Reference1", jr.nestingPrefix);
+        App::DocumentObject* part2 = resolvePartForMbD(joint, "Reference2", jr.nestingPrefix);
         if (!part1 || !part2) {
             continue;
         }
 
-        if (part == part1 && isJointConnectingPartToGround(joint, "Reference1")) {
+        if (part == part1 && isJointConnectingPartToGround(joint, "Reference1", jr.nestingPrefix)) {
             name = "Reference1";
             return joint;
         }
-        if (part == part2 && isJointConnectingPartToGround(joint, "Reference2")) {
+        if (part == part2 && isJointConnectingPartToGround(joint, "Reference2", jr.nestingPrefix)) {
             name = "Reference2";
             return joint;
         }
@@ -1789,7 +1794,7 @@ std::vector<App::DocumentObject*> AssemblyObject::getJointsOfObj(App::DocumentOb
     return jointsOf;
 }
 
-std::vector<App::DocumentObject*> AssemblyObject::getJointsOfPart(App::DocumentObject* part)
+std::vector<JointRef> AssemblyObject::getJointsOfPart(App::DocumentObject* part)
 {
     if (!part) {
         return {};
@@ -1802,14 +1807,20 @@ std::vector<App::DocumentObject*> AssemblyObject::getJointsOfPart(App::DocumentO
     // Joint nie, selbst wenn beide dasselbe reale Teil meinen.
     App::DocumentObject* canonicalPart = canonicalizeForMbD(part);
 
-    std::vector<App::DocumentObject*> joints = extractJointObjects(getJoints());
-    std::vector<App::DocumentObject*> jointsOf;
+    std::vector<JointRef> joints = getJoints();
+    std::vector<JointRef> jointsOf;
 
-    for (auto joint : joints) {
-        App::DocumentObject* part1 = canonicalizeForMbD(getMovingPartFromRef(joint, "Reference1"));
-        App::DocumentObject* part2 = canonicalizeForMbD(getMovingPartFromRef(joint, "Reference2"));
+    // FCPROJECT-PATCH (2026-09-20, siehe Deklaration in AssemblyObject.h): resolvePartForMbD()
+    // statt der adressierungsblinden getMovingPartFromRef()+canonicalizeForMbD()-Kombination -
+    // muss mit demselben nestingPrefix aufgeloest werden, mit dem getJoints() diesen Joint (ggf.
+    // ein Subjoint einer verschachtelten flexiblen AssemblyLink) ueberhaupt gefunden hat, sonst
+    // ist der Vergleich bei einer duplizierten Unterbaugruppe strukturell unentscheidbar (siehe
+    // ausfuehrliche Begruendung an der Deklaration).
+    for (auto& jr : joints) {
+        App::DocumentObject* part1 = resolvePartForMbD(jr.joint, "Reference1", jr.nestingPrefix);
+        App::DocumentObject* part2 = resolvePartForMbD(jr.joint, "Reference2", jr.nestingPrefix);
         if (canonicalPart == part1 || canonicalPart == part2) {
-            jointsOf.push_back(joint);
+            jointsOf.push_back(jr);
         }
     }
     return jointsOf;
@@ -2025,13 +2036,23 @@ void AssemblyObject::fixGroundedPart(App::DocumentObject* obj, Base::Placement& 
     mbdAssembly->addJoint(mbdJoint);
 }
 
-bool AssemblyObject::isJointConnectingPartToGround(App::DocumentObject* joint, const char* propname)
+bool AssemblyObject::isJointConnectingPartToGround(
+    App::DocumentObject* joint,
+    const char* propname,
+    const std::string& nestingPrefix
+)
 {
     if (!joint || !isJointTypeConnecting(joint)) {
         return false;
     }
 
-    App::DocumentObject* part = getMovingPartFromRef(joint, propname);
+    // FCPROJECT-PATCH (2026-09-20, siehe getJointsOfPart()-Deklaration): resolvePartForMbD()
+    // statt der adressierungsblinden getMovingPartFromRef() - fuer einen Subjoint einer
+    // duplizierten flexiblen Unterbaugruppe (nestingPrefix != "") liefert die alte Funktion das
+    // GETEILTE Template-Objekt statt der instanzeigenen Identitaet, wodurch die unten folgenden
+    // isPartGrounded()/isPartConnected()-Aufrufe fuer KEINE der beiden Instanzen mehr zum
+    // korrekten getJointsOfPart()-Ergebnis passen.
+    App::DocumentObject* part = resolvePartForMbD(joint, propname, nestingPrefix);
     if (!part) {
         return false;
     }
@@ -2049,10 +2070,11 @@ bool AssemblyObject::isJointConnectingPartToGround(App::DocumentObject* joint, c
     }
 
     // to know if a joint is connecting to ground we disable all the other joints
-    std::vector<App::DocumentObject*> jointsOfPart = getJointsOfPart(part);
+    std::vector<JointRef> jointsOfPart = getJointsOfPart(part);
     std::vector<bool> activatedStates;
 
-    for (auto jointi : jointsOfPart) {
+    for (auto& jri : jointsOfPart) {
+        App::DocumentObject* jointi = jri.joint;
         if (jointi->getFullName() == joint->getFullName()) {
             continue;
         }
@@ -2064,7 +2086,8 @@ bool AssemblyObject::isJointConnectingPartToGround(App::DocumentObject* joint, c
     isConnected = isPartConnected(part);
 
     // restore activation states
-    for (auto jointi : jointsOfPart) {
+    for (auto& jri : jointsOfPart) {
+        App::DocumentObject* jointi = jri.joint;
         if (jointi->getFullName() == joint->getFullName() || activatedStates.empty()) {
             continue;
         }
@@ -3557,12 +3580,17 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
         // der ECHTE Slider-Joint bekommt einen komplett separaten, unabhaengigen MbD-Koerper -
         // BoxB folgt BoxDs Bewegung dadurch nicht.
         auto addConnectedFixedParts = [&](App::DocumentObject* currentPart, auto& self) -> void {
-            std::vector<App::DocumentObject*> joints = getJointsOfPart(currentPart);
-            for (auto* joint : joints) {
+            std::vector<JointRef> joints = getJointsOfPart(currentPart);
+            for (auto& jr : joints) {
+                App::DocumentObject* joint = jr.joint;
                 JointType jointType = getJointType(joint);
                 if (jointType == JointType::Fixed) {
-                    App::DocumentObject* part1 = canonicalizeForMbD(getMovingPartFromRef(joint, "Reference1"));
-                    App::DocumentObject* part2 = canonicalizeForMbD(getMovingPartFromRef(joint, "Reference2"));
+                    // FCPROJECT-PATCH (2026-09-20, siehe getJointsOfPart()-Deklaration):
+                    // resolvePartForMbD() mit demselben nestingPrefix statt der
+                    // adressierungsblinden getMovingPartFromRef() - dieselbe Duplikations-
+                    // Luecke wie bei getJointOfPartConnectingToGround().
+                    App::DocumentObject* part1 = resolvePartForMbD(joint, "Reference1", jr.nestingPrefix);
+                    App::DocumentObject* part2 = resolvePartForMbD(joint, "Reference2", jr.nestingPrefix);
                     if (!part1 || !part2) {
                         continue;
                     }
@@ -3573,8 +3601,31 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
                         continue;
                     }
 
-                    Base::Placement plci = getPlacementFromProp(partToAdd, "Placement");
-                    MbDPartData partData = {mbdPart, plc.inverse() * plci};
+                    // FCPROJECT-PATCH (2026-09-20, "BG25 Slider-Drag Achse verschoben,
+                    // Teil 2" - siehe todo-bg25-slider-drag-two-instances): 'partToAdd' kann,
+                    // genau wie beim "neues Teil"-Zweig oben in getMbDData(), ein Bug-C-
+                    // bewahrtes, verschachteltes Spiegelobjekt sein (z.B. Fuehrung331, innerhalb
+                    // eines nicht an Identity stehenden Containers) - 'plci' (seine ROHE, lokale
+                    // Placement) ist dann NICHT im selben (globalen) Koordinatenraum wie 'plc'
+                    // (Rahmens eigene, bereits absolute Placement). Ohne diese Korrektur wich der
+                    // hier berechnete offsetPlc um genau den Container-Versatz ab - sichtbar als
+                    // Fehlausrichtung zwischen dem starr gebuendelten Fuehrung331 (dieser Zweig)
+                    // und dem separat, MIT containerChainPlc registrierten Halterbaugruppe003
+                    // (Slider-Gegenstueck) - beide MUESSEN relativ zueinander exakt fluchten.
+                    std::vector<Assembly::AssemblyLink*> partToAddContainerPath;
+                    Base::Placement partToAddContainerChainPlc;
+                    if (findLocalGroupPath(Group.getValues(), partToAdd, partToAddContainerPath)) {
+                        for (auto* containerLink : partToAddContainerPath) {
+                            partToAddContainerChainPlc
+                                = partToAddContainerChainPlc * containerLink->Placement.getValue();
+                        }
+                    }
+                    Base::Placement plciLocal = getPlacementFromProp(partToAdd, "Placement");
+                    Base::Placement plci = partToAddContainerChainPlc.isIdentity()
+                        ? plciLocal
+                        : partToAddContainerChainPlc * plciLocal;
+                    MbDPartData partData
+                        = {mbdPart, plc.inverse() * plci, partToAddContainerChainPlc};
                     objectPartMap[partToAdd] = partData;  // Store the association
                     Base::Console().log(
                         "FCPROJECT-DEBUG getMbDData: BUNDLE-FIXED key '%s' -> mbdPart '%s' (via joint '%s')\n",

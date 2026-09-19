@@ -722,6 +722,28 @@ App::DocumentObject* getMovingPartFromSel(
     // Ersetzung inline, ohne Signaturaenderung.
     Assembly::AssemblyLink* lastDuplicatedCrossing = nullptr;
 
+    // FCPROJECT-PATCH (2026-09-20, "BG25 Slider-Drag Instanz 2 komplett unziehbar" - siehe
+    // todo-bg25-slider-drag-two-instances): der Segment-fuer-Segment Namens-Walk unten sucht
+    // jeden Namen per doc->getObject() im JEWEILS AKTUELLEN 'doc' - sobald ein Segment eine
+    // FLEXIBLE, duplizierte AssemblyLink kreuzt, wird 'doc' auf das GETEILTE Vorlage-Dokument
+    // umgeschaltet (siehe Zeile mit 'doc = linkedAssembly->getDocument()' unten). Ein
+    // NACHFOLGENDES Namenssegment kann aber selbst wieder ein TOP-DOKUMENT-Spiegelobjekt sein
+    // (z.B. eine verschachtelte RIGIDE Unterbaugruppe wie "Halterbaugruppe003" - lebt als
+    // eigenstaendiges Objekt in DERSELBEN Instanz-Gruppe wie der zuvor gekreuzte Container,
+    // NICHT im geteilten Dokument). Bei der ERSTEN eingefuegten Instanz kollidiert das
+    // zufaellig nie (deren Spiegelnamen "Halterbaugruppe"/"Halterbaugruppe001" treffen
+    // zufaellig dieselben Namen wie BG25s EIGENE interne Duplikation), bei jeder WEITEREN
+    // Instanz (hier automatisch auf "002"/"003" umbenannt) existiert dieser Name im geteilten
+    // Dokument nicht - doc->getObject() liefert nullptr, der gesamte Walk bricht ab (return
+    // nullptr) - live reproduziert: Vorauswahl/Preselection funktioniert (nutzt einen anderen
+    // Coin3D-Mechanismus), aber der eigentliche Zug-Start (dieser Walk) liefert 'part'=<null>.
+    // Fix: bei einem gescheiterten doc->getObject() zusaetzlich in der Group des zuletzt
+    // erfolgreich aufgeloesten Objekts nach demselben Namen suchen (das ist exakt die Gruppe,
+    // in der ein TOP-DOKUMENT-Spiegel eines VERSCHACHTELTEN Containers liegt) - funktioniert
+    // rekursiv fuer beliebige Verschachtelungstiefe, weil 'previousObj' bei jedem Schritt
+    // aktualisiert wird, nicht nur beim ERSTEN Kreuzen einer duplizierten Instanz.
+    App::DocumentObject* previousObj = nullptr;
+
     // FCPROJECT-PATCH (Teilschritt 3.1b): der Namens-Walk aus der urspruenglichen
     // Befund-3-Live-Diagnose 2026-09-03 ist inzwischen nachvollzogen - Logs bleiben fuer
     // kuenftige Diagnosen erhalten, laufen aber nur noch hinter verboseLog, da diese Funktion
@@ -749,6 +771,20 @@ App::DocumentObject* getMovingPartFromSel(
 
     for (const auto& objName : names) {
         obj = doc->getObject(objName.c_str());
+        if (!obj && previousObj) {
+            // FCPROJECT-PATCH (2026-09-20, siehe Deklaration von 'previousObj' oben): Fallback -
+            // dieser Name gehoert zu einem TOP-DOKUMENT-Spiegel, der als Kind des zuletzt
+            // aufgeloesten Objekts lebt (nicht im aktuellen, evtl. bereits umgeschalteten 'doc').
+            if (auto* prevAsGroup = freecad_cast<Assembly::AssemblyLink*>(previousObj)) {
+                for (auto* candidate : prevAsGroup->Group.getValues()) {
+                    if (candidate && objName == candidate->getNameInDocument()) {
+                        obj = candidate;
+                        doc = obj->getDocument();
+                        break;
+                    }
+                }
+            }
+        }
         if (verboseLog) {
             Base::Console().log(
                 "FCPROJECT-DEBUG   step name='%s' in doc='%s' -> obj='%s'\n",
@@ -760,6 +796,7 @@ App::DocumentObject* getMovingPartFromSel(
         if (!obj) {
             continue;
         }
+        previousObj = obj;
 
         if (obj->isLink()) {  // update the document if necessary for next object
             doc = obj->getLinkedObject()->getDocument();

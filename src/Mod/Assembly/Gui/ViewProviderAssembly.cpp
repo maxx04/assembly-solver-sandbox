@@ -1033,9 +1033,35 @@ ViewProviderAssembly::DragMode ViewProviderAssembly::findDragMode()
         if (!ref) {
             return DragMode::Translation;
         }
-        Base::Placement asmPlc = App::GeoFeature::getGlobalPlacement(getObject<AssemblyObject>());
-        Base::Placement global_plc = asmPlc * App::GeoFeature::getGlobalPlacement(nullptr, ref);
-        jcsGlobalPlc = global_plc * jcsPlc;
+        // FCPROJECT-PATCH (2026-09-20, "BG25 Slider-Drag Achse verschoben" - siehe
+        // todo-bg25-slider-drag-two-instances): 'ref' ist die XLinkSub-Eigenschaft DES JOINTS
+        // selbst - bei einem Subjoint einer verschachtelten flexiblen Unterbaugruppe (z.B. BG25s
+        // eigener interner Slider, ueber subJoints() in diesen Top-Level-Solve gezogen) zeigt sie
+        // IMMER auf das GETEILTE Vorlage-Objekt (z.B. 'Halterbaugruppe001' in BG25s eigenem
+        // Dokument), unabhaengig davon, welche Instanz (330/331) gerade gezogen wird - 'ref' kennt
+        // die Instanz nicht. asmPlc * getGlobalPlacement(nullptr, ref) berechnete die JCS-Achse
+        // deshalb immer relativ zur VORLAGE, nie relativ zur tatsaechlich gezogenen Instanz -
+        // bei Instanz 1 (Container zufaellig an Identity) unsichtbar, bei Instanz 2 (Container
+        // verschoben) landete die Achse komplett daneben. 'docsToMove[0].obj' ist dagegen bereits
+        // die instanzeigene, korrekt aufgeloeste Identitaet (siehe getMovingPartFromSel()-Fix) -
+        // deren eigenes getGlobalPlacement() komponiert die Container-Kette bereits korrekt.
+        // jcsPlc ist relativ zum Objekt (s.o.) - dieselbe lokale Geometrie gilt fuer Vorlage UND
+        // Spiegel, nur die Objekt-Placement selbst unterscheidet sich pro Instanz.
+        // FCPROJECT-PATCH (2026-09-20, Nachbesserung): App::GeoFeature::getGlobalPlacement(obj)
+        // (statische Utility-Funktion) ist NICHT dasselbe wie obj->globalPlacement() (virtuelle
+        // Instanzmethode) - erstere komponiert die Container-Kette live nachweislich falsch/
+        // unvollstaendig (nur eine Achse betroffen, andere blieben lokal), waehrend
+        // globalPlacement() exakt das ist, was auch Pythons obj.getGlobalPlacement() aufruft
+        // (siehe GeoFeaturePyImp.cpp) und was bereits fuer den containerChainPlc-Fix empirisch
+        // als korrekt verifiziert wurde.
+        Base::Placement partGlobalPlc;
+        if (auto* geoFeat = freecad_cast<App::GeoFeature*>(docsToMove[0].obj)) {
+            partGlobalPlc = geoFeat->globalPlacement();
+        }
+        else {
+            partGlobalPlc = App::GeoFeature::getGlobalPlacement(docsToMove[0].obj);
+        }
+        jcsGlobalPlc = partGlobalPlc * jcsPlc;
 
         // Add downstream parts so that they move together
         std::vector<Assembly::ObjRef> downstreamParts
@@ -1405,8 +1431,12 @@ bool ViewProviderAssembly::canDelete(App::DocumentObject* objBeingDeleted) const
                     objToDel.push_back(joint);
                 }
             }
-            joints = assemblyPart->getJointsOfPart(obj);
-            for (auto* joint : joints) {
+            // FCPROJECT-PATCH (2026-09-20): getJointsOfPart() liefert seit dem
+            // Slider-Drag-Fix (siehe todo-bg25-slider-drag-two-instances) JointRef statt
+            // rohem Joint-Zeiger - hier reicht weiterhin nur .joint.
+            std::vector<Assembly::JointRef> jointRefs = assemblyPart->getJointsOfPart(obj);
+            for (auto& jr : jointRefs) {
+                App::DocumentObject* joint = jr.joint;
                 if (joint && joint->getDocument() == ownDoc
                     && std::ranges::find(objToDel, joint) == objToDel.end()) {
                     objToDel.push_back(joint);

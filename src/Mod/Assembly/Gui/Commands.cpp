@@ -350,8 +350,12 @@ void CmdAssemblySelectJointsOfComponent::activated(int iMsg)
 
     std::vector<App::DocumentObject*> jointsToSelect;
     for (auto* comp : components) {
-        std::vector<App::DocumentObject*> partJoints = assembly->getJointsOfPart(comp);
-        jointsToSelect.insert(jointsToSelect.end(), partJoints.begin(), partJoints.end());
+        // FCPROJECT-PATCH (2026-09-20): getJointsOfPart() liefert seit dem Slider-Drag-Fix
+        // (siehe todo-bg25-slider-drag-two-instances) JointRef statt rohem Joint-Zeiger.
+        std::vector<JointRef> partJoints = assembly->getJointsOfPart(comp);
+        for (auto& jr : partJoints) {
+            jointsToSelect.push_back(jr.joint);
+        }
     }
 
     selectObjects(jointsToSelect);

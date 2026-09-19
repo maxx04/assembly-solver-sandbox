@@ -272,7 +272,22 @@ public:
     std::vector<App::DocumentObject*> getGroundedJoints();
     std::vector<App::DocumentObject*> getRigidGroups();
     std::vector<App::DocumentObject*> getJointsOfObj(App::DocumentObject* obj);
-    std::vector<App::DocumentObject*> getJointsOfPart(App::DocumentObject* part);
+    // FCPROJECT-PATCH (2026-09-20, "BG25 Slider-Drag beide Instanzen" - siehe
+    // todo-bg25-slider-drag-two-instances): Rueckgabetyp von vector<DocumentObject*> auf
+    // vector<JointRef> umgestellt - diese GUI-Drag-Traversal (getJointOfPartConnectingToGround(),
+    // isJointConnectingPartToGround()) wurde bei der urspruenglichen "Adressieren statt
+    // Kopieren"-Migration (Sept. 2026) NIE auf resolvePartForMbD()/nestingPrefix umgestellt und
+    // verglich Joint-Endpunkte weiterhin ueber die adressierungsblinde getMovingPartFromRef() +
+    // ein nacktes canonicalizeForMbD() ohne Instanzkontext. Bei EINER Instanz einer flexiblen
+    // Unterbaugruppe kollabierten Eingabe-Teil und Joint-Endpunkt zufaellig auf denselben
+    // kanonischen Zeiger; sobald der Container selbst dupliziert ist (zwei BG25-Instanzen,
+    // Bug C "Identitaet behalten"), bleibt das Eingabe-Teil bewusst instanzeigen, waehrend der
+    // naive Endpunkt-Vergleich bis zum GETEILTEN Template-Objekt durchkanonisiert - beide
+    // Zeiger stimmen dann fuer KEINE der beiden Instanzen mehr ueberein, ein interner Subjoint
+    // (z.B. der Slider innerhalb BG25) wird fuer gar keine Instanz mehr gefunden. Das
+    // nestingPrefix jedes Joints (siehe getJoints()) ist jetzt Teil des Rueckgabewerts, damit
+    // die Aufrufer resolvePartForMbD() statt der alten Funktionen nutzen koennen.
+    std::vector<JointRef> getJointsOfPart(App::DocumentObject* part);
     App::DocumentObject* getJointOfPartConnectingToGround(
         App::DocumentObject* part,
         std::string& name,
@@ -282,7 +297,16 @@ public:
     std::unordered_set<App::DocumentObject*> fixGroundedParts();
     void fixGroundedPart(App::DocumentObject* obj, Base::Placement& plc, std::string& jointName);
 
-    bool isJointConnectingPartToGround(App::DocumentObject* joint, const char* partPropName);
+    // nestingPrefix-Parameter (2026-09-20, siehe getJointsOfPart()-Deklaration oben): Default ""
+    // haelt den bestehenden Python-Aufruf aus JointObject.py (immer fuer einen Top-Level-Joint,
+    // nestingPrefix implizit leer) unveraendert; nur der interne C++-Aufruf aus
+    // getJointOfPartConnectingToGround() fuer einen ueber subJoints() erreichten Subjoint gibt
+    // sein eigenes nestingPrefix mit.
+    bool isJointConnectingPartToGround(
+        App::DocumentObject* joint,
+        const char* partPropName,
+        const std::string& nestingPrefix = std::string()
+    );
     bool isJointTypeConnecting(App::DocumentObject* joint);
 
     bool isObjInSetOfObjRefs(App::DocumentObject* obj, const std::vector<ObjRef>& pairs);
