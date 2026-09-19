@@ -176,6 +176,22 @@ public:
     {
         std::shared_ptr<MbD::ASMTPart> part;
         Base::Placement offsetPlc;  // This is the offset within the bundled parts
+        // FCPROJECT-PATCH (2026-09-19, "zweite BG25-Instanz falsch eingesetzt" - siehe
+        // requirement-flexible-subassembly-any-anchor-point/Folgefund): Identitaet 'part' kann
+        // (Bug C, alreadyResolved=true) ein NICHT-kanonisiertes, bewusst instanzeigenes
+        // Spiegelobjekt sein, das strukturell innerhalb einer oder mehrerer AssemblyLink-Container
+        // verschachtelt liegt (findLocalGroupPath() von 'this' aus). Dessen eigene Placement-
+        // Property ist dann NICHT die Welt-/Absolut-Position, sondern relativ zu diesen
+        // umschliessenden Containern - deren eigene Placement kann (z.B. wenn der Nutzer eine
+        // zweite Instanz im Baum manuell verschiebt, um Ueberlappung zu vermeiden) von der
+        // Identitaet abweichen. containerChainPlc haelt das Produkt der Container-Placements
+        // (aeusserster zuerst) fest, mit dem eine vom Solver in ABSOLUTEN Weltkoordinaten
+        // berechnete Placement in setNewPlacements() zurueck in die lokale, Container-relative
+        // Placement dieses Spiegelobjekts umgerechnet wird - identisch zu dem, was
+        // App::DocumentObject::getGlobalPlacement() beim Lesen bereits tut, hier nur in die
+        // Gegenrichtung angewendet. Identity (Default) = unveraendertes Verhalten fuer alle
+        // bisherigen, nicht verschachtelten oder voll kanonisierten Faelle.
+        Base::Placement containerChainPlc;
     };
     MbDPartData getMbDData(App::DocumentObject* part, bool alreadyResolved = false);
     std::shared_ptr<MbD::ASMTMarker> makeMbdMarker(std::string& name, Base::Placement& plc);

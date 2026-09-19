@@ -759,9 +759,22 @@ void AssemblyObject::doDragStep()
             dragMbdParts.push_back(mbdPart);
 
             Base::Placement plc = getPlacementFromProp(part, "Placement");
-            if (auto it = objectPartMap.find(part);
-                it != objectPartMap.end() && !it->second.offsetPlc.isIdentity()) {
-                plc = plc * it->second.offsetPlc.inverse();
+            if (auto it = objectPartMap.find(part); it != objectPartMap.end()) {
+                if (!it->second.offsetPlc.isIdentity()) {
+                    plc = plc * it->second.offsetPlc.inverse();
+                }
+                // FCPROJECT-PATCH (2026-09-19, siehe containerChainPlc-Deklaration in
+                // AssemblyObject.h): 'plc' ist hier bisher 'part's rohe LOKALE Placement, wird
+                // aber gleich als ABSOLUTE Startposition an MbD uebergeben - dieselbe Luecke wie
+                // in getMbDData()/setNewPlacements(), nur fuer den interaktiven Drag-Pfad. Ohne
+                // diese Korrektur wuerde ein per Maus gezogenes, verschachteltes Bug-C-Spiegel-
+                // objekt (Container nicht an Identity) beim Draggen "frei im Raum schweben"
+                // (falscher/fehlender Container-Offset in der Startposition), waehrend ein
+                // nachfolgendes vollstaendiges solve() wieder korrekt einrastet (das benutzt
+                // bereits containerChainPlc, siehe setNewPlacements()).
+                if (!it->second.containerChainPlc.isIdentity()) {
+                    plc = it->second.containerChainPlc * plc;
+                }
             }
             Base::Vector3d pos = plc.getPosition();
             mbdPart->updateMbDFromPosition3D(
@@ -1214,6 +1227,17 @@ void AssemblyObject::setNewPlacements()
             // Relativgeometrie zwischen den Teilen, biegt nur das Gesamtergebnis so zurecht,
             // dass das geerdete Teil exakt an seinem eingefrorenen Platz landet.
             newPlacement = groundCorrection * newPlacement;
+        }
+        if (!pair.second.containerChainPlc.isIdentity()) {
+            // FCPROJECT-PATCH (2026-09-19, "zweite BG25-Instanz falsch eingesetzt" - siehe
+            // containerChainPlc-Deklaration in AssemblyObject.h): bis hierhin ist 'newPlacement'
+            // die vom Solver berechnete ABSOLUTE Weltposition. 'obj' lebt aber verschachtelt
+            // innerhalb eines oder mehrerer AssemblyLink-Container, deren eigene Placement NICHT
+            // zwingend Identity ist (z.B. zweite Instanz einer flexiblen Unterbaugruppe, vom
+            // Nutzer im Baum manuell weggezogen). Ohne diese Ruecktransformation wuerde die
+            // absolute Weltposition direkt als lokale (Container-relative) Placement geschrieben -
+            // beim Rendern kaeme der Container-Offset dann ein ZWEITES Mal oben drauf.
+            newPlacement = pair.second.containerChainPlc.inverse() * newPlacement;
         }
         if (!propPlacement->getValue().isSame(newPlacement)) {
             propPlacement->setValue(newPlacement);
@@ -3484,10 +3508,31 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
 
     // part has not been associated with an ASMTPart before
     std::string str = part->getFullName();
-    Base::Placement plc = getPlacementFromProp(part, "Placement");
+
+    // FCPROJECT-PATCH (2026-09-19, "zweite BG25-Instanz falsch eingesetzt", siehe
+    // containerChainPlc-Deklaration in AssemblyObject.h fuer die volle Begruendung): 'part' kann
+    // hier ein bewusst NICHT vollstaendig kanonisiertes, instanzeigenes Spiegelobjekt sein
+    // (alreadyResolved=true, Bug C). findLocalGroupPath() (bereits fuer canonicalizeForMbD()
+    // genutzt) liefert die Kette der umschliessenden AssemblyLink-Container von DIESER Instanz aus
+    // - deren Placement wird aufmultipliziert, um aus 'part's lokaler (Container-relativer)
+    // Placement dessen tatsaechliche Weltposition zu machen. Fuer alle unveraenderten Faelle
+    // (part liegt nicht im lokalen Baum dieser Instanz, z.B. weil es bereits vollstaendig auf ein
+    // echtes, flach liegendes Objekt kanonisiert wurde) bleibt containerChainPlc Identity - dann
+    // ist plc wie bisher einfach die rohe lokale Placement.
+    Base::Placement containerChainPlc;
+    if (alreadyResolved) {
+        std::vector<Assembly::AssemblyLink*> containerPath;
+        if (findLocalGroupPath(Group.getValues(), part, containerPath)) {
+            for (auto* containerLink : containerPath) {
+                containerChainPlc = containerChainPlc * containerLink->Placement.getValue();
+            }
+        }
+    }
+    Base::Placement localPlc = getPlacementFromProp(part, "Placement");
+    Base::Placement plc = containerChainPlc.isIdentity() ? localPlc : containerChainPlc * localPlc;
     std::shared_ptr<ASMTPart> mbdPart = makeMbdPart(str, plc);
     mbdAssembly->addPart(mbdPart);
-    MbDPartData data = {mbdPart, Base::Placement()};
+    MbDPartData data = {mbdPart, Base::Placement(), containerChainPlc};
     objectPartMap[part] = data;  // Store the association
     Base::Console().log(
         "FCPROJECT-DEBUG getMbDData: NEW mbdPart '%s' for key '%s'\n",
