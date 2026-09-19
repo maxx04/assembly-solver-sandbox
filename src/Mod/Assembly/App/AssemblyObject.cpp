@@ -3755,6 +3755,23 @@ std::vector<ObjRef> AssemblyObject::getDownstreamParts(
     return downstreamParts;
 }
 
+// FCPROJECT-PATCH (2026-09-19, IdentityGraph-Umbau Phase 2, siehe
+// /home/maxx/.claude/plans/enumerated-roaming-river.md): auf IdentityGraph::resolveJointRef()
+// umgestellt - die adressierungsblinde getMovingPartFromRef() war die letzte verbliebene Stelle
+// im Drag-Modus-Erkennungspfad (siehe ViewProviderAssembly.cpp's Aufrufstelle), die NIE auf
+// resolvePartForMbD()/den Graphen umgestellt wurde (unmigrierter Rest derselben Bug-Klasse wie
+// die bereits gefixten BG25-Slider-Drag-Stellen). resolveForUi()/materialize() statt
+// resolveForSolver(), weil das Ergebnis hier als tatsaechlich zu ziehendes, gerendertes Objekt
+// weiterverwendet wird (ViewProviderAssembly.cpp liest direkt dessen Placement-Property) - nicht
+// als Solver-Identitaet.
+//
+// Bewusst nestingPrefix="" (unveraendert gegenueber dem Altverhalten): getJointOfPartConnectingToGround()
+// gibt das nestingPrefix eines ueber subJoints() erreichten Joints nicht an den Aufrufer zurueck
+// (nur 'joint'+'name') - ein gefundener, tief verschachtelter Joint wuerde deshalb schon vor
+// diesem Umbau mit dem falschen (leeren) Kontext weiterverarbeitet. Das ist eine eigene,
+// vorbestehende Luecke (Signaturerweiterung noetig, betrifft auch ViewProviderAssembly.cpp's
+// eigenen getJointOfPartConnectingToGround()-Aufruf) - bewusst NICHT Teil dieser isolierten,
+// risikoarmen Phase, siehe Projekt-Memory fuer den Stand.
 App::DocumentObject* AssemblyObject::getUpstreamMovingPart(
     App::DocumentObject* part,
     App::DocumentObject*& joint,
@@ -3774,7 +3791,11 @@ App::DocumentObject* AssemblyObject::getUpstreamMovingPart(
         return part;
     }
 
-    part = getMovingPartFromRef(joint, name == "Reference1" ? "Reference2" : "Reference1");
+    const char* otherProp = (name == "Reference1") ? "Reference2" : "Reference1";
+    IdentityGraph graph(this);
+    IdentityHandle handle = graph.resolveJointRef(joint, otherProp, std::string());
+    part = handle.templateObj ? graph.materialize(graph.resolveForUi(handle))
+                               : getMovingPartFromRef(joint, otherProp);
 
     return getUpstreamMovingPart(part, joint, name);
 }
