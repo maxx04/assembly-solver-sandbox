@@ -85,6 +85,90 @@ bool findLocalGroupPath(
     }
     return false;
 }
+// FCPROJECT-PATCH (2026-09-19, IdentityGraph-Umbau Phase 1, "sechste Baustelle unter aeusserer
+// Duplikation"): resolveJointRef()/resolve() koennen einen "Blatt"-Kandidaten finden, der SELBST
+// noch ein lokaler Spiegel INNERHALB des zuletzt gekreuzten Containers ('localContext') ist -
+// z.B. ein Joint, der direkt auf "MidLink.SubLink.BoxB" zeigt, aber nur ueber EIN nestingPrefix
+// ("MidLink.") erreicht wird (der Joint selbst lebt bereits in "Mid", referenziert von dort aus
+// direkt Mids EIGENEN Spiegel von Subs BoxB - "SubLink.BoxB" ist dabei KEIN nestingPrefix-Sprung,
+// sondern bereits Teil des in der Referenz gespeicherten lokalen Pfads). Ohne diese Verfeinerung
+// bliebe das Ergebnis bei diesem noch-nicht-vollstaendig aufgeloesten Zwischen-Spiegel stehen -
+// bei zusaetzlicher Duplikation von 'localContext' selbst (z.B. Mid ist die duplizierte Ebene)
+// fuehrt das dazu, dass materializeForObjectPartMap() weder das tiefe echte Objekt noch einen
+// gueltigen, ueber mirrorsOf() auffindbaren lokalen Spiegel bekommt (mirrorsOf() sucht nur
+// innerhalb der GRAND-lokalen Instanz, "SubLink.BoxB" als MID-Dokument-Objekt liegt da nie).
+//
+// Ablauf: 'obj' liegt (strukturell, per findLocalGroupPath) irgendwo innerhalb
+// localContext->getLinkedAssembly()'s EIGENEM Dokument. Jede dabei durchquerte Ebene ist ein
+// ECHTES (nicht gespiegeltes) Objekt AUS SICHT dieses Dokuments - wird per FORWARD objLinkMap
+// (Quelle -> lokaler Spiegel DIESER Instanz) auf den naechsttieferen lokalen Kontext uebersetzt,
+// GENAU DIE GEGENRICHTUNG zu resolveObject()'s getSourceForMirror()-Walk (der von einem LOKALEN
+// Spiegel aus RUECKWAERTS zur Quelle aufloest - hier ist der Ausgangspunkt bereits die Quelle,
+// weil wir per Konstruktion in einem GETEILTEN/Vorlage-Dokument stehen). 'obj' selbst kann dabei
+// SELBST schon ein lokaler Spiegel sein (z.B. Mids eigener Spiegel von Subs BoxB) - wird zuerst
+// per getSourceForMirror() auf die ECHTE Quelle zurueckgefuehrt, DANN ueber den inzwischen
+// aufgebauten lokalen Kontext forward uebersetzt.
+//
+// path.empty() (obj ist bereits ein DIREKTES Kind von localContext->getLinkedAssembly()'s
+// eigener Gruppe) ist bewusst ein Nullop: das bedeutet, 'obj' ist bereits GENAU das, was der
+// bisherige Walk (nestingPrefix-Kette) erwartungsgemaess liefern sollte (z.B. ein Joint, der
+// INNERHALB von Sub selbst definiert ist und Subs eigenes BoxB direkt referenziert) - eine
+// weitere Vorwaerts-Uebersetzung wuerde hier FAELSCHLICH einen noch tieferen Spiegel liefern,
+// obwohl "Adressieren statt Kopieren" (docs/ARCHITECTURE.md §5) hier explizit das tiefe ECHTE
+// Objekt haben will.
+App::DocumentObject* refineNestedMirrorTarget(
+    AssemblyLink* localContext,
+    App::DocumentObject* obj,
+    std::vector<AssemblyLink*>& duplicatePath
+)
+{
+    AssemblyObject* scope = localContext->getLinkedAssembly();
+    if (!scope) {
+        return obj;
+    }
+
+    std::vector<AssemblyLink*> path;
+    if (!findLocalGroupPath(scope->Group.getValues(), obj, path)) {
+        return obj;
+    }
+    if (path.empty()) {
+        return obj;
+    }
+
+    for (auto* realLink : path) {
+        auto it = localContext->objLinkMap.find(realLink);
+        if (it == localContext->objLinkMap.end()) {
+            return obj;
+        }
+        auto* localMirror = freecad_cast<AssemblyLink*>(it->second);
+        if (!localMirror) {
+            return obj;
+        }
+        if (hasSiblingInstances(localContext->Group.getValues(), localMirror)) {
+            duplicatePath.push_back(localMirror);
+        }
+        localContext = localMirror;
+    }
+
+    App::DocumentObject* realSource = path.back()->getSourceForMirror(obj);
+    if (!realSource) {
+        realSource = obj;
+    }
+
+    // FCPROJECT-PATCH (2026-09-19, Korrektur nach Verifikations-Fehlschlag gegen
+    // test_fixed_double_nested_flex & Co.): Vorwaerts-Uebersetzung auf den lokalen Spiegel nur
+    // anwenden, wenn IRGENDWO auf dem GESAMTEN bisherigen Pfad (vor UND waehrend dieser
+    // Verfeinerung, siehe 'duplicatePath' - vom Aufrufer u.U. schon vorbelegt) tatsaechlich eine
+    // Instanz-Duplikation gefunden wurde. Ohne jede Duplikation will "Adressieren statt
+    // Kopieren" (docs/ARCHITECTURE.md §5) explizit das tiefe ECHTE Objekt - ein erster Versuch,
+    // hier IMMER vorwaerts zu uebersetzen, lieferte bei jedem NICHT duplizierten Fall
+    // faelschlich einen (unnoetigen) lokalen Spiegel statt 'realSource' selbst.
+    if (duplicatePath.empty()) {
+        return realSource;
+    }
+    auto it = localContext->objLinkMap.find(realSource);
+    return it != localContext->objLinkMap.end() ? it->second : realSource;
+}
 }  // namespace
 
 bool IdentityHandle::operator==(const IdentityHandle& other) const
@@ -194,8 +278,18 @@ IdentityHandle IdentityGraph::resolve(App::DocumentObject* obj, const std::strin
             // Rigid: wie ein Blatt behandeln, faellt durch zum "gefunden"-Fall unten.
         }
 
+        // FCPROJECT-PATCH (2026-09-19, "sechste Baustelle unter aeusserer Duplikation" - siehe
+        // ausfuehrlichen Kommentar an refineNestedMirrorTarget()): dasselbe Muster wie in
+        // resolveJointRef().
         IdentityHandle result;
-        result.templateObj = obj;
+        if (localContext) {
+            result.templateObj = refineNestedMirrorTarget(localContext, obj, duplicatePath);
+        }
+        else {
+            IdentityHandle canonical = resolveObject(obj);
+            result.templateObj = canonical.templateObj ? canonical.templateObj : obj;
+            duplicatePath = canonical.duplicateInstancePath;
+        }
         result.duplicateInstancePath = duplicatePath;
         return result;
     }
@@ -389,8 +483,23 @@ IdentityHandle IdentityGraph::resolveJointRef(
             }
         }
 
+        // FCPROJECT-PATCH (2026-09-19, "sechste Baustelle unter aeusserer Duplikation"): 'obj'
+        // kann SELBST noch ein noch nicht vollstaendig aufgeloester lokaler Spiegel sein (siehe
+        // refineNestedMirrorTarget()-Kommentar) - zwei Faelle, je nachdem ob ueberhaupt schon
+        // eine Container-Grenze gekreuzt wurde:
         IdentityHandle result;
-        result.templateObj = obj;
+        if (localContext) {
+            result.templateObj = refineNestedMirrorTarget(localContext, obj, duplicatePath);
+        }
+        else {
+            // Kein nestingPrefix-Sprung noetig, um 'obj' zu finden (typisch: ein Joint im
+            // JointGroup DIESER Baugruppe referenziert direkt einen - evtl. mehrfach
+            // verschachtelten - lokalen Spiegel, z.B. "MidLink.SubLink.BoxB") - resolveObject()
+            // loest das bereits vollstaendig auf (Top-Down-Struktursuche + getSourceForMirror()).
+            IdentityHandle canonical = resolveObject(obj);
+            result.templateObj = canonical.templateObj ? canonical.templateObj : obj;
+            duplicatePath = canonical.duplicateInstancePath;
+        }
         result.duplicateInstancePath = duplicatePath;
         return result;
     }

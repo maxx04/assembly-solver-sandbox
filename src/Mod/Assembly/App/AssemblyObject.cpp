@@ -3386,27 +3386,19 @@ App::DocumentObject* AssemblyObject::canonicalizeForMbD(App::DocumentObject* obj
 // /home/maxx/.claude/plans/enumerated-roaming-river.md): auf IdentityGraph::resolveJointRef()
 // umgestellt - behebt den live beobachteten BG37->BG43->BG67-Bug (resolveJointReference()
 // uebersetzt laut eigenem Kommentar nur den letzten Sprung hinter einer Instanz-Duplikation;
-// resolveJointRef() tut das tiefengenerell, siehe dessen Definition in
-// AssemblyIdentityGraph.cpp). WICHTIG, zweistufig wie das Altverhalten: resolveJointRef()
-// alleine reicht NICHT - fuer einen NICHT verschachtelten Joint (nestingPrefix leer), dessen
-// Referenz zufaellig DIREKT auf ein lokales Spiegel-Objekt INNERHALB einer verschachtelten
-// flexiblen AssemblyLink zeigt (z.B. test_fixed_double_nested_flex's aeusserster Joint,
-// Reference2 direkt auf "MidLink.SubLink.BoxB"s Spiegel gesetzt, KEIN nestingPrefix noetig, da
-// der Joint selbst nicht ueber subJoints erreicht wird), hat resolveJointRef() keinen Grund,
-// ueber diesen bereits gefundenen lokalen Spiegel hinaus weiterzuloesen - ein zweiter
-// graph.resolveObject()-Durchlauf auf dem Ergebnis (Aequivalent zum alten
-// "canonicalizeForMbD(resolved.obj)") schliesst genau diese Luecke, tiefengenerell statt nur
-// einen Sprung. Nur wenn der FORWARD-Walk selbst schon eine Duplikation erkannt hat, wird NICHT
-// erneut aufgeloest (das wuerde die Instanz-Uebersetzung sofort wieder rueckgaengig machen,
-// siehe Bug C / docs/ARCHITECTURE.md §4.1).
+// resolveJointRef() tut das tiefengenerell, INKLUSIVE des Falls, dass die Joint-Referenz direkt
+// auf einen bereits verschachtelten lokalen Spiegel zeigt - siehe refineNestedMirrorTarget() in
+// AssemblyIdentityGraph.cpp fuer die volle Herleitung). resolvePartForMbD() selbst muss dank
+// dieser vollstaendigen Aufloesung im Graphen nur noch MATERIALISIEREN, nicht mehr selbst
+// zweistufig nachkanonisieren wie im Altcode.
 //
 // objectPartMap ist (vor der fuer Phase 3 geplanten IdentityHandle-Umstellung) weiterhin nach
 // rohem Zeiger geschluesselt - bei einer echten Instanz-Duplikation (duplicateInstancePath
-// nicht leer, auf JEDER der beiden Aufloesungsstufen moeglich) MUSS deshalb weiterhin ein PRO
-// INSTANZ eindeutiger Zeiger zurueckgegeben werden (sonst kollabieren zwei Duplikat-Instanzen
-// auf denselben MbD-Teil) - graph.mirrorsOf() liefert genau diesen instanzeigenen lokalen
-// Spiegel. Ohne Duplikation bleibt es beim tiefen ECHTEN Objekt, exakt wie "Adressieren statt
-// Kopieren" (docs/ARCHITECTURE.md §5) es fuer den Solver will.
+// nicht leer) MUSS deshalb weiterhin ein PRO INSTANZ eindeutiger Zeiger zurueckgegeben werden
+// (sonst kollabieren zwei Duplikat-Instanzen auf denselben MbD-Teil) - graph.mirrorsOf() liefert
+// genau diesen instanzeigenen lokalen Spiegel. Ohne Duplikation bleibt es beim tiefen ECHTEN
+// Objekt, exakt wie "Adressieren statt Kopieren" (docs/ARCHITECTURE.md §5) es fuer den Solver
+// will.
 namespace
 {
 App::DocumentObject* materializeForObjectPartMap(IdentityGraph& graph, const IdentityHandle& handle)
@@ -3433,14 +3425,7 @@ App::DocumentObject* AssemblyObject::resolvePartForMbD(
     IdentityGraph graph(this);
     IdentityHandle handle = graph.resolveJointRef(joint, propRefName, nestingPrefix);
     if (handle.templateObj) {
-        if (!handle.duplicateInstancePath.empty()) {
-            return materializeForObjectPartMap(graph, handle);
-        }
-        IdentityHandle canonical = graph.resolveObject(handle.templateObj);
-        if (canonical.templateObj) {
-            return materializeForObjectPartMap(graph, canonical);
-        }
-        return handle.templateObj;
+        return materializeForObjectPartMap(graph, handle);
     }
 
     // Defensiver Ruecksfall: unveraendertes Altverhalten fuer jeden Fall, den
@@ -3893,13 +3878,21 @@ std::vector<std::string> AssemblyObject::verifyIdentityGraphEquivalence()
                 // Referenz) - kein sinnvoller Vergleichspunkt.
                 continue;
             }
+            // FCPROJECT-PATCH (2026-09-19): fairer Vergleich ist nicht die rohe
+            // resolveJointReference()-Rueckgabe allein, sondern was resolvePartForMbD() VOR
+            // Phase 1 daraus gemacht hat (resolvedViaInstanceMirror unveraendert lassen, sonst
+            // per canonicalizeForMbD() weiterkanonisieren) - graph.resolveJointRef() macht
+            // dieselbe Nachbehandlung inzwischen INTERN (siehe refineNestedMirrorTarget()), die
+            // rohe Altfunktion allein tut das nie.
+            App::DocumentObject* oldResolved
+                = oldRef.resolvedViaInstanceMirror ? oldRef.obj : canonicalizeForMbD(oldRef.obj);
             IdentityHandle handle
                 = graph.resolveJointRef(jointRef.joint, propName, jointRef.nestingPrefix);
             App::DocumentObject* newResolved = graph.materialize(graph.resolveForSolver(handle));
             classify(
                 "joint '" + describe(jointRef.joint) + "'." + propName + " (nestingPrefix='"
                     + jointRef.nestingPrefix + "')",
-                oldRef.obj,
+                oldResolved,
                 newResolved,
                 !handle.duplicateInstancePath.empty(),
                 oldRef.resolvedViaInstanceMirror
