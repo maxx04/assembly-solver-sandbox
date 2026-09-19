@@ -68,6 +68,7 @@
 #include <Gui/ViewParams.h>
 #include <Gui/Selection/SoFCSelectionAction.h>
 
+#include <Mod/Assembly/App/AssemblyIdentityGraph.h>
 #include <Mod/Assembly/App/AssemblyLink.h>
 #include <Mod/Assembly/App/AssemblyObject.h>
 #include <Mod/Assembly/App/AssemblyUtils.h>
@@ -200,10 +201,31 @@ bool ViewProviderAssembly::canDragObjectToTarget(App::DocumentObject* obj, App::
     std::vector<App::DocumentObject*> groundedJoints = assemblyPart->getGroundedJoints();
     allJoints.insert(allJoints.end(), groundedJoints.begin(), groundedJoints.end());
 
+    // FCPROJECT-PATCH (2026-09-19, IdentityGraph-Umbau Phase 4, siehe
+    // /home/maxx/.claude/plans/enumerated-roaming-river.md): getMovingPartFromRef() ist
+    // adressierungsblind (liest nur den rohen XLinkSub-Wert) - loest weder einen Joint auf, der
+    // direkt auf einen bereits verschachtelten lokalen Spiegel zeigt ("sechste Baustelle", siehe
+    // refineNestedMirrorTarget() in AssemblyIdentityGraph.cpp), noch eine Instanz-Duplikation
+    // auf. resolveForUi() statt resolveForSolver(), weil 'part1'/'part2' hier gegen 'obj' (das
+    // tatsaechlich im Baum gezogene, gerenderte Objekt) verglichen werden - eine UI-Identitaet,
+    // keine Solver-Identitaet. nestingPrefix bewusst "" fuer JEDEN Joint (unveraendert gegenueber
+    // dem Altverhalten): extractJointObjects() wirft das nestingPrefix bereits weg, bevor diese
+    // Schleife es sehen koennte - betrifft nur ueber subJoints() erreichte, verschachtelte
+    // Joints, nicht die hier relevanten TOP-LEVEL-Joints DIESER Baugruppe (das 'obj', das
+    // gezogen wird, lebt immer lokal in DIESER Baugruppe).
+    Assembly::IdentityGraph graph(assemblyPart);
+    auto resolveMovingPart = [&](App::DocumentObject* joint, const char* propName) -> App::DocumentObject* {
+        Assembly::IdentityHandle handle = graph.resolveJointRef(joint, propName, std::string());
+        if (!handle.templateObj) {
+            return getMovingPartFromRef(joint, propName);
+        }
+        return graph.materialize(graph.resolveForUi(handle));
+    };
+
     for (auto joint : allJoints) {
         // getLinkObjFromProp returns nullptr if the property doesn't exist.
-        App::DocumentObject* part1 = getMovingPartFromRef(joint, "Reference1");
-        App::DocumentObject* part2 = getMovingPartFromRef(joint, "Reference2");
+        App::DocumentObject* part1 = resolveMovingPart(joint, "Reference1");
+        App::DocumentObject* part2 = resolveMovingPart(joint, "Reference2");
         App::DocumentObject* obj1 = getObjFromJointRef(joint, "Reference1");
         App::DocumentObject* obj2 = getObjFromJointRef(joint, "Reference2");
         App::DocumentObject* obj3 = getObjFromProp(joint, "ObjectToGround");
@@ -1392,7 +1414,16 @@ bool ViewProviderAssembly::canDelete(App::DocumentObject* objBeingDeleted) const
                 if (subAsmLink || link) {
                     if (std::ranges::find(objs, obj) == objs.end()) {
                         objs.push_back(obj);
-                        if (subAsmLink && !asmLink->isRigid()) {
+                        // FCPROJECT-PATCH (2026-09-19, IdentityGraph-Umbau Phase 4): pruefte
+                        // bisher faelschlich die Starrheit des ELTERN-'asmLink' (der jeweils
+                        // aktuellen Rekursionsebene, hier trivial IMMER schon als nicht-rigide
+                        // bestaetigt, siehe Aufrufer unten) statt die des KINDES 'subAsmLink',
+                        // in das rekursiv abgestiegen werden soll - eine rigide verschachtelte
+                        // Unterbaugruppe (die fuer den Solver/jede andere Traversierung dieser
+                        // Klasse als EINE atomare Einheit gilt) wurde dadurch trotzdem
+                        // aufgebrochen und ihre eigenen Kinder einzeln zur Loeschliste
+                        // hinzugefuegt, statt sie als Ganzes zu behandeln.
+                        if (subAsmLink && !subAsmLink->isRigid()) {
                             addSubComponents(subAsmLink, objs);
                         }
                     }
@@ -1533,21 +1564,45 @@ void ViewProviderAssembly::applyIsolationRecursively(
         }
         return;
     }
-    else if (auto* part = dynamic_cast<App::Part*>(current)) {
-        // As App::Part currently don't have material override
-        // (there is in LinkStage and RealThunder said he'll try to PR later)
-        // we have to recursively apply to children of App::Parts.
-
-        // If Part is in isolateSet, then all its children should be added to isolateSet
+    // FCPROJECT-PATCH (2026-09-19, IdentityGraph-Umbau Phase 4): Assembly::AssemblyLink erbt
+    // von App::Part und wurde deshalb bisher vom generischen App::Part-Zweig unten NICHT
+    // Rigid-bewusst behandelt - inkonsistent zu JEDER anderen Solver-/Drag-Traversierung dieser
+    // Klasse (canonicalizeForMbD(), collectLocalMirrorCandidates(), collectComponentsRecursively(),
+    // ...), die eine RIGIDE verschachtelte Unterbaugruppe durchgaengig als EINE atomare Einheit
+    // behandeln. Nur bei Rigid=false wie bisher (wie ein App::Part) in die eigenen Kinder
+    // absteigen; bei Rigid=true faellt es bewusst durch zur normalen Einzelobjekt-Behandlung
+    // unten (kein Aufbrechen der Baugruppe in der Isolate-Ansicht) - deshalb HIER separat
+    // abgefragt (nicht als "else if" an den App::Part-Zweig gehaengt, sonst wuerde eine rigide
+    // AssemblyLink im NAECHSTEN Zweig doch wieder ueber dynamic_cast<App::Part*> gefangen).
+    auto* asmLink = freecad_cast<Assembly::AssemblyLink*>(current);
+    if (asmLink && !asmLink->isRigid()) {
         if (isolate) {
-            for (auto* child : part->Group.getValues()) {
+            for (auto* child : asmLink->Group.getValues()) {
                 isolateSet.insert(child);
             }
         }
-        for (auto* child : part->Group.getValues()) {
+        for (auto* child : asmLink->Group.getValues()) {
             applyIsolationRecursively(child, isolateSet, mode, visited);
         }
         return;
+    }
+    if (!asmLink) {
+        if (auto* part = dynamic_cast<App::Part*>(current)) {
+            // As App::Part currently don't have material override
+            // (there is in LinkStage and RealThunder said he'll try to PR later)
+            // we have to recursively apply to children of App::Parts.
+
+            // If Part is in isolateSet, then all its children should be added to isolateSet
+            if (isolate) {
+                for (auto* child : part->Group.getValues()) {
+                    isolateSet.insert(child);
+                }
+            }
+            for (auto* child : part->Group.getValues()) {
+                applyIsolationRecursively(child, isolateSet, mode, visited);
+            }
+            return;
+        }
     }
 
     auto* vp = Gui::Application::Instance->getViewProvider(current);
@@ -1636,8 +1691,29 @@ void ViewProviderAssembly::isolateJointReferences(App::DocumentObject* joint, Is
         return;
     }
 
-    App::DocumentObject* part1 = getMovingPartFromRef(joint, "Reference1");
-    App::DocumentObject* part2 = getMovingPartFromRef(joint, "Reference2");
+    // FCPROJECT-PATCH (2026-09-19, IdentityGraph-Umbau Phase 4): siehe ausfuehrliche Begruendung
+    // an derselben Umstellung in canDragObjectToTarget() oben - resolveForUi() statt
+    // resolveForSolver(), weil part1/part2 hier als tatsaechlich zu isolierende, gerenderte
+    // Objekte weiterverwendet werden. nestingPrefix="" (unveraendert): dieser Joint kommt direkt
+    // aus der Baum-/Report-Auswahl DIESER Baugruppe, nicht ueber subJoints().
+    App::DocumentObject* part1 = nullptr;
+    App::DocumentObject* part2 = nullptr;
+    if (auto* assemblyPart = getObject<AssemblyObject>()) {
+        Assembly::IdentityGraph graph(assemblyPart);
+        auto resolveMovingPart = [&](const char* propName) -> App::DocumentObject* {
+            Assembly::IdentityHandle handle = graph.resolveJointRef(joint, propName, std::string());
+            if (!handle.templateObj) {
+                return getMovingPartFromRef(joint, propName);
+            }
+            return graph.materialize(graph.resolveForUi(handle));
+        };
+        part1 = resolveMovingPart("Reference1");
+        part2 = resolveMovingPart("Reference2");
+    }
+    else {
+        part1 = getMovingPartFromRef(joint, "Reference1");
+        part2 = getMovingPartFromRef(joint, "Reference2");
+    }
     if (!part1 || !part2) {
         return;
     }
