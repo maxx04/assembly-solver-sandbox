@@ -52,6 +52,8 @@ SET(Assembly_SRCS
     AssemblyLink.h
     AssemblyUtils.cpp
     AssemblyUtils.h
+    AssemblyIdentityGraph.cpp
+    AssemblyIdentityGraph.h
     BomObject.cpp
     BomObject.h
     Groups.cpp
