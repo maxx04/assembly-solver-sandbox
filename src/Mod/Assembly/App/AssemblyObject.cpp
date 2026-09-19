@@ -1325,20 +1325,29 @@ void collectLocalMirrorCandidates(
 // als eigenstaendige "Rueckwaerts"-Aufloesung, um keine zweite, potenziell abweichende
 // Namenspfad-Logik zu pflegen - canonicalizeForMbD() bleibt die einzige Quelle der Wahrheit fuer
 // "was ist das echte Objekt hinter diesem lokalen Kandidaten".
+// FCPROJECT-PATCH (2026-09-19, IdentityGraph-Umbau Phase 1): die bisherige Brute-Force-Suche
+// (jeden Kandidaten unterhalb DIESER Instanz per canonicalizeForMbD() gegen 'realObj' pruefen)
+// scheitert grundsaetzlich, sobald 'realObj' hinter einer duplizierten Instanz liegt -
+// canonicalizeForMbD() gibt bei JEDER Instanz-Duplikation sofort mit dem unveraenderten
+// Eingabewert auf (siehe dessen Kommentar), der Vergleich "canonicalizeForMbD(candidate) ==
+// realObj" kann dadurch fuer KEINEN Kandidaten unterhalb der duplizierten Ebene je zutreffen -
+// exakt die Ursache der live beobachteten "elf nie aktualisierten Getriebeteil-Spiegel"
+// (BG37->BG43->BG67). graph.resolveObject()/mirrorsOf() loesen tiefengenerell auf: 'realObj' ist
+// entweder das tiefe echte Objekt (keine Duplikation - mirrorsOf() sucht dann im gesamten
+// lokalen Baum dieser Instanz) oder bereits selbst der instanzeigene lokale Spiegel (Duplikation
+// im Spiel, siehe resolvePartForMbD() - mirrorsOf() sucht dann gezielt NUR innerhalb der
+// zugehoerigen Instanz, nicht auch bei anderen Duplikat-Instanzen).
 void AssemblyObject::syncLocalMirrorPlacement(App::DocumentObject* realObj, const Base::Placement& plc)
 {
     if (!realObj) {
         return;
     }
 
-    std::vector<App::DocumentObject*> candidates;
-    collectLocalMirrorCandidates(Group.getValues(), candidates);
+    IdentityGraph graph(this);
+    IdentityHandle handle = graph.resolveObject(realObj);
 
-    for (auto* candidate : candidates) {
+    for (auto* candidate : graph.mirrorsOf(handle)) {
         if (!candidate || candidate == realObj) {
-            continue;
-        }
-        if (canonicalizeForMbD(candidate) != realObj) {
             continue;
         }
 
@@ -3373,45 +3382,69 @@ App::DocumentObject* AssemblyObject::canonicalizeForMbD(App::DocumentObject* obj
 // patches/assembly-architecture-overview.md, Abschnitt "Teilschritt 2 - Umsetzung"): siehe
 // ausfuehrliche Erklaerung (inkl. der bewussten Abweichung beim subPath - wird derzeit nirgends
 // an getMbDData()/getMbDPart() weitergereicht) am Deklarationsort in AssemblyObject.h.
+// FCPROJECT-PATCH (2026-09-19, IdentityGraph-Umbau Phase 1, siehe
+// /home/maxx/.claude/plans/enumerated-roaming-river.md): auf IdentityGraph::resolveJointRef()
+// umgestellt - behebt den live beobachteten BG37->BG43->BG67-Bug (resolveJointReference()
+// uebersetzt laut eigenem Kommentar nur den letzten Sprung hinter einer Instanz-Duplikation;
+// resolveJointRef() tut das tiefengenerell, siehe dessen Definition in
+// AssemblyIdentityGraph.cpp). WICHTIG, zweistufig wie das Altverhalten: resolveJointRef()
+// alleine reicht NICHT - fuer einen NICHT verschachtelten Joint (nestingPrefix leer), dessen
+// Referenz zufaellig DIREKT auf ein lokales Spiegel-Objekt INNERHALB einer verschachtelten
+// flexiblen AssemblyLink zeigt (z.B. test_fixed_double_nested_flex's aeusserster Joint,
+// Reference2 direkt auf "MidLink.SubLink.BoxB"s Spiegel gesetzt, KEIN nestingPrefix noetig, da
+// der Joint selbst nicht ueber subJoints erreicht wird), hat resolveJointRef() keinen Grund,
+// ueber diesen bereits gefundenen lokalen Spiegel hinaus weiterzuloesen - ein zweiter
+// graph.resolveObject()-Durchlauf auf dem Ergebnis (Aequivalent zum alten
+// "canonicalizeForMbD(resolved.obj)") schliesst genau diese Luecke, tiefengenerell statt nur
+// einen Sprung. Nur wenn der FORWARD-Walk selbst schon eine Duplikation erkannt hat, wird NICHT
+// erneut aufgeloest (das wuerde die Instanz-Uebersetzung sofort wieder rueckgaengig machen,
+// siehe Bug C / docs/ARCHITECTURE.md §4.1).
+//
+// objectPartMap ist (vor der fuer Phase 3 geplanten IdentityHandle-Umstellung) weiterhin nach
+// rohem Zeiger geschluesselt - bei einer echten Instanz-Duplikation (duplicateInstancePath
+// nicht leer, auf JEDER der beiden Aufloesungsstufen moeglich) MUSS deshalb weiterhin ein PRO
+// INSTANZ eindeutiger Zeiger zurueckgegeben werden (sonst kollabieren zwei Duplikat-Instanzen
+// auf denselben MbD-Teil) - graph.mirrorsOf() liefert genau diesen instanzeigenen lokalen
+// Spiegel. Ohne Duplikation bleibt es beim tiefen ECHTEN Objekt, exakt wie "Adressieren statt
+// Kopieren" (docs/ARCHITECTURE.md §5) es fuer den Solver will.
+namespace
+{
+App::DocumentObject* materializeForObjectPartMap(IdentityGraph& graph, const IdentityHandle& handle)
+{
+    if (!handle.templateObj) {
+        return nullptr;
+    }
+    if (handle.duplicateInstancePath.empty()) {
+        return handle.templateObj;
+    }
+    auto mirrors = graph.mirrorsOf(handle);
+    // Defensiver Ruecksfall (mirrors.empty()) sollte praktisch nie eintreten - jede tatsaechlich
+    // dupliziert erkannte Ebene hat per Konstruktion einen lokalen Spiegel.
+    return mirrors.empty() ? handle.templateObj : mirrors.front();
+}
+}  // namespace
+
 App::DocumentObject* AssemblyObject::resolvePartForMbD(
     App::DocumentObject* joint,
     const char* propRefName,
     const std::string& nestingPrefix
 )
 {
-    ResolvedJointRef resolved = resolveJointReference(this, joint, propRefName, nestingPrefix);
-    if (resolved.obj) {
-        // FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix,
-        // 2026-09-03, live durch Nutzer-Maus-Drag aufgedeckt - sechste Baustelle): fuer einen
-        // NICHT verschachtelten Joint (nestingPrefix leer), dessen Referenz zufaellig direkt auf
-        // ein lokales Spiegel-Objekt INNERHALB einer verschachtelten flexiblen AssemblyLink zeigt
-        // (z.B. Joint002 "Starrer Verbund" im Top-Level-JointGroup, Ziel "App::Link BoxA"
-        // innerhalb von unterAssambly), liefert resolveJointReference() nur diesen ROHEN,
-        // lokalen Pointer - OHNE nestingPrefix hat die Funktion keinen Grund, weiter durch
-        // getLinkedAssembly() aufzuloesen. Subs EIGENER Slider-Joint (ueber subJoints-Rekursion,
-        // nestingPrefix="unterAssambly.") landet dagegen beim ECHTEN Sub#BoxA - zwei
-        // UNTERSCHIEDLICHE Pointer fuer dasselbe reale Teil. Ohne dieses canonicalizeForMbD()
-        // sah removeUnconnectedJoints()/getConnectedParts() (die resolvePartForMbD() OHNE
-        // Umweg ueber getMbDData() direkt fuer Erreichbarkeits-Vergleiche nutzen) die beiden
-        // Pointer als unverbunden - der tatsaechlich erreichbare Sub-Joint wurde faelschlich als
-        // "nicht erreichbar" entfernt (live per Log bestaetigt, nachdem eine redundante
-        // Erdung in Sub entfernt wurde, die das vorher zufaellig kaschiert hatte).
-        //
-        // FCPROJECT-PATCH (Bug C, "Instanz-Identitaet innerhalb einer duplizierten flexiblen
-        // Unterbaugruppe", 2026-09-16): 'resolvedViaInstanceMirror' bedeutet, resolveJointReference()
-        // hat 'resolved.obj' bereits per objLinkMap-Vorwaertslookup durch den Spiegel DIESER
-        // konkreten aeusseren Instanz ersetzt - ein canonicalizeForMbD() DARAUF wuerde das per
-        // getSourceForMirror() sofort wieder auf den geteilten, instanzblinden Zeiger zurueckdrehen
-        // (siehe docs/ARCHITECTURE.md §4.1 "Bug C"). Deshalb hier NICHT kanonisieren - der Spiegel
-        // IST bereits die korrekte, instanzeigene Identitaet.
-        if (resolved.resolvedViaInstanceMirror) {
-            return resolved.obj;
+    IdentityGraph graph(this);
+    IdentityHandle handle = graph.resolveJointRef(joint, propRefName, nestingPrefix);
+    if (handle.templateObj) {
+        if (!handle.duplicateInstancePath.empty()) {
+            return materializeForObjectPartMap(graph, handle);
         }
-        return canonicalizeForMbD(resolved.obj);
+        IdentityHandle canonical = graph.resolveObject(handle.templateObj);
+        if (canonical.templateObj) {
+            return materializeForObjectPartMap(graph, canonical);
+        }
+        return handle.templateObj;
     }
 
     // Defensiver Ruecksfall: unveraendertes Altverhalten fuer jeden Fall, den
-    // resolveJointReference() (noch) nicht abdeckt.
+    // resolveJointRef() (noch) nicht abdeckt.
     return canonicalizeForMbD(getMovingPartFromRef(joint, propRefName));
 }
 
