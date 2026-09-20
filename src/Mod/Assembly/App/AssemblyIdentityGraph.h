@@ -45,6 +45,11 @@ namespace App
 class DocumentObject;
 }  // namespace App
 
+namespace Base
+{
+class Placement;
+}  // namespace Base
+
 namespace Assembly
 {
 
@@ -155,6 +160,16 @@ public:
     // canonicalizeForMbD(), die (anders als diese) bei einer Instanz-Duplikation nicht sofort
     // aufgibt, sondern die Duplikation in duplicateInstancePath vermerkt und weiteruebersetzt.
     IdentityHandle resolveObject(App::DocumentObject* obj);
+
+    // FCPROJECT-PATCH (2026-09-19, live am echten BG37/BG43/BG67-Projekt gefunden, siehe
+    // getMbDData()s bisherige containerChainPlc-Berechnung): liefert das Produkt der
+    // Placement-Werte JEDER AssemblyLink-Ebene, die zwischen rootAssembly und 'obj' liegt -
+    // gebraucht, um die WELT-Placement eines tief verschachtelten, ueber MEHRERE ECHTE
+    // Dokumentgrenzen erreichten Objekts korrekt aus dessen LOKALER Placement zu berechnen.
+    // Identity, wenn 'obj' nirgendwo unterhalb von rootAssembly gefunden wird (z.B. bereits
+    // top-level/flach). Tiefengenerell (beliebig viele echte Dokumentgrenzen, nicht nur eine wie
+    // die urspruengliche, rein lokale findLocalGroupPath()-basierte Berechnung).
+    Base::Placement containerChainPlacement(App::DocumentObject* obj);
 
     // Gegenstueck fuer eine Joint-Referenz (Reference1/Reference2 + nestingPrefix), ersetzt
     // AssemblyUtils::resolveJointReference()'s Kernschleife - siehe dortigen Kommentar

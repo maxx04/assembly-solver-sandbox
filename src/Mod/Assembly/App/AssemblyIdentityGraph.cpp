@@ -28,6 +28,7 @@
 #include <App/PropertyLinks.h>
 #include <App/PropertyStandard.h>
 
+#include <Base/Placement.h>
 #include <Base/Tools.h>
 
 #include "AssemblyIdentityGraph.h"
@@ -85,6 +86,45 @@ bool findLocalGroupPath(
     }
     return false;
 }
+// FCPROJECT-PATCH (2026-09-19, live am echten BG37/BG43/BG67-Projekt gefunden): findLocalGroupPath()
+// alleine findet 'target' nur, wenn es innerhalb DESSELBEN Dokuments wie 'scope' liegt - fuer ein
+// tief verschachteltes, ueber MEHRERE ECHTE Dokumentgrenzen erreichtes Objekt (z.B. ein Blatt in
+// BG67s eigenem Dokument, erreicht ueber BG37->BG43->BG67) liefert es faelschlich "nicht
+// gefunden", selbst wenn 'target' strukturell durchaus erreichbar ist. findContainerChain()
+// generalisiert das: zuerst lokal versuchen (deckt den bisherigen, haeufigsten Fall
+// unveraendert ab), sonst REKURSIV in JEDE eigene, nicht-rigide Unterbaugruppe absteigen und dort
+// erneut versuchen - dadurch spielt es keine Rolle, wie viele echte Dokumentgrenzen zwischen
+// 'scope' und 'target' liegen. 'chain' sammelt dabei JEDE durchquerte AssemblyLink-Instanz,
+// aeusserste zuerst - das Produkt ihrer Placement-Werte ist exakt die Transformation, die
+// 'target's lokale Placement in Weltkoordinaten relativ zu 'scope' umrechnet.
+bool findContainerChain(
+    AssemblyObject* scope,
+    App::DocumentObject* target,
+    std::vector<AssemblyLink*>& chain
+)
+{
+    std::vector<AssemblyLink*> localPath;
+    if (findLocalGroupPath(scope->Group.getValues(), target, localPath)) {
+        chain.insert(chain.end(), localPath.begin(), localPath.end());
+        return true;
+    }
+    for (auto* asmLink : scope->getSubAssemblies()) {
+        if (!asmLink || asmLink->isRigid()) {
+            continue;
+        }
+        AssemblyObject* nested = asmLink->getLinkedAssembly();
+        if (!nested || nested == scope) {
+            continue;
+        }
+        chain.push_back(asmLink);
+        if (findContainerChain(nested, target, chain)) {
+            return true;
+        }
+        chain.pop_back();
+    }
+    return false;
+}
+
 // FCPROJECT-PATCH (2026-09-19, IdentityGraph-Umbau Phase 1, "sechste Baustelle unter aeusserer
 // Duplikation"): resolveJointRef()/resolve() koennen einen "Blatt"-Kandidaten finden, der SELBST
 // noch ein lokaler Spiegel INNERHALB des zuletzt gekreuzten Containers ('localContext') ist -
@@ -303,69 +343,124 @@ IdentityHandle IdentityGraph::resolve(App::DocumentObject* obj, const std::strin
 // Fassung nachbildet. Einziger Verhaltensunterschied: statt bei der ERSTEN gefundenen
 // Instanz-Duplikation sofort mit dem unveraenderten Eingabe-'obj' aufzugeben, wird die
 // Duplikation in duplicateInstancePath vermerkt und die Uebersetzung fortgesetzt.
+namespace
+{
+// FCPROJECT-PATCH (2026-09-19, live am echten BG37/BG43/BG67-Projekt gefunden, siehe
+// findContainerChain() fuer dieselbe Korrektur bei containerChainPlacement()): die
+// urspruengliche Fassung delegierte nur EINE Ebene tief (nur wenn eine UNMITTELBARE
+// Unterbaugruppe von 'scope' SELBST bereits 'obj's Dokument ist) - fuer ein Objekt, das ueber
+// ZWEI ODER MEHR echte Dokumentgrenzen erreicht wird (z.B. ein Blatt in BG67s eigenem Dokument,
+// erreicht ueber BG37->BG43->BG67), scheiterte das und 'obj' kam unveraendert zurueck, obwohl es
+// strukturell durchaus erreichbar ist. Diese Fassung probiert stattdessen REKURSIV jede eigene,
+// nicht-rigide Unterbaugruppe (unabhaengig davon, ob deren EIGENES Dokument direkt passt) und
+// gibt explizit zurueck, ob 'obj' irgendwo im durchsuchten Unterbaum gefunden wurde - der
+// bisherige, indirekte "IdentityHandle mit obj unveraendert" Rueckgabewert konnte "nicht
+// gefunden" nicht zuverlaessig von "gefunden, aber keine Uebersetzung noetig" unterscheiden.
+bool resolveObjectIn(AssemblyObject* scope, App::DocumentObject* obj, IdentityHandle& outHandle)
+{
+    std::vector<AssemblyLink*> path;
+    if (findLocalGroupPath(scope->Group.getValues(), obj, path)) {
+        AssemblyLink* previousLink = nullptr;
+        std::vector<AssemblyLink*> duplicatePath;
+        for (auto* mirrorLink : path) {
+            if (hasSiblingInstances(candidatesFor(scope, previousLink), mirrorLink)) {
+                duplicatePath.push_back(mirrorLink);
+            }
+
+            App::DocumentObject* levelReal = mirrorLink;
+            if (previousLink) {
+                levelReal = previousLink->getSourceForMirror(mirrorLink);
+                if (!levelReal) {
+                    outHandle.templateObj = obj;
+                    outHandle.duplicateInstancePath = duplicatePath;
+                    return true;
+                }
+            }
+            auto* realAsmLink = freecad_cast<AssemblyLink*>(levelReal);
+            if (!realAsmLink || realAsmLink->isRigid()) {
+                outHandle.templateObj = levelReal;
+                outHandle.duplicateInstancePath = duplicatePath;
+                return true;
+            }
+            previousLink = realAsmLink;
+        }
+
+        if (path.empty()) {
+            outHandle.templateObj = obj;
+            return true;
+        }
+        App::DocumentObject* resolved = path.back()->getSourceForMirror(obj);
+        outHandle.templateObj = resolved ? resolved : obj;
+        outHandle.duplicateInstancePath = duplicatePath;
+        return true;
+    }
+
+    for (auto* asmLink : scope->getSubAssemblies()) {
+        if (!asmLink || asmLink->isRigid()) {
+            continue;
+        }
+        AssemblyObject* nested = asmLink->getLinkedAssembly();
+        if (!nested || nested == scope) {
+            continue;
+        }
+        if (resolveObjectIn(nested, obj, outHandle)) {
+            return true;
+        }
+    }
+
+    // FCPROJECT-PATCH (2026-09-20, live am echten BG37/BG67-Projekt gefunden: Motor-Getriebezug
+    // komplett "unreachable", Solve friert alle Placements ein): 'obj' wurde NIRGENDS in der
+    // Group-Struktur gefunden (weder direkt noch in einer nicht-rigiden Unterbaugruppe) - kann
+    // ein FREISTEHENDES App::Link sein, das NUR als Joint-Referenz-Ziel existiert und NIE in
+    // irgendein Group eingehaengt wurde (live bestaetigt: Joint008s Reference2-Ziel "048_Link"
+    // hat als einzigen InList-Eintrag den Joint selbst, ist kein Mitglied von rootAssembly.Group).
+    // So ein Link zeigt aber trotzdem, wie jeder andere Spiegel, per LinkedObject auf das
+    // eigentliche native Objekt (hier: das gleichnamige Link INNERHALB der Unterbaugruppe, das
+    // deren eigene interne Joints bereits als kanonisch verwenden) - dem EINEN Schritt folgen und
+    // ERNEUT im selben Scope aufloesen (findet das Ziel dann ganz normal ueber die
+    // Group-Traversierung oben, oder eskaliert selbst weiter in getSubAssemblies()). 'obj' bleibt
+    // dabei unveraendert - getLinkedObject() fuehrt immer zu einem ANDEREN Objekt (keine Zyklen in
+    // FreeCADs Link-Graphen moeglich), die Rekursion terminiert also. Ohne diese Aufloesung
+    // liefern der aeussere Anker-Joint und die INTERNEN Joints der Unterbaugruppe zwei
+    // verschiedene Zeiger fuer dasselbe physische Teil - genau das brach die Erreichbarkeits-
+    // Traversierung (removeUnconnectedJoints()) fuer den GESAMTEN Getriebezug.
+    if (obj->isLink()) {
+        if (auto* linked = obj->getLinkedObject(false)) {
+            if (linked != obj && resolveObjectIn(scope, linked, outHandle)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+}  // namespace
+
 IdentityHandle IdentityGraph::resolveObject(App::DocumentObject* obj)
 {
     if (!obj) {
         return {};
     }
-
-    std::vector<AssemblyLink*> path;
-    if (!findLocalGroupPath(rootAssembly->Group.getValues(), obj, path)) {
-        // 'obj' liegt nicht im eigenen lokalen Baum - evtl. die lokale Spiegel-Kopie einer
-        // verschachtelten Unterbaugruppe (siehe canonicalizeForMbD()'s GrandTop-Fallback):
-        // an jede eigene, nicht-rigide Unterbaugruppe delegieren, deren eigenes Dokument zu
-        // 'obj' passt.
-        for (auto* asmLink : rootAssembly->getSubAssemblies()) {
-            if (!asmLink || asmLink->isRigid()) {
-                continue;
-            }
-            AssemblyObject* nested = asmLink->getLinkedAssembly();
-            if (!nested || nested == rootAssembly || nested->getDocument() != obj->getDocument()) {
-                continue;
-            }
-            IdentityGraph nestedGraph(nested);
-            return nestedGraph.resolveObject(obj);
-        }
-        IdentityHandle result;
-        result.templateObj = obj;
-        return result;
-    }
-
-    AssemblyLink* previousLink = nullptr;
-    std::vector<AssemblyLink*> duplicatePath;
-    for (auto* mirrorLink : path) {
-        if (hasSiblingInstances(candidatesFor(rootAssembly, previousLink), mirrorLink)) {
-            duplicatePath.push_back(mirrorLink);
-        }
-
-        App::DocumentObject* levelReal = mirrorLink;
-        if (previousLink) {
-            levelReal = previousLink->getSourceForMirror(mirrorLink);
-            if (!levelReal) {
-                IdentityHandle result;
-                result.templateObj = obj;
-                result.duplicateInstancePath = duplicatePath;
-                return result;
-            }
-        }
-        auto* realAsmLink = freecad_cast<AssemblyLink*>(levelReal);
-        if (!realAsmLink || realAsmLink->isRigid()) {
-            IdentityHandle result;
-            result.templateObj = levelReal;
-            result.duplicateInstancePath = duplicatePath;
-            return result;
-        }
-        previousLink = realAsmLink;
-    }
-
     IdentityHandle result;
-    if (path.empty()) {
-        result.templateObj = obj;
+    if (resolveObjectIn(rootAssembly, obj, result)) {
         return result;
     }
-    App::DocumentObject* resolved = path.back()->getSourceForMirror(obj);
-    result.templateObj = resolved ? resolved : obj;
-    result.duplicateInstancePath = duplicatePath;
+    result.templateObj = obj;
+    return result;
+}
+
+Base::Placement IdentityGraph::containerChainPlacement(App::DocumentObject* obj)
+{
+    if (!obj) {
+        return {};
+    }
+    std::vector<AssemblyLink*> chain;
+    if (!findContainerChain(rootAssembly, obj, chain)) {
+        return {};
+    }
+    Base::Placement result;
+    for (auto* link : chain) {
+        result = result * link->Placement.getValue();
+    }
     return result;
 }
 
@@ -537,6 +632,17 @@ App::DocumentObject* IdentityGraph::materialize(const UiHandle& h) const
 // (elf nie aktualisierte Getriebeteil-Spiegel).
 namespace
 {
+// FCPROJECT-PATCH (2026-09-19, live am echten BG37/BG43/BG67-Projekt gefunden): urspruenglich
+// stieg dies NUR in asmLink->Group ab (den lokalen Spiegel-Kindern DIESER Instanz, alle im
+// SELBEN Dokument wie 'obj' selbst). Das findet NIE einen NATIVEN Spiegel, der EINE Ebene
+// TIEFER im tatsaechlich VERLINKTEN Dokument entsteht (z.B. BG43s EIGENER, dort nativ lebender
+// Spiegel eines BG67-Blatts, erzeugt durch BG43s EIGENE, LOKALE AssemblyLink-Instanz) - und
+// GENAU DIESER native Spiegel wird NIE anderweitig synchronisiert, wenn BG43 als verschachtelte,
+// unter einem flexiblen Elternteil liegende Baugruppe ihren EIGENEN solve()-Aufruf
+// uebersprungen bekommt (siehe isNestedUnderFlexibleParent()) - nur der AEUSSERSTE
+// solve()-Aufruf (der hier suchende) bekommt je die Chance, ihn zu aktualisieren. Deshalb
+// zusaetzlich in asmLink->getLinkedAssembly()->Group absteigen - das echte, verlinkte
+// Dokument selbst durchsuchen, nicht nur die eigene lokale Spiegelkopie davon.
 void collectCandidates(App::DocumentObject* obj, std::vector<App::DocumentObject*>& out)
 {
     if (!obj) {
@@ -547,6 +653,11 @@ void collectCandidates(App::DocumentObject* obj, std::vector<App::DocumentObject
         if (!asmLink->isRigid()) {
             for (auto* child : asmLink->Group.getValues()) {
                 collectCandidates(child, out);
+            }
+            if (auto* nested = asmLink->getLinkedAssembly()) {
+                for (auto* child : nested->Group.getValues()) {
+                    collectCandidates(child, out);
+                }
             }
         }
         return;

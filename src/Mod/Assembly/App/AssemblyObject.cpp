@@ -3589,21 +3589,28 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
     // FCPROJECT-PATCH (2026-09-19, "zweite BG25-Instanz falsch eingesetzt", siehe
     // containerChainPlc-Deklaration in AssemblyObject.h fuer die volle Begruendung): 'part' kann
     // hier ein bewusst NICHT vollstaendig kanonisiertes, instanzeigenes Spiegelobjekt sein
-    // (alreadyResolved=true, Bug C). findLocalGroupPath() (bereits fuer canonicalizeForMbD()
-    // genutzt) liefert die Kette der umschliessenden AssemblyLink-Container von DIESER Instanz aus
-    // - deren Placement wird aufmultipliziert, um aus 'part's lokaler (Container-relativer)
-    // Placement dessen tatsaechliche Weltposition zu machen. Fuer alle unveraenderten Faelle
-    // (part liegt nicht im lokalen Baum dieser Instanz, z.B. weil es bereits vollstaendig auf ein
-    // echtes, flach liegendes Objekt kanonisiert wurde) bleibt containerChainPlc Identity - dann
-    // ist plc wie bisher einfach die rohe lokale Placement.
+    // (alreadyResolved=true, Bug C) ODER (seit dem IdentityGraph-Umbau) ein tief verschachteltes,
+    // ueber MEHRERE ECHTE Dokumentgrenzen erreichtes echtes Objekt - deren Placement wird
+    // aufmultipliziert, um aus 'part's lokaler (Container-relativer) Placement dessen
+    // tatsaechliche Weltposition zu machen. Fuer alle unveraenderten Faelle (part liegt nicht im
+    // lokalen Baum dieser Instanz, z.B. weil es bereits vollstaendig auf ein echtes, flach
+    // liegendes Objekt kanonisiert wurde) bleibt containerChainPlc Identity - dann ist plc wie
+    // bisher einfach die rohe lokale Placement.
+    //
+    // FCPROJECT-PATCH (2026-09-19, live am echten BG37/BG43/BG67-Projekt gefunden): die
+    // urspruengliche, rein lokale findLocalGroupPath()-Suche fand ein Objekt nur innerhalb DIESES
+    // EINEN Dokuments - fuer einen Joint, der (seit resolveJointRef()'s tiefengenerellerer
+    // Aufloesung, siehe refineNestedMirrorTarget()) direkt auf ein Objekt MEHRERE ECHTE
+    // Dokumentgrenzen tiefer zeigt, blieb containerChainPlc faelschlich Identity - die
+    // Weltposition wurde dadurch falsch berechnet, obwohl die Identitaet selbst (welches Objekt
+    // gemeint ist) bereits korrekt war ("Baugruppe intern richtig, aber am falschen Platz").
+    // graph.containerChainPlacement() ersetzt das durch eine tiefengenerelle, rekursiv durch
+    // beliebig viele echte Dokumentgrenzen absteigende Suche (siehe deren Definition in
+    // AssemblyIdentityGraph.cpp).
     Base::Placement containerChainPlc;
     if (alreadyResolved) {
-        std::vector<Assembly::AssemblyLink*> containerPath;
-        if (findLocalGroupPath(Group.getValues(), part, containerPath)) {
-            for (auto* containerLink : containerPath) {
-                containerChainPlc = containerChainPlc * containerLink->Placement.getValue();
-            }
-        }
+        IdentityGraph graph(this);
+        containerChainPlc = graph.containerChainPlacement(part);
     }
     Base::Placement localPlc = getPlacementFromProp(part, "Placement");
     Base::Placement plc = containerChainPlc.isIdentity() ? localPlc : containerChainPlc * localPlc;
@@ -3666,14 +3673,13 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
                     // Fehlausrichtung zwischen dem starr gebuendelten Fuehrung331 (dieser Zweig)
                     // und dem separat, MIT containerChainPlc registrierten Halterbaugruppe003
                     // (Slider-Gegenstueck) - beide MUESSEN relativ zueinander exakt fluchten.
-                    std::vector<Assembly::AssemblyLink*> partToAddContainerPath;
-                    Base::Placement partToAddContainerChainPlc;
-                    if (findLocalGroupPath(Group.getValues(), partToAdd, partToAddContainerPath)) {
-                        for (auto* containerLink : partToAddContainerPath) {
-                            partToAddContainerChainPlc
-                                = partToAddContainerChainPlc * containerLink->Placement.getValue();
-                        }
-                    }
+                    // FCPROJECT-PATCH (2026-09-19, live am echten BG37/BG43/BG67-Projekt
+                    // gefunden - siehe dieselbe Korrektur bei getMbDData()'s "neues Teil"-Zweig
+                    // oben): graph.containerChainPlacement() statt der rein lokalen
+                    // findLocalGroupPath()-Suche - tiefengenerell durch beliebig viele echte
+                    // Dokumentgrenzen.
+                    IdentityGraph graph(this);
+                    Base::Placement partToAddContainerChainPlc = graph.containerChainPlacement(partToAdd);
                     Base::Placement plciLocal = getPlacementFromProp(partToAdd, "Placement");
                     Base::Placement plci = partToAddContainerChainPlc.isIdentity()
                         ? plciLocal
