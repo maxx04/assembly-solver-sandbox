@@ -558,7 +558,38 @@ IdentityHandle IdentityGraph::resolveJointRef(
         if (auto* assemblyLink = freecad_cast<AssemblyLink*>(localObj)) {
             if (auto* linkedAssembly = assemblyLink->getLinkedAssembly()) {
                 doc = linkedAssembly->getDocument();
-                if (hasSiblingInstances(candidatesFor(rootAssembly, localContext), assemblyLink)) {
+                // FCPROJECT-PATCH (2026-09-20, live am echten BG22-Projekt gefunden: verschachtelte
+                // Duplikation - 3x FuehrungsBaugruppe, je 2x Halterbaugruppe - bricht die
+                // Erreichbarkeit): candidatesFor(rootAssembly, localContext) geht bei localContext
+                // == nullptr (erster Sprung) IMMER von rootAssembly->getSubAssemblies() als
+                // Geschwister-Vergleichsbasis aus - das setzt voraus, dass 'assemblyLink' ein
+                // DIREKTES Kind von rootAssembly ist. Trifft NICHT zu, wenn die Joint-Referenz
+                // direkt einen von einer NICHT-rigiden Elternbaugruppe promoteten Spiegel
+                // referenziert, der strukturell eine oder mehrere Ebenen TIEFER liegt (z.B. ein
+                // Rahmen-Joint, der direkt auf "Halterbaugruppe" zeigt, obwohl diese tatsaechlich
+                // INNERHALB einer dazwischenliegenden "FuehrungsBaugruppe"-Instanz lebt) - dann
+                // wird gegen die FALSCHEN Geschwister (rootAssembly's eigene Unterbaugruppen statt
+                // die tatsaechlichen Geschwister-Instanzen INNERHALB der Zwischenebene) geprueft,
+                // hasSiblingInstances() liefert faelschlich false, und die dortige Duplikation
+                // bleibt unerkannt - mit der Folge, dass diese Route und die Route ueber die
+                // eigenen internen Joints der Zwischenbaugruppe (die die Duplikation SEHR wohl
+                // erkennt) auf zwei verschiedene Identitaeten fuer dasselbe physische Teil laufen.
+                // Fix: bei localContext == nullptr zuerst pruefen, WO 'assemblyLink' strukturell
+                // tatsaechlich liegt (top-down, wie resolveObjectIn()) - liegt es tiefer als ein
+                // direktes rootAssembly-Kind, dessen ECHTEN unmittelbaren Container als
+                // Geschwister-Vergleichsbasis verwenden statt rootAssembly selbst.
+                std::vector<App::DocumentObject*> siblingCandidates;
+                if (!localContext) {
+                    std::vector<AssemblyLink*> structuralPath;
+                    if (findLocalGroupPath(rootAssembly->Group.getValues(), assemblyLink, structuralPath)
+                        && !structuralPath.empty()) {
+                        siblingCandidates = structuralPath.back()->Group.getValues();
+                    }
+                }
+                if (siblingCandidates.empty()) {
+                    siblingCandidates = candidatesFor(rootAssembly, localContext);
+                }
+                if (hasSiblingInstances(siblingCandidates, assemblyLink)) {
                     duplicatePath.push_back(assemblyLink);
                 }
                 localContext = assemblyLink;
@@ -572,7 +603,29 @@ IdentityHandle IdentityGraph::resolveJointRef(
             continue;
         }
         if (obj->isDerivedFrom<AssemblyLink>()) {
-            const auto* pRigid = obj->getPropertyByName<App::PropertyBool>("Rigid");
+            // FCPROJECT-PATCH (2026-09-20, live am echten BG22-Projekt gefunden: verschachtelte
+            // Duplikation - 3x FuehrungsBaugruppe, je 2x Halterbaugruppe - bricht die
+            // Erreichbarkeit): 'obj' ist hier der ROHE, geteilte/verlinkte Walk-Zeiger - bei einer
+            // Unterbaugruppe, die SELBST innerhalb einer weiteren Ebene dupliziert vorkommt (hier:
+            // Halterbaugruppe, zweimal INNERHALB jeder FuehrungsBaugruppe-Instanz), ist das der
+            // EINE geteilte Vorlage-Zeiger, unabhaengig davon, ueber welche der 3 aeusseren
+            // FuehrungsBaugruppe-Instanzen man ihn erreicht - sein "Rigid"-Flag gehoert aber zu
+            // GENAU DIESER einen Vorlage-Definition, nicht zwingend zu dem, was die AEUSSERE
+            // Instanz fuer ihre EIGENE, promotete Spiegel-Kopie separat gesetzt hat. Ein direkter
+            // Joint auf Baugruppen-Ebene (nestingPrefix="", localContext bereits beim ERSTEN
+            // Sprung gesetzt) liest 'obj' == 'localObj' (kein Unterschied) und stoppt korrekt an
+            // der rigiden Grenze; ein ueber subJoints() mit nestingPrefix hochgezogener interner
+            // Joint derselben Unterbaugruppe erreicht dieselbe Vorlage 'obj' aber NACH einem
+            // Container-Sprung, waehrend 'localObj' bereits auf die instanzeigene Spiegel-Kopie
+            // uebersetzt ist - NUR 'localObj' traegt deren tatsaechlich fuer DIESE Instanz
+            // gueltiges Rigid-Flag. Ohne diese Umstellung liest der Rigid-Check hier
+            // widerspruechlich mal die Vorlage, mal (an anderer Stelle, s.o. der
+            // AssemblyLink-Cast/Duplikations-Check) den Spiegel - mit der Folge, dass ein Joint,
+            // der DIREKT auf den aeusseren Spiegel zeigt, an der rigiden Grenze stoppt, waehrend
+            // der interne, ueber subJoints() hochgezogene Joint DURCH dieselbe rigide Grenze
+            // hindurch bis zum tiefsten echten Teil weiterlaeuft - zwei verschiedene Identitaeten
+            // fuer dasselbe physische Teil, genau das brach die Erreichbarkeits-Traversierung.
+            const auto* pRigid = localObj->getPropertyByName<App::PropertyBool>("Rigid");
             if (pRigid && !pRigid->getValue()) {
                 continue;
             }
@@ -675,6 +728,26 @@ std::vector<App::DocumentObject*> IdentityGraph::mirrorsOf(const IdentityHandle&
     std::vector<App::DocumentObject*> result;
     if (!h.templateObj) {
         return result;
+    }
+
+    // FCPROJECT-PATCH (2026-09-20, live am echten BG22-Projekt gefunden: verschachtelte
+    // Duplikation - 3x FuehrungsBaugruppe, je 2x Halterbaugruppe - bricht die Erreichbarkeit):
+    // wenn 'h.templateObj' selbst schon die GETEILTE VORLAGE der TIEFSTEN duplicateInstancePath-
+    // Ebene ist (z.B. weil eine Rigid-Grenze den Walk GENAU AUF dieser verschachtelten
+    // Unterbaugruppen-Ebene gestoppt hat, statt weiter in ihre Kinder hinein), dann IST dieser
+    // letzte Eintrag SELBST bereits der gesuchte instanzeigene Spiegel - eine Suche INNERHALB
+    // seiner eigenen Kinder (weiter unten) findet ihn NIE, weil deren Identitaet zwangslaeufig
+    // TIEFER liegt als seine eigene. Ohne diesen Fall liefert mirrorsOf() hier faelschlich leer
+    // zurueck, materializeForObjectPartMap() faellt auf den GETEILTEN Vorlage-Zeiger zurueck
+    // (statt der instanzeigenen Spiegel-Kopie), und zwei verschiedene Instanzen derselben
+    // verschachtelten Baugruppe kollabieren auf denselben MbD-Teil - genau das brach die
+    // Erreichbarkeits-Traversierung fuer den GESAMTEN Zweig hinter dieser Ebene.
+    if (h.duplicateInstancePath.size() >= 2) {
+        AssemblyLink* deepest = h.duplicateInstancePath.back();
+        AssemblyLink* container = h.duplicateInstancePath[h.duplicateInstancePath.size() - 2];
+        if (container->getSourceForMirror(deepest) == h.templateObj) {
+            return {deepest};
+        }
     }
 
     std::vector<App::DocumentObject*> searchRoots;
