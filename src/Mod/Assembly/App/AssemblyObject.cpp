@@ -3662,6 +3662,52 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
                         continue;
                     }
 
+                    // FCPROJECT-PATCH (2026-09-20, live am echten BG22-Projekt gefunden: "Slider
+                    // auf Slider fixiert" - eine Schiene komplett unbeweglich, die andere frei im
+                    // Raum schwebend): eine erste Fassung dieses Fixes prüfte NUR, ob 'partToAdd'
+                    // irgendein anderes, nicht-starres Gelenk hat - das erwies sich beim
+                    // doppelt-verschachtelten Repro (Assembly_top.FCStd, siehe
+                    // standalone-check/diagnose-two-sliders-fixed/double_nested_bug/) als zu
+                    // grob: JEDE Fuehrung (Schiene) hat per Konstruktion ein Slider-Gelenk zu
+                    // ihrem eigenen freien Ende (Halterbaugruppe Slot 2) - mit der ersten Fassung
+                    // wurde deshalb auch die bisher korrekt gebuendelte Kette
+                    // Rahmen-Fixed-Halterbaugruppe(Slot1)-Fixed-Fuehrung nicht mehr gebuendelt
+                    // (debugCheckBundled(Halter,Fuehrung) lieferte faelschlich 0), obwohl das
+                    // physikalisch unproblematisch ist: Fuehrung selbst braucht keinen eigenen
+                    // Freiheitsgrad, nur ihr Slider-Partner (Halterbaugruppe Slot 2) - und der
+                    // wird ueber addConnectedFixedParts() ohnehin NIE mit hereingezogen (die
+                    // Rekursion folgt ausschliesslich Fixed-Gelenken).
+                    //
+                    // Der eigentliche Gefahrenfall (Halterbaugruppe003<->005) ist NICHT "partToAdd
+                    // hat irgendein anderes Gelenk", sondern: BEIDE Seiten dieses EINEN
+                    // Fixed-Gelenks sind UNABHAENGIG VONEINANDER bereits die freie
+                    // Bewegungsseite eines EIGENEN, JEWEILS ANDEREN nicht-starren Gelenks (hier:
+                    // Halterbaugruppe003 gleitet auf Fuehrung331, Halterbaugruppe005 unabhaengig
+                    // davon auf Fuehrung332) - erst DAS zwaenge den gebuendelten Koerper, zwei
+                    // widerspruechliche Gleitachsen relativ zu zwei verschiedenen, unabhaengig
+                    // geerdeten Bezugskoerpern gleichzeitig einzuhalten. Hat dagegen nur EINE
+                    // Seite ein solches Gelenk (Fuehrung/Halter001-Fall: nur Fuehrung hat eines,
+                    // Halter selbst keins), bleibt die gebuendelte Gruppe weiterhin
+                    // freiheitsgradlos, und das eine externe Gelenk wirkt einfach normal gegen
+                    // den (jetzt groesseren) starren Koerper - unproblematisch. Fix: nur dann
+                    // NICHT buendeln, wenn SOWOHL 'currentPart' ALS AUCH 'partToAdd' (jeweils
+                    // ueber ein ANDERES als das hier betrachtete Gelenk) ein nicht-starres Gelenk
+                    // haben.
+                    auto hasOtherNonFixedJoint = [&](App::DocumentObject* p) {
+                        for (auto& otherJr : getJointsOfPart(p)) {
+                            if (otherJr.joint == joint) {
+                                continue;
+                            }
+                            if (getJointType(otherJr.joint) != JointType::Fixed) {
+                                return true;
+                            }
+                        }
+                        return false;
+                    };
+                    if (hasOtherNonFixedJoint(currentPart) && hasOtherNonFixedJoint(partToAdd)) {
+                        continue;
+                    }
+
                     // FCPROJECT-PATCH (2026-09-20, "BG25 Slider-Drag Achse verschoben,
                     // Teil 2" - siehe todo-bg25-slider-drag-two-instances): 'partToAdd' kann,
                     // genau wie beim "neues Teil"-Zweig oben in getMbDData(), ein Bug-C-
