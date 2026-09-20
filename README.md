@@ -33,4 +33,6 @@ FreeCAD-Historie. Die eigentliche Arbeit passiert in einem separaten, lokalen Sp
 FreeCAD-Hauptrepos (Branch `solver-sandbox`, nie gepusht) und wird per Cherry-Pick hierher
 synchronisiert (`update-sandbox.sh`).
 
-CLAUDE 
+---
+
+Hauptsächlich bearbeitet mit [Claude Code](https://claude.com/claude-code) (Anthropic).
