@@ -53,12 +53,30 @@ import JointObject
 jointGroup = UtilsAssembly.getJointGroup(asm)
 ground = jointGroup.newObject("App::FeaturePython", "GroundedJoint")
 JointObject.GroundedJoint(ground, boxA)
+if App.GuiUp:
+    JointObject.ViewProviderGroundedJoint(ground.ViewObject)
 doc.recompute()
 
 joint = jointGroup.newObject("App::FeaturePython", "Joint")
 JointObject.Joint(joint, JointObject.JointTypes.index("Fixed"))
 joint.Reference1 = (boxA, ["Face2", "Face2"])
 joint.Reference2 = (boxB, ["Face1", "Face1"])
+
+# FCPROJECT-PATCH (2026-09-22, live gefunden beim interaktiven Nachvollziehen dieses
+# Bugreports): ViewProviderJoint(joint.ViewObject) wird im ganzen Assembly-Code NUR an einer
+# einzigen Stelle aufgerufen - TaskAssemblyCreateJoint.createJointObject(), also nur wenn ein
+# Joint ueber den echten "Joint erstellen"-Dialog angelegt wird. Ohne diesen Aufruf bleibt
+# joint.ViewObject.Proxy dauerhaft ein Platzhalter (None/int) statt einer echten
+# ViewProviderJoint-Instanz - der Joint laesst sich dann im echten Dialog nicht mehr per
+# Doppelklick bearbeiten (AttributeError: '...' object has no attribute 'doubleClicked'),
+# unabhaengig vom eigentlich hier demonstrierten Spinbox-Bug. Bedingt auf App.GuiUp, damit das
+# Skript weiterhin auch per FreeCADCmd (ohne jede Gui) lauffaehig bleibt, wie im Docstring
+# oben dokumentiert.
+if App.GuiUp:
+    import JointObject as _JointObjectGui  # bereits importiert, hier nur zur Deutlichkeit
+
+    _JointObjectGui.ViewProviderJoint(joint.ViewObject)
+
 doc.recompute()
 
 

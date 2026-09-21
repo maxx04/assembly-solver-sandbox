@@ -903,7 +903,21 @@ class Joint:
     def redrawJointPlacements(self, joint):
         if joint.ViewObject:
             proxy = joint.ViewObject.Proxy
-            if proxy:
+            # FCPROJECT-PATCH (2026-09-22, live gefunden ueber einen gespeicherten Bugreport-
+            # Repro nach dem Neuladen): execute() (unten) ruft ueber updateJCSPlacements()
+            # unbedingt hierher - anders als onChanged() (das oben bereits per App.isRestoring()
+            # abbricht) hat execute() keinen solchen Schutz, wird aber wie jede andere
+            # DocumentObject-execute()-Methode auch WAEHREND des Dokument-Neuladens vom
+            # Abhaengigkeitsgraphen aufgerufen. Zu diesem Zeitpunkt kann
+            # joint.ViewObject.Proxy noch ein FreeCAD-interner Platzhalterwert (ein int) sein -
+            # die eigentliche ViewProviderJoint-Instanz wird erst spaeter (attach()/
+            # onDocumentRestored() der Gui-Seite) eingesetzt. Reines Wahrheitswert-Pruefen
+            # (`if proxy:`) reicht nicht, ein solcher Platzhalter kann selbst truthy sein (z.B.
+            # 1) - Absturz "AttributeError: 'int' object has no attribute
+            # 'redrawJointPlacements'" live reproduziert, auch in Vanilla-FreeCAD bestaetigt
+            # (kein Sandbox-Regressionsfall). Fix: statt Wahrheitswert das tatsaechlich benoetigte
+            # Attribut pruefen.
+            if proxy and hasattr(proxy, "redrawJointPlacements"):
                 proxy.redrawJointPlacements(joint)
 
     """
@@ -1028,7 +1042,12 @@ class Joint:
             self.partsMovedByPresolved = {}
 
             if joint.ViewObject:
-                joint.ViewObject.Proxy.redrawJointPlacements(joint)
+                # FCPROJECT-PATCH (2026-09-22): derselbe Schutz wie in redrawJointPlacements()
+                # oben - ViewObject.Proxy kann waehrend des Dokument-Neuladens ein truthy
+                # Platzhalter-int statt der echten ViewProviderJoint-Instanz sein.
+                proxy = joint.ViewObject.Proxy
+                if proxy and hasattr(proxy, "redrawJointPlacements"):
+                    proxy.redrawJointPlacements(joint)
 
     def preventParallel(self, joint):
         # Angle and perpendicular joints in the solver cannot handle the situation where both JCS are Parallel
