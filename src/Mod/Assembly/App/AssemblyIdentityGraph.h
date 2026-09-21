@@ -205,6 +205,18 @@ public:
     const std::vector<JointEdge>& jointEdges();
     std::vector<IdentityHandle> neighbors(const IdentityHandle& h);
 
+    // FCPROJECT-PATCH (2026-09-21, Nutzerauftrag [[todo-identitygraph-visualization]]):
+    // Graphviz/DOT-Export des kompletten Graphen - ein Knoten pro IdentityHandle (aus
+    // jointEdges() UND groundedHandles(), damit auch ein geerdetes, aber joint-loses Teil
+    // sichtbar bleibt), eine Kante pro JointEdge (Fixed fett/durchgezogen = starr, alles andere
+    // gestrichelt = echter Freiheitsgrad), geerdete Knoten farblich hervorgehoben. Genau die Art
+    // Abbruch einer Erreichbarkeits-Traversierung, die beim BG22-Fund
+    // (mirrorsOf()/Duplikat-in-Duplikat) erst per Log-Grep-Archaeologie gefunden wurde, waere in
+    // dieser Visualisierung sofort als fehlende Kante/isolierter Knoten sichtbar. Reiner
+    // Text-Export (kein FreeCAD-/Qt-Abhaengigkeit) - Ausgabe laesst sich direkt in einen
+    // Graphviz-Renderer (z.B. `dot -Tsvg`) oder einen Online-Viewer einfuegen.
+    std::string exportDot();
+
     // Verwirft den zwischengespeicherten Aufbau (Joint-Kanten, Erdungs-Set). resolve()/
     // resolveJointRef() selbst lesen immer live von der Dokumentstruktur und brauchen dies nicht.
     void invalidate();

@@ -152,6 +152,15 @@ PyObject* AssemblyObjectPy::isPartConnected(PyObject* args) const
     return Py_BuildValue("O", (ok ? Py_True : Py_False));
 }
 
+PyObject* AssemblyObjectPy::exportIdentityGraphDot(PyObject* args) const
+{
+    if (!PyArg_ParseTuple(args, "")) {
+        return nullptr;
+    }
+    std::string dot = this->getAssemblyObjectPtr()->exportIdentityGraphDot();
+    return Py_BuildValue("s", dot.c_str());
+}
+
 PyObject* AssemblyObjectPy::isPartGrounded(PyObject* args) const
 {
     PyObject* pyobj;

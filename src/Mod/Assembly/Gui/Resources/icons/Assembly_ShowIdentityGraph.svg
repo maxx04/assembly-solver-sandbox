@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   width="64"
+   height="64"
+   version="1.1"
+   viewBox="0 0 64 64"
+   xmlns="http://www.w3.org/2000/svg">
+  <!-- Nutzerauftrag 2026-09-21: eigenes Icon fuer "Show Identity Graph" (bisher versehentlich
+       identisch mit Assembly_BillOfMaterials). Motiv spiegelt die Diagramm-eigene Bildsprache
+       (exportDot()): ein gestrichelt umrahmter Cluster mit zwei verbundenen Teile-Knoten, davon
+       einer per fetter Kante an einen gruenen, doppelt umrandeten "geerdet"-Knoten ausserhalb
+       angebunden. -->
+  <rect x="5" y="6" width="34" height="26" rx="3" ry="3"
+        fill="none" stroke="#0b1521" stroke-width="2" stroke-dasharray="4,3" />
+  <line x1="15" y1="19" x2="30" y2="19" stroke="#0b1521" stroke-width="2" stroke-dasharray="3,2" />
+  <circle cx="15" cy="19" r="6" fill="#dee2e6" stroke="#0b1521" stroke-width="2" />
+  <circle cx="30" cy="19" r="6" fill="#dee2e6" stroke="#0b1521" stroke-width="2" />
+  <line x1="33" y1="24" x2="47" y2="41" stroke="#0b1521" stroke-width="3" />
+  <circle cx="49" cy="45" r="9" fill="#8ae234" stroke="#0b1521" stroke-width="2" />
+  <circle cx="49" cy="45" r="12.5" fill="none" stroke="#0b1521" stroke-width="1.5" />
+</svg>

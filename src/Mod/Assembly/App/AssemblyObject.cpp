@@ -2400,6 +2400,12 @@ bool AssemblyObject::isPartConnected(App::DocumentObject* obj, bool verboseLog)
     return false;
 }
 
+std::string AssemblyObject::exportIdentityGraphDot()
+{
+    IdentityGraph graph(this);
+    return graph.exportDot();
+}
+
 // FCPROJECT-PATCH (Fix-Ansatz D, "flexible Unterbaugruppe als Ganzes ziehbar, wenn unverbunden",
 // Nutzerauftrag 2026-09-16/17): siehe Deklaration in AssemblyObject.h fuer die volle Begruendung -
 // isPartConnected(containerObj) allein erkennt ein bereits an EIN Kind angeschlossenes Kind

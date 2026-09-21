@@ -336,6 +336,11 @@ public:
     // laufen. Default false, kein bestehender Aufrufer muss angepasst werden.
     bool isPartConnected(App::DocumentObject* part, bool verboseLog = false);
 
+    // FCPROJECT-PATCH (2026-09-21, Nutzerauftrag [[todo-identitygraph-visualization]]): duenner
+    // Python-Zugang zu IdentityGraph::exportDot() - baut den Graphen dieser Baugruppe frisch auf
+    // und liefert die fertige Graphviz-DOT-Textdarstellung.
+    std::string exportIdentityGraphDot();
+
     // FCPROJECT-PATCH (Fix-Ansatz D, "flexible Unterbaugruppe als Ganzes ziehbar, wenn
     // unverbunden", Nutzerauftrag 2026-09-16/17): isPartConnected(containerObj) allein reicht
     // NICHT aus, um zu pruefen, ob eine flexible AssemblyLink "als Ganzes unverbunden" ist - ein

@@ -21,6 +21,9 @@
  *                                                                          *
  ***************************************************************************/
 
+#include <algorithm>
+#include <functional>
+
 #include <App/Document.h>
 #include <App/DocumentObject.h>
 #include <App/DocumentObjectGroup.h>
@@ -389,6 +392,23 @@ bool resolveObjectIn(AssemblyObject* scope, App::DocumentObject* obj, IdentityHa
             outHandle.templateObj = obj;
             return true;
         }
+        // FCPROJECT-PATCH (2026-09-21, live an der echten CNC3018_022-Datei gefunden, per
+        // IdentityGraph::exportDot() erstmals sichtbar gemacht - siehe
+        // [[todo-mirrortosourcemap-missing-for-nested-assemblylink]] fuer die volle Herleitung):
+        // die Schleife oben prueft hasSiblingInstances() nur fuer jede CONTAINER-Ebene in 'path'
+        // (die Kette der AssemblyLinks, die durchquert werden MUESSEN, um 'obj' zu erreichen) -
+        // 'obj' SELBST kann aber ZUSAETZLICH innerhalb path.back()s eigener Gruppe dupliziert
+        // sein (z.B. Slot1 vs. Slot2 einer Schiene - beide "CNC3018_023_A_Halterbaugruppe",
+        // dieselbe Vorlage, zwei Instanzen NEBENEINANDER in derselben FuerungsBaugruppe). Ohne
+        // diesen Check kollabieren beide Slots auf dieselbe IdentityHandle (gleiches templateObj
+        // via getSourceForMirror(), gleiches duplicateInstancePath OHNE diese letzte Ebene) -
+        // genau das liess zwei tatsaechlich verschiedene physische Teile im Diagramm (und im
+        // Solver, siehe canonicalizeForMbD()) als EINE Identitaet erscheinen.
+        if (auto* objAsLink = freecad_cast<AssemblyLink*>(obj)) {
+            if (hasSiblingInstances(path.back()->Group.getValues(), objAsLink)) {
+                duplicatePath.push_back(objAsLink);
+            }
+        }
         App::DocumentObject* resolved = path.back()->getSourceForMirror(obj);
         outHandle.templateObj = resolved ? resolved : obj;
         outHandle.duplicateInstancePath = duplicatePath;
@@ -635,8 +655,26 @@ IdentityHandle IdentityGraph::resolveJointRef(
         // kann SELBST noch ein noch nicht vollstaendig aufgeloester lokaler Spiegel sein (siehe
         // refineNestedMirrorTarget()-Kommentar) - zwei Faelle, je nachdem ob ueberhaupt schon
         // eine Container-Grenze gekreuzt wurde:
+        //
+        // FCPROJECT-PATCH (2026-09-21, live an der echten CNC3018_022-Datei gefunden, siehe
+        // [[todo-mirrortosourcemap-missing-for-nested-assemblylink]]): DRITTER Fall ergaenzt -
+        // 'localContext' kann bei einem DIREKTEN Joint-Bezug (nestingPrefix="") schon beim
+        // ERSTEN Sprung auf 'obj' SELBST gesetzt worden sein (obj ist bereits das gefundene
+        // AssemblyLink, keine tiefere Verschachtelung mehr noetig). refineNestedMirrorTarget()
+        // ist aber NUR fuer den Fall gedacht, dass 'obj' TIEFER liegt als 'localContext' (sucht
+        // per findLocalGroupPath() INNERHALB localContext->getLinkedAssembly()) - bei
+        // localContext == obj sucht es 'obj' faelschlich innerhalb SEINER EIGENEN verlinkten
+        // Baugruppe (findet sich dort nie, da obj selbst kein Kind von sich selbst ist) und gibt
+        // obj unveraendert zurueck, OHNE es ueber seinen EIGENEN, umschliessenden Kontext auf die
+        // geteilte Identitaet zu reduzieren (getSourceForMirror() wird nie erreicht). Das liess
+        // z.B. eine top-level rigide AssemblyLink-Instanz (direkt vom aeusseren Joint
+        // referenziert) und dieselbe physische Baugruppe, ueber einen INNEREN Joint (mit
+        // nestingPrefix) erreicht, auf zwei verschiedene Identitaeten laufen. Fix: in GENAU
+        // diesem Fall stattdessen resolveObject(obj) nutzen (identische Top-Down-Struktursuche +
+        // getSourceForMirror(), wie im "kein localContext"-Zweig unten) statt
+        // refineNestedMirrorTarget().
         IdentityHandle result;
-        if (localContext) {
+        if (localContext && freecad_cast<AssemblyLink*>(obj) != localContext) {
             result.templateObj = refineNestedMirrorTarget(localContext, obj, duplicatePath);
         }
         else {
@@ -842,6 +880,331 @@ void IdentityGraph::invalidate()
     edges.clear();
     groundedBuilt = false;
     groundedSet.clear();
+}
+
+namespace
+{
+// DOT-Bezeichner duerfen keine Anfuehrungszeichen/Backslashes enthalten - Labels (Teile-/
+// Joint-Namen) koennen beides theoretisch enthalten (Nutzer-vergebene Labels sind frei).
+std::string dotEscape(const std::string& s)
+{
+    std::string out;
+    out.reserve(s.size());
+    for (char c : s) {
+        if (c == '"' || c == '\\') {
+            out += '\\';
+        }
+        out += c;
+    }
+    return out;
+}
+
+// Menschlich lesbares Knoten-Label: der interne Name des tiefsten echten Objekts (z.B.
+// "Halterbaugruppe001"), NICHT dessen Label. Nutzerklarstellung 2026-09-21 (live an der echten
+// BG22/23-Datei gefunden): zwei innerhalb DERSELBEN AssemblyLink-Instanz mehrfach eingefuegte
+// Kopien (z.B. Slot1/Slot2 einer FuehrungsBaugruppe, beide "CNC3018_023_A_Halterbaugruppe") tragen
+// als Label ABSICHTLICH denselben Text (Bug-C-Konvention, siehe docs/ARCHITECTURE.md §4.1) - im
+// Diagramm erschienen dadurch mehrere Knoten identisch als "Haltebaugruppe" ohne jede
+// Unterscheidung. Der interne Name (getNameInDocument(), dokumentweit eindeutig, z.B.
+// "Halterbaugruppe"/"Halterbaugruppe001") loest das zuverlaessig auf - dieselbe Regel gilt bereits
+// fuer Joint- und Cluster-Beschriftungen (siehe dortige Kommentare).
+std::string handleLabel(const IdentityHandle& h)
+{
+    if (!h.templateObj) {
+        return "<null>";
+    }
+    return h.templateObj->getNameInDocument();
+}
+
+// FCPROJECT-PATCH (2026-09-21, Nutzerklarstellung: "RigidGroup in Assembly nenne ich alle Parts
+// die sind geerdet [gemeint: starr aneinanderhaengend], z.B. in BG25 das sind ein Halter und
+// Fuehrung"): einfache Union-Find fuer die doppelt umrandeten Rigid-Cluster - vereinigt NICHT nur
+// explizite RigidGroupJoint-Mitglieder, sondern JEDE transitive Kette reiner Fixed-Kanten (genau
+// die Bündelung, die addConnectedFixedParts() beim Ziehen ohnehin schon als EINEN starren
+// MbD-Koerper behandelt, siehe AssemblyObject.cpp). Rein fuer die Darstellung - keine Wirkung auf
+// den Solver.
+struct DisjointSet
+{
+    std::unordered_map<int, int> parent;
+
+    int find(int x)
+    {
+        auto [it, inserted] = parent.emplace(x, x);
+        if (inserted || it->second == x) {
+            return it->second;
+        }
+        it->second = find(it->second);
+        return it->second;
+    }
+
+    void unite(int a, int b)
+    {
+        int ra = find(a);
+        int rb = find(b);
+        if (ra != rb) {
+            parent[ra] = rb;
+        }
+    }
+};
+
+// FCPROJECT-PATCH (2026-09-21, Nutzerauftrag: "kannst du rekursiv Assembly umrahmen und Parts
+// drin haben?"): Baum aus der vollen AssemblyLink-Container-Kette jedes Knotens (via
+// findContainerChain(), NICHT ueber IdentityHandle::duplicateInstancePath - letztere laesst
+// bewusst NICHT-duplizierte Container-Ebenen aus, siehe deren Deklaration in
+// AssemblyIdentityGraph.h; fuer eine reine Verschachtelungs-DARSTELLUNG zaehlt dagegen JEDE
+// Ebene, dupliziert oder nicht). Ein Knoten ohne Container (z.B. Rahmen/Ursprung direkt in der
+// Wurzel-Baugruppe) landet in directNodeIds der Wurzel selbst, ausserhalb jeder Umrahmung.
+struct ClusterTree
+{
+    std::vector<int> directNodeIds;
+    std::unordered_map<AssemblyLink*, ClusterTree> children;
+};
+
+void insertIntoClusterTree(ClusterTree& root, const std::vector<AssemblyLink*>& chain, int nodeId)
+{
+    ClusterTree* cur = &root;
+    for (auto* link : chain) {
+        cur = &cur->children[link];
+    }
+    cur->directNodeIds.push_back(nodeId);
+}
+
+void emitClusterTree(
+    std::string& out,
+    const ClusterTree& node,
+    int& clusterCounter,
+    const std::function<void(std::string&, int)>& emitNodeLine,
+    const std::unordered_map<int, int>& rigidGroupOfNode
+)
+{
+    // Nutzerklarstellung 2026-09-21: "Label" (FreeCADs Label-Property, bei mehrfach eingefuegten
+    // AssemblyLinks ABSICHTLICH mehrdeutig, siehe handleLabel()) und "Name" (getNameInDocument(),
+    // dokumentweit eindeutig) sind zwei verschiedene Dinge - hier bewusst NUR der interne Name
+    // (z.B. "Assembly002"), NICHT das (mehrdeutige) Label ("ass_fuehrung").
+    for (auto& [link, child] : node.children) {
+        out += "  subgraph cluster_" + std::to_string(clusterCounter++) + " {\n";
+        // Nutzerbefund 2026-09-21: bei wenig Platz ueberlappte die Cluster-Beschriftung optisch
+        // mit dem inneren Rigid-Cluster direkt darunter (keine echte doppelte Beschriftung im
+        // DOT-Quelltext - nur fehlender vertikaler Abstand, den Graphviz' 'margin'-Attribut bei
+        // verschachtelten Clustern trotz hohem Wert nicht zuverlaessig reserviert). Eine
+        // nachgestellte Leerzeile im Label selbst erzwingt die zusaetzliche Zeilenhoehe
+        // zuverlaessig.
+        // Nutzerbefund 2026-09-21: bei "t" (oben) ueberlappte das aeussere Label wiederholt mit
+        // dem inneren Rigid-Cluster, der bei dieser Baumstruktur meist selbst oben im Layout
+        // landet - "b" (unten) haelt zuverlaessig Abstand.
+        out += "    label=\"" + dotEscape(link ? link->getNameInDocument() : "?") + "\";\n";
+        out += "    fontname=\"sans-serif Bold\";\n";
+        out += "    style=\"dashed,bold\";\n";
+        out += "    penwidth=2;\n";
+        emitClusterTree(out, child, clusterCounter, emitNodeLine, rigidGroupOfNode);
+        out += "  }\n";
+    }
+
+    // Rigide zusammenhaengende Teile (transitive Fixed-Kette UND/ODER explizite
+    // RigidGroupJoint-Mitgliedschaft, siehe DisjointSet oben) bekommen ihren eigenen, doppelt
+    // umrandeten (peripheries=2, durchgezogen statt gestrichelt) inneren Cluster - auch root-level,
+    // ohne jede AssemblyLink-Umrahmung, da diese Partitionierung auf JEDER Baumebene gleich
+    // angewendet wird. Eine "Gruppe" mit nur einem Mitglied AUF DIESER EBENE (z.B. weil die
+    // anderen Mitglieder in einem ANDEREN Container liegen - siehe BG22s Kreuz-Joint zwischen zwei
+    // verschiedenen Schienen-Instanzen) wird NICHT eingerahmt, sonst entstuende ein bedeutungsloser
+    // Rahmen um ein einzelnes Teil.
+    std::unordered_map<int, std::vector<int>> byRigidGroup;
+    std::vector<int> ungrouped;
+    for (int id : node.directNodeIds) {
+        auto it = rigidGroupOfNode.find(id);
+        if (it != rigidGroupOfNode.end()) {
+            byRigidGroup[it->second].push_back(id);
+        }
+        else {
+            ungrouped.push_back(id);
+        }
+    }
+    for (auto& [groupId, ids] : byRigidGroup) {
+        (void)groupId;
+        if (ids.size() < 2) {
+            ungrouped.insert(ungrouped.end(), ids.begin(), ids.end());
+            continue;
+        }
+        // Nutzerauftrag 2026-09-21: doppelt umrandet wie ein geerdeter Knoten
+        // (peripheries=2) - Graphviz' 'peripheries'-Attribut wird fuer CLUSTER (anders als fuer
+        // Knoten) nicht zuverlaessig als zwei sichtbare Linien gerendert (live bestaetigt: nur
+        // eine einzelne, nicht sichtbar doppelte Linie). Robusterer Ersatz: zwei ineinander
+        // verschachtelte Cluster mit sichtbarem Zwischenraum (unterschiedlicher margin) - das
+        // ergibt zuverlaessig zwei konzentrische Rahmen. WICHTIG: DOT vererbt ein auf einem
+        // umschliessenden Cluster gesetztes 'label' an verschachtelte Kind-Cluster, die es nicht
+        // selbst ueberschreiben - ohne das explizite 'label="";' HIER rendert Graphviz die
+        // AssemblyLink-Beschriftung der AEUSSEREN Umrahmung (falls vorhanden) zusaetzlich auf
+        // BEIDEN Rigid-Rahmen erneut (live beobachtet: derselbe Text bis zu dreifach gestapelt).
+        out += "  subgraph cluster_" + std::to_string(clusterCounter++) + " {\n";
+        out += "    label=\"\";\n";
+        out += "    style=solid;\n";
+        out += "    penwidth=2;\n";
+        out += "    margin=12;\n";
+        out += "  subgraph cluster_" + std::to_string(clusterCounter++) + " {\n";
+        out += "    label=\"\";\n";
+        out += "    style=solid;\n";
+        out += "    penwidth=2;\n";
+        out += "    margin=4;\n";
+        for (int id : ids) {
+            emitNodeLine(out, id);
+        }
+        out += "  }\n";
+        out += "  }\n";
+    }
+    for (int id : ungrouped) {
+        emitNodeLine(out, id);
+    }
+}
+}  // namespace
+
+std::string IdentityGraph::exportDot()
+{
+    ensureJointEdgesBuilt();
+    if (!groundedBuilt) {
+        isGrounded({});  // erzwingt den Aufbau des Erdungs-Sets als Nebeneffekt
+    }
+
+    std::unordered_map<IdentityHandle, int, IdentityHandleHash> nodeIds;
+    auto nodeIdFor = [&](const IdentityHandle& h) -> int {
+        auto it = nodeIds.find(h);
+        if (it != nodeIds.end()) {
+            return it->second;
+        }
+        int id = static_cast<int>(nodeIds.size());
+        nodeIds.emplace(h, id);
+        return id;
+    };
+
+    // Erst alle Knoten sammeln - aus den Joint-Kanten UND aus den geerdeten Handles, damit auch
+    // ein geerdetes, aber (noch) joint-loses Teil im Diagramm sichtbar bleibt statt stillschweigend
+    // zu fehlen.
+    for (const auto& edge : edges) {
+        nodeIdFor(edge.a);
+        nodeIdFor(edge.b);
+    }
+    for (const auto& g : groundedSet) {
+        nodeIdFor(g);
+    }
+
+    // Nutzerklarstellung 2026-09-21: "RigidGroup" meint hier NICHT nur das explizite
+    // RigidGroupJoint-Feature, sondern JEDE Kette rein starrer (Fixed-)Verbindungen - z.B. in
+    // BG25 sind Halter und Fuehrung ueber genau so eine Kette starr aneinandergehaengt, ohne
+    // dass dafuer je eine explizite "Starre Verbindung" angelegt wurde. Union-Find ueber BEIDE
+    // Quellen: (1) jede Fixed-JointEdge, (2) explizite RigidGroupJoint-Mitgliedschaft
+    // (rootAssembly->getRigidGroups(), siehe rebuildRigidClusters()s identische kanonisierende
+    // Verarbeitung von "ObjectsToRigidGroup"). Muss vor dem ClusterTree-Aufbau unten laufen, da
+    // resolveObject() hier moeglicherweise neue, bisher unbekannte Knoten registriert.
+    DisjointSet rigidDsu;
+    for (const auto& edge : edges) {
+        if (edge.type == JointType::Fixed) {
+            rigidDsu.unite(nodeIdFor(edge.a), nodeIdFor(edge.b));
+        }
+    }
+    for (auto* rigidGroupObj : rootAssembly->getRigidGroups()) {
+        if (!rigidGroupObj) {
+            continue;
+        }
+        auto* prop = dynamic_cast<App::PropertyLinkList*>(
+            rigidGroupObj->getPropertyByName("ObjectsToRigidGroup")
+        );
+        if (!prop) {
+            continue;
+        }
+        auto members = prop->getValues();
+        std::vector<int> memberNodeIds;
+        for (auto* member : members) {
+            if (!member) {
+                continue;
+            }
+            memberNodeIds.push_back(nodeIdFor(resolveObject(member)));
+        }
+        for (std::size_t i = 1; i < memberNodeIds.size(); ++i) {
+            rigidDsu.unite(memberNodeIds[0], memberNodeIds[i]);
+        }
+    }
+
+    // Nach ALLEN Unions (inkl. der von getRigidGroups() ggf. neu registrierten Knoten) nach
+    // Wurzel gruppieren - nur echte Mehrfach-Mitgliedschaften (>=2 an dieser Stelle) werden
+    // unten ueberhaupt als Kandidat fuer einen doppelt umrandeten Cluster behandelt (die
+    // eigentliche "nur >=2 auf DERSELBEN Baumebene"-Entscheidung faellt aber erst in
+    // emitClusterTree(), siehe dortiger Kommentar).
+    std::unordered_map<int, std::vector<int>> rigidGroupsByRoot;
+    for (const auto& [handle, id] : nodeIds) {
+        (void)handle;
+        rigidGroupsByRoot[rigidDsu.find(id)].push_back(id);
+    }
+    std::unordered_map<int, int> rigidGroupOfNode;
+    int rigidGroupCounter = 0;
+    for (auto& [root, ids] : rigidGroupsByRoot) {
+        (void)root;
+        if (ids.size() < 2) {
+            continue;
+        }
+        int groupId = rigidGroupCounter++;
+        for (int id : ids) {
+            rigidGroupOfNode[id] = groupId;
+        }
+    }
+
+    std::string out;
+    out += "graph IdentityGraph {\n";
+    out += "  rankdir=LR;\n";
+    out += "  node [shape=box, style=filled, fontname=\"sans-serif\", fillcolor=\"#dee2e6\"];\n";
+
+    // Rekursive Umrahmung (Nutzerauftrag 2026-09-21): jeder Knoten wird per findContainerChain()
+    // seiner vollen AssemblyLink-Kette zugeordnet und in verschachtelten DOT-subgraph-cluster-
+    // Bloecken emittiert, statt als flache Liste - macht sichtbar, WELCHE Teile in WELCHER
+    // (ggf. mehrfach verschachtelten) Unterbaugruppen-Instanz stecken.
+    ClusterTree clusterRoot;
+    std::unordered_map<int, IdentityHandle> handleById;
+    // FCPROJECT-PATCH (2026-09-21, live an der echten CNC3018_022-Datei gefunden): seit dem
+    // Identitaets-Fix (siehe [[todo-mirrortosourcemap-missing-for-nested-assemblylink]]) teilen
+    // ALLE Instanzen einer Schiene fuer denselben Slot dasselbe 'templateObj' (z.B. immer
+    // "CNC3018_023_A_Halterbaugruppe", NIE mehr die frueher zufaellig unterscheidbaren
+    // Top-Level-Namen "...004"/"...005") - handleLabel() alleine liefert deshalb fuer alle 3
+    // Schienen-Instanzen denselben Text. Die instanzeigene, lokale Spiegelkopie ('localObj',
+    // ohnehin schon fuer die Cluster-Zuordnung berechnet) traegt dagegen weiterhin den
+    // instanzeigenen, eindeutigen Namen - als Label bevorzugt, 'handleLabel()' nur als Rueckfall.
+    std::unordered_map<int, App::DocumentObject*> localObjById;
+    for (const auto& [handle, id] : nodeIds) {
+        handleById[id] = handle;
+        App::DocumentObject* localObj = materialize(resolveForUi(handle));
+        localObjById[id] = localObj;
+        std::vector<AssemblyLink*> chain;
+        if (localObj) {
+            findContainerChain(rootAssembly, localObj, chain);
+        }
+        insertIntoClusterTree(clusterRoot, chain, id);
+    }
+
+    auto emitNodeLine = [&](std::string& text, int id) {
+        const IdentityHandle& handle = handleById[id];
+        App::DocumentObject* localObj = localObjById[id];
+        std::string label = localObj ? localObj->getNameInDocument() : handleLabel(handle);
+        bool grounded = groundedSet.find(handle) != groundedSet.end();
+        text += "  n" + std::to_string(id) + " [label=\"" + dotEscape(label) + "\"";
+        if (grounded) {
+            text += ", fillcolor=\"#b7e4c7\", peripheries=2";
+        }
+        text += "];\n";
+    };
+    int clusterCounter = 0;
+    emitClusterTree(out, clusterRoot, clusterCounter, emitNodeLine, rigidGroupOfNode);
+
+    // Nutzerklarstellung 2026-09-21 (siehe Kommentar oben bei den Cluster-Labels): Kanten-Label
+    // ist der interne Name (getNameInDocument(), dokumentweit eindeutig, z.B. "Joint003"), NICHT
+    // das (bei aktivem DuplicateLabels moeglicherweise mehrdeutige) Label.
+    for (const auto& edge : edges) {
+        int idA = nodeIdFor(edge.a);
+        int idB = nodeIdFor(edge.b);
+        std::string jointName = edge.joint ? edge.joint->getNameInDocument() : "?";
+        bool rigid = (edge.type == JointType::Fixed);
+        out += "  n" + std::to_string(idA) + " -- n" + std::to_string(idB) + " [label=\""
+            + dotEscape(jointName) + "\", style=" + (rigid ? "bold" : "dashed") + "];\n";
+    }
+
+    out += "}\n";
+    return out;
 }
 
 }  // namespace Assembly

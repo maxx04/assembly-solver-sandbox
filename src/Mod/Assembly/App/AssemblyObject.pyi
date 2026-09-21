@@ -119,6 +119,16 @@ class AssemblyObject(Part):
         ...
 
     @constmethod
+    def exportIdentityGraphDot(self) -> str:
+        """
+        Export the assembly's IdentityGraph (parts/instances as nodes, joints as edges,
+        grounded parts highlighted) as Graphviz DOT text.
+
+        Returns: DOT source, e.g. to render with `dot -Tsvg` or an online Graphviz viewer.
+        """
+        ...
+
+    @constmethod
     def isJointConnectingPartToGround(self, joint: DocumentObject, prop_name: str, /) -> Any:
         """
         Check if a joint is connecting a part to the ground.

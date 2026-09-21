@@ -72,6 +72,7 @@ class AssemblyWorkbench(Workbench):
         import CommandCreateSimulation
         import CommandCreateSnapshot
         import CommandCreateBom
+        import CommandShowIdentityGraph
         import Preferences
 
         FreeCADGui.addLanguagePath(":/translations")
@@ -90,6 +91,7 @@ class AssemblyWorkbench(Workbench):
             "Assembly_CreateSnapshot",
             "Assembly_CreateSimulation",
             "Assembly_CreateBom",
+            "Assembly_ShowIdentityGraph",
         ]
 
         cmdListMenuOnly = [

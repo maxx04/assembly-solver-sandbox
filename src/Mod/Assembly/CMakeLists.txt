@@ -31,6 +31,7 @@ set(Assembly_Scripts
     CommandCreateSimulation.py
     CommandCreateSnapshot.py
     CommandExportASMT.py
+    CommandShowIdentityGraph.py
     TestAssemblyWorkbench.py
     JointObject.py
     Preferences.py
