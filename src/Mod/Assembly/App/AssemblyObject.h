@@ -341,6 +341,11 @@ public:
     // und liefert die fertige Graphviz-DOT-Textdarstellung.
     std::string exportIdentityGraphDot();
 
+    // FCPROJECT-PATCH (2026-09-21, Nutzerauftrag "asmt als zusaetzliche Kontrolle nutzen"):
+    // duenner Python-Zugang zu IdentityGraph::verifyAgainstAsmt() - siehe dortigen Kommentar fuer
+    // Zweck und Einschraenkungen.
+    std::string verifyIdentityGraphAgainstAsmt();
+
     // FCPROJECT-PATCH (Fix-Ansatz D, "flexible Unterbaugruppe als Ganzes ziehbar, wenn
     // unverbunden", Nutzerauftrag 2026-09-16/17): isPartConnected(containerObj) allein reicht
     // NICHT aus, um zu pruefen, ob eine flexible AssemblyLink "als Ganzes unverbunden" ist - ein

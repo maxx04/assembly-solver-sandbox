@@ -217,6 +217,15 @@ public:
     // Graphviz-Renderer (z.B. `dot -Tsvg`) oder einen Online-Viewer einfuegen.
     std::string exportDot();
 
+    // Nutzerauftrag 2026-09-21 (".asmt als zusaetzliche Kontrolle nutzen"): exportiert die
+    // Baugruppe ueber die ECHTE Solver-Pipeline (AssemblyObject::exportAsASMT(), dieselbe, die ein
+    // echter solve() durchlaeuft) in eine temporaere .asmt-Datei, parst deren Teile-/Gelenk-Zahlen
+    // und vergleicht sie mit dem, was DIESER Graph unabhaengig davon selbst zusammengetragen hat -
+    // eine unabhaengige Gegenkontrolle der eigenen Knoten-/Kanten-Buchhaltung (nicht der
+    // Resolver-Logik selbst, siehe ausfuehrliche Einschraenkung am Definitionsort). Gedacht als
+    // Diagnosehilfe (Fehlersuche, Ergaenzung zu exportDot()), kein automatischer Test.
+    std::string verifyAgainstAsmt();
+
     // Verwirft den zwischengespeicherten Aufbau (Joint-Kanten, Erdungs-Set). resolve()/
     // resolveJointRef() selbst lesen immer live von der Dokumentstruktur und brauchen dies nicht.
     void invalidate();

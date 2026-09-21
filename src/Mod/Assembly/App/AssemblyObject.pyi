@@ -129,6 +129,20 @@ class AssemblyObject(Part):
         ...
 
     @constmethod
+    def verifyIdentityGraphAgainstAsmt(self) -> str:
+        """
+        Cross-check the IdentityGraph against a fresh ASMT export (the same real solver-feeding
+        pipeline used by "Export ASMT File"): compares the graph's own rigid-merged body count
+        and joint edge count against what actually reaches the solver. A diagnostic aid for
+        debugging identity-resolution issues, not an automated correctness test - a mismatch in
+        body count points at a real divergence, the joint count comparison is informational only
+        (a single FreeCAD joint can translate into several MbD joint primitives).
+
+        Returns: human-readable report text.
+        """
+        ...
+
+    @constmethod
     def isJointConnectingPartToGround(self, joint: DocumentObject, prop_name: str, /) -> Any:
         """
         Check if a joint is connecting a part to the ground.

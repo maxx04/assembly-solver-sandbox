@@ -22,8 +22,11 @@
  ***************************************************************************/
 
 #include <algorithm>
+#include <cstdio>
+#include <fstream>
 #include <functional>
 
+#include <App/Application.h>
 #include <App/Document.h>
 #include <App/DocumentObject.h>
 #include <App/DocumentObjectGroup.h>
@@ -1360,6 +1363,250 @@ std::string IdentityGraph::exportDot()
 
     out += "}\n";
     return out;
+}
+
+// FCPROJECT-PATCH (2026-09-21, Nutzerauftrag "asmt als zusaetzliche Kontrolle nutzen"):
+// verifyAgainstAsmt() - siehe Deklaration in AssemblyIdentityGraph.h fuer den Zweck. WICHTIGE
+// EINSCHRAENKUNG (dem Nutzer explizit erklaert, bevor diese Funktion geschrieben wurde):
+// AssemblyObject::exportAsASMT() laeuft ueber canonicalizeForMbD()/resolvePartForMbD(), und
+// BEIDE bauen seit der Phase-3/1-Umstellung selbst einen IdentityGraph auf und rufen resolve()/
+// resolveJointRef() auf - ein Bug IN resolve() selbst wuerde deshalb in BEIDEN Ausgaben (Diagramm
+// und .asmt) IDENTISCH falsch erscheinen, ein reiner Vergleich der beiden koennte einen solchen
+// Bug NICHT aufdecken. Was diese Funktion TATSAECHLICH unabhaengig prueft, sind die ZWEI
+// NACHGELAGERTEN Aggregations-Schichten, die je EIGENEN, voneinander unabhaengigen Code
+// verwenden:
+//   1. Rigid-Verschmelzung: AssemblyObject::rebuildRigidClusters() verschmilzt fuer den ECHTEN
+//      Solver AUSSCHLIESSLICH ueber explizite RigidGroupJoint-Mitgliedschaft (getRigidGroups()) -
+//      ein gewoehnlicher Fixed-JOINT bleibt dagegen ein EIGENSTAENDIGER MbD-Koerper mit einer
+//      0-DOF-Randbedingung (live an BG37 verifiziert: erster Versuch, hier wie in exportDot()s
+//      Cluster-Darstellung ZUSAETZLICH ueber jede Fixed-Kante zu verschmelzen, ergab einen
+//      krassen Fehlalarm - Graph 4 vs. ASMT 23 Koerper). Diese Funktion bildet deshalb bewusst
+//      NUR rebuildRigidClusters()' getRigidGroups()-Regel nach, eigenstaendig nachgerechnet.
+//   2. Joint-Uebersetzung: AssemblyObject::makeMbdJoint() (kann aus EINEM FreeCAD-Joint MEHRERE
+//      MbD-Gelenk-Primitive machen, z.B. bei Distance-Joints je nach Modus) - deshalb wird die
+//      Gelenkzahl hier bewusst NUR informativ gegenuebergestellt, NICHT als Bestehen/Durchfallen
+//      gewertet (ein 1:1-Vergleich waere bei jedem zusammengesetzten Joint ein Fehlalarm).
+namespace
+{
+int asmtIndentDepth(const std::string& line)
+{
+    std::size_t depth = 0;
+    while (depth < line.size() && line[depth] == '\t') {
+        ++depth;
+    }
+    return static_cast<int>(depth);
+}
+
+struct AsmtSummary
+{
+    std::vector<std::string> partNames;
+    int jointCount = 0;
+    bool fileReadable = false;
+};
+
+// Minimaler, absichtlich NICHT vollstaendiger Parser fuer das ASMT-Textformat (siehe
+// src/3rdParty/OndselSolver/OndselSolver/ASMTAssembly.cpp's storeOnLevelParts()/
+// storeOnLevelJoints() fuer die Schreibseite: "Parts" > "Part" > "Name" > <Wert>,
+// "ConstraintSets" > "Joints" > "<Typ>Joint" > "Name" > <Wert>, IMMER relativ um dieselbe Anzahl
+// Ebenen tiefer, unabhaengig von der absoluten Tiefe - deshalb wird hier relativ zur jeweiligen
+// Abschnitts-Kopfzeile geparst statt mit fest einprogrammierten absoluten Tab-Zahlen).
+AsmtSummary parseAsmtSummary(const std::string& filePath)
+{
+    AsmtSummary summary;
+    std::ifstream in(filePath);
+    if (!in.is_open()) {
+        return summary;
+    }
+    summary.fileReadable = true;
+
+    std::vector<std::string> lines;
+    std::string line;
+    while (std::getline(in, line)) {
+        lines.push_back(line);
+    }
+
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+        int depth = asmtIndentDepth(lines[i]);
+        std::string content = lines[i].substr(depth);
+
+        if (content == "Parts") {
+            for (std::size_t j = i + 1; j < lines.size(); ++j) {
+                int d = asmtIndentDepth(lines[j]);
+                std::string c = lines[j].substr(d);
+                if (d <= depth) {
+                    break;
+                }
+                if (d == depth + 1 && c == "Part") {
+                    std::string name = "?";
+                    for (std::size_t k = j + 1; k < lines.size(); ++k) {
+                        int dk = asmtIndentDepth(lines[k]);
+                        std::string ck = lines[k].substr(dk);
+                        if (dk <= depth + 1) {
+                            break;
+                        }
+                        if (dk == depth + 2 && ck == "Name" && k + 1 < lines.size()) {
+                            int dv = asmtIndentDepth(lines[k + 1]);
+                            if (dv == depth + 3) {
+                                name = lines[k + 1].substr(dv);
+                            }
+                            break;
+                        }
+                    }
+                    summary.partNames.push_back(name);
+                }
+            }
+        }
+        else if (content == "Joints") {
+            for (std::size_t j = i + 1; j < lines.size(); ++j) {
+                int d = asmtIndentDepth(lines[j]);
+                std::string c = lines[j].substr(d);
+                if (d <= depth) {
+                    break;
+                }
+                // Jeder Block-Header direkt unter "Joints" ist EIN MbD-Gelenk-Primitiv. Erwartet
+                // waere ein auf "Joint" endender Name (RevoluteJoint, FixedJoint, ...) - real
+                // endet er auf "JointE": MbD::ASMTJoint::storeOnLevel() (OndselSolver,
+                // ASMTJoint.cpp) entfernt vom RTTI-Klassennamen NOCHMAL 4 Zeichen in der Annahme,
+                // ein "ASMT"-Praefix entfernen zu muessen - das hat classname() (ASMTItem.cpp)
+                // aber schon selbst erledigt, und laesst dabei zusaetzlich das mangling-bedingte
+                // schliessende 'E' stehen. Ergebnis: die ERSTEN 4 Zeichen des ECHTEN Namens fallen
+                // weg (z.B. "FixedJoint" -> "dJoint"), das "E" am Ende bleibt IMMER erhalten - ein
+                // waschechter Bug in OndselSolver selbst (nicht Teil dieser Sandbox, hier nur
+                // toleriert statt gefixt). "JointE" (statt "Joint") ist deshalb der zuverlaessige
+                // Anker.
+                if (d == depth + 1 && c.size() > 6 && c.compare(c.size() - 6, 6, "JointE") == 0) {
+                    summary.jointCount++;
+                }
+            }
+        }
+    }
+    return summary;
+}
+
+// Eigenstaendige, IdentityHandle-geschluesselte Union-Find - bewusst NICHT dieselbe DisjointSet
+// wie oben in exportDot() (dort auf int-Knoten-IDs zugeschnitten, die erst waehrend des
+// Cluster-Aufbaus entstehen) - hier reicht eine einfachere, direkt auf Handles arbeitende
+// Fassung, da kein Cluster-Baum gebraucht wird, nur die Anzahl distinkter starrer Koerper.
+struct HandleDisjointSet
+{
+    std::unordered_map<IdentityHandle, IdentityHandle, IdentityHandleHash> parent;
+
+    IdentityHandle find(const IdentityHandle& x)
+    {
+        auto it = parent.find(x);
+        if (it == parent.end()) {
+            parent.emplace(x, x);
+            return x;
+        }
+        if (it->second == x) {
+            return x;
+        }
+        IdentityHandle root = find(it->second);
+        it->second = root;
+        return root;
+    }
+
+    void unite(const IdentityHandle& a, const IdentityHandle& b)
+    {
+        IdentityHandle ra = find(a);
+        IdentityHandle rb = find(b);
+        if (!(ra == rb)) {
+            parent[ra] = rb;
+        }
+    }
+};
+}  // namespace
+
+std::string IdentityGraph::verifyAgainstAsmt()
+{
+    ensureJointEdgesBuilt();
+    if (!groundedBuilt) {
+        isGrounded({});
+    }
+
+    // Graph-seitige starre Verschmelzung - WICHTIG, per echtem BG37-Testlauf korrigiert: NUR
+    // ueber explizite RigidGroupJoint-Mitgliedschaft (getRigidGroups()), NICHT (wie exportDot()s
+    // Cluster-Darstellung es bewusst tut) zusaetzlich ueber jede gewoehnliche Fixed-JOINT-Kante.
+    // Erster Versuch hier unite()te auch ueber Fixed-Kanten (identisch zu exportDot()s
+    // "kinematisch starr"-Gruppierung) - das lieferte an der echten BG37-Datei einen krassen
+    // Fehlalarm (Graph: 4 Koerper, ASMT: 23), weil AssemblyObject::rebuildRigidClusters() (die
+    // ECHTE Solver-Seite, s.o.) ausschliesslich ueber getRigidGroups() verschmilzt - ein
+    // gewoehnlicher Fixed-JOINT (0 Freiheitsgrade) bleibt fuer den Solver weiterhin EIN
+    // eigenstaendiger MbD-Koerper MIT einer 0-DOF-Randbedingung zum anderen, wird NICHT zu einem
+    // einzigen Koerper verschmolzen wie bei einer expliziten "Starren Verbindung". Diese Funktion
+    // bildet deshalb bewusst NUR rebuildRigidClusters()' Regel nach, nicht exportDot()s (fuer die
+    // reine Visualisierung durchaus sinnvolle, aber hier irrefuehrende) weitere Fixed-Kanten-Regel.
+    std::unordered_set<IdentityHandle, IdentityHandleHash> allHandles;
+    for (const auto& edge : edges) {
+        allHandles.insert(edge.a);
+        allHandles.insert(edge.b);
+    }
+    for (const auto& g : groundedSet) {
+        allHandles.insert(g);
+    }
+
+    HandleDisjointSet dsu;
+    for (const auto& h : allHandles) {
+        dsu.find(h);
+    }
+    for (auto* rigidGroupObj : rootAssembly->getRigidGroups()) {
+        if (!rigidGroupObj) {
+            continue;
+        }
+        auto* prop = dynamic_cast<App::PropertyLinkList*>(
+            rigidGroupObj->getPropertyByName("ObjectsToRigidGroup")
+        );
+        if (!prop) {
+            continue;
+        }
+        std::vector<IdentityHandle> memberHandles;
+        for (auto* member : prop->getValues()) {
+            if (member) {
+                memberHandles.push_back(resolveObject(member));
+            }
+        }
+        for (std::size_t i = 1; i < memberHandles.size(); ++i) {
+            dsu.unite(memberHandles[0], memberHandles[i]);
+        }
+    }
+
+    std::unordered_set<IdentityHandle, IdentityHandleHash> collapsedRoots;
+    for (const auto& h : allHandles) {
+        collapsedRoots.insert(dsu.find(h));
+    }
+    int graphBodyCount = static_cast<int>(collapsedRoots.size());
+    int graphJointCount = static_cast<int>(edges.size());
+
+    // ASMT-Export ueber die ECHTE Produktions-Pipeline (nicht nachgebaut) in eine Temp-Datei,
+    // danach ausgewertet und geloescht - diese Funktion hinterlaesst keine Datei auf der Platte.
+    std::string tmpFile = App::Application::getTempFileName("identitygraph_verify_") + ".asmt";
+    rootAssembly->exportAsASMT(tmpFile);
+    AsmtSummary asmt = parseAsmtSummary(tmpFile);
+    std::remove(tmpFile.c_str());
+
+    std::string report;
+    report += "IdentityGraph <-> ASMT Gegenkontrolle (" + std::string(rootAssembly->getNameInDocument())
+        + ")\n";
+    if (!asmt.fileReadable) {
+        report += "  FEHLER: ASMT-Export konnte nicht gelesen werden (" + tmpFile + ")\n";
+        return report;
+    }
+
+    report += "  Koerper (Graph, starr verschmolzen): " + std::to_string(graphBodyCount) + "\n";
+    report += "  Koerper (ASMT-Export):               " + std::to_string(asmt.partNames.size())
+        + "\n";
+    bool bodyMismatch = graphBodyCount != static_cast<int>(asmt.partNames.size());
+    report += bodyMismatch ? "  -> ABWEICHUNG\n" : "  -> uebereinstimmend\n";
+
+    report += "  Gelenke (Graph, IdentityGraph-Kanten): " + std::to_string(graphJointCount) + "\n";
+    report += "  Gelenke (ASMT-Export, MbD-Primitive):  " + std::to_string(asmt.jointCount) + "\n";
+    report += "  (rein informativ - ein FreeCAD-Joint kann in mehrere MbD-Primitive zerlegt "
+        "werden, z.B. Distance-Joints; keine 1:1-Erwartung)\n";
+
+    report += bodyMismatch
+        ? "ERGEBNIS: ABWEICHUNG - Koerperzahl stimmt nicht ueberein, naeher pruefen.\n"
+        : "ERGEBNIS: unauffaellig.\n";
+    return report;
 }
 
 }  // namespace Assembly

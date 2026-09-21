@@ -161,6 +161,15 @@ PyObject* AssemblyObjectPy::exportIdentityGraphDot(PyObject* args) const
     return Py_BuildValue("s", dot.c_str());
 }
 
+PyObject* AssemblyObjectPy::verifyIdentityGraphAgainstAsmt(PyObject* args) const
+{
+    if (!PyArg_ParseTuple(args, "")) {
+        return nullptr;
+    }
+    std::string report = this->getAssemblyObjectPtr()->verifyIdentityGraphAgainstAsmt();
+    return Py_BuildValue("s", report.c_str());
+}
+
 PyObject* AssemblyObjectPy::isPartGrounded(PyObject* args) const
 {
     PyObject* pyobj;
