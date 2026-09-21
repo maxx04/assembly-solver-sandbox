@@ -884,6 +884,39 @@ void IdentityGraph::invalidate()
 
 namespace
 {
+std::string jointTypeName(JointType type)
+{
+    switch (type) {
+        case JointType::Fixed:
+            return "Fixed";
+        case JointType::Revolute:
+            return "Revolute";
+        case JointType::Cylindrical:
+            return "Cylindrical";
+        case JointType::Slider:
+            return "Slider";
+        case JointType::Ball:
+            return "Ball";
+        case JointType::Distance:
+            return "Distance";
+        case JointType::Parallel:
+            return "Parallel";
+        case JointType::Perpendicular:
+            return "Perpendicular";
+        case JointType::Angle:
+            return "Angle";
+        case JointType::RackPinion:
+            return "RackPinion";
+        case JointType::Screw:
+            return "Screw";
+        case JointType::Gears:
+            return "Gears";
+        case JointType::Belt:
+            return "Belt";
+    }
+    return "Unknown";
+}
+
 // DOT-Bezeichner duerfen keine Anfuehrungszeichen/Backslashes enthalten - Labels (Teile-/
 // Joint-Namen) koennen beides theoretisch enthalten (Nutzer-vergebene Labels sind frei).
 std::string dotEscape(const std::string& s)
@@ -897,6 +930,42 @@ std::string dotEscape(const std::string& s)
         out += c;
     }
     return out;
+}
+
+// Fuer DOT-HTML-artige Labels (label=<...>, spitze statt runde Klammern - noetig fuer gemischte
+// Schriftgroessen, z.B. UiHandle/SolverHandle klein unter dem Hauptnamen) gilt XML-Escaping statt
+// dotEscape()s Anfuehrungszeichen-Regel.
+std::string htmlEscape(const std::string& s)
+{
+    std::string out;
+    out.reserve(s.size());
+    for (char c : s) {
+        switch (c) {
+            case '&':
+                out += "&amp;";
+                break;
+            case '<':
+                out += "&lt;";
+                break;
+            case '>':
+                out += "&gt;";
+                break;
+            default:
+                out += c;
+        }
+    }
+    return out;
+}
+
+// Nutzerauftrag 2026-09-21: UiHandle/SolverHandle als hexadezimaler Zeigerwert statt Name -
+// zeigt die Adresse selbst (praeziser als ein Namensvergleich: zwei Objekte mit zufaellig
+// gleichem Namen in unterschiedlichen Dokumenten waeren namentlich nicht unterscheidbar, als
+// Zeiger eindeutig).
+std::string hexPointer(const void* p)
+{
+    char buf[20];
+    snprintf(buf, sizeof(buf), "%p", p);
+    return buf;
 }
 
 // Menschlich lesbares Knoten-Label: der interne Name des tiefsten echten Objekts (z.B.
@@ -974,6 +1043,7 @@ void emitClusterTree(
     const ClusterTree& node,
     int& clusterCounter,
     const std::function<void(std::string&, int)>& emitNodeLine,
+    const std::function<void(std::string&, AssemblyLink*)>& emitClusterLabel,
     const std::unordered_map<int, int>& rigidGroupOfNode
 )
 {
@@ -992,11 +1062,11 @@ void emitClusterTree(
         // Nutzerbefund 2026-09-21: bei "t" (oben) ueberlappte das aeussere Label wiederholt mit
         // dem inneren Rigid-Cluster, der bei dieser Baumstruktur meist selbst oben im Layout
         // landet - "b" (unten) haelt zuverlaessig Abstand.
-        out += "    label=\"" + dotEscape(link ? link->getNameInDocument() : "?") + "\";\n";
+        emitClusterLabel(out, link);
         out += "    fontname=\"sans-serif Bold\";\n";
         out += "    style=\"dashed,bold\";\n";
         out += "    penwidth=2;\n";
-        emitClusterTree(out, child, clusterCounter, emitNodeLine, rigidGroupOfNode);
+        emitClusterTree(out, child, clusterCounter, emitNodeLine, emitClusterLabel, rigidGroupOfNode);
         out += "  }\n";
     }
 
@@ -1025,30 +1095,20 @@ void emitClusterTree(
             ungrouped.insert(ungrouped.end(), ids.begin(), ids.end());
             continue;
         }
-        // Nutzerauftrag 2026-09-21: doppelt umrandet wie ein geerdeter Knoten
-        // (peripheries=2) - Graphviz' 'peripheries'-Attribut wird fuer CLUSTER (anders als fuer
-        // Knoten) nicht zuverlaessig als zwei sichtbare Linien gerendert (live bestaetigt: nur
-        // eine einzelne, nicht sichtbar doppelte Linie). Robusterer Ersatz: zwei ineinander
-        // verschachtelte Cluster mit sichtbarem Zwischenraum (unterschiedlicher margin) - das
-        // ergibt zuverlaessig zwei konzentrische Rahmen. WICHTIG: DOT vererbt ein auf einem
-        // umschliessenden Cluster gesetztes 'label' an verschachtelte Kind-Cluster, die es nicht
-        // selbst ueberschreiben - ohne das explizite 'label="";' HIER rendert Graphviz die
-        // AssemblyLink-Beschriftung der AEUSSEREN Umrahmung (falls vorhanden) zusaetzlich auf
-        // BEIDEN Rigid-Rahmen erneut (live beobachtet: derselbe Text bis zu dreifach gestapelt).
+        // Nutzerauftrag 2026-09-21 (Korrektur nach mehreren Anlaeufen mit doppelter
+        // Umrahmung/peripheries=2 - beides bei DOT-CLUSTERN optisch unbefriedigend): EIN Rahmen,
+        // dunkelgruen (wie die geerdeten Knoten), dick statt doppelt. WICHTIG (siehe vorherige
+        // Fassung): DOT vererbt ein auf einem umschliessenden Cluster gesetztes 'label' an
+        // verschachtelte Kind-Cluster - explizites 'label="";' bleibt noetig, sonst rendert
+        // Graphviz die AssemblyLink-Beschriftung der AEUSSEREN Umrahmung hier zusaetzlich.
         out += "  subgraph cluster_" + std::to_string(clusterCounter++) + " {\n";
         out += "    label=\"\";\n";
         out += "    style=solid;\n";
-        out += "    penwidth=2;\n";
-        out += "    margin=12;\n";
-        out += "  subgraph cluster_" + std::to_string(clusterCounter++) + " {\n";
-        out += "    label=\"\";\n";
-        out += "    style=solid;\n";
-        out += "    penwidth=2;\n";
-        out += "    margin=4;\n";
+        out += "    color=\"#2d6a4f\";\n";
+        out += "    penwidth=4;\n";
         for (int id : ids) {
             emitNodeLine(out, id);
         }
-        out += "  }\n";
         out += "  }\n";
     }
     for (int id : ungrouped) {
@@ -1166,10 +1226,17 @@ std::string IdentityGraph::exportDot()
     // ohnehin schon fuer die Cluster-Zuordnung berechnet) traegt dagegen weiterhin den
     // instanzeigenen, eindeutigen Namen - als Label bevorzugt, 'handleLabel()' nur als Rueckfall.
     std::unordered_map<int, App::DocumentObject*> localObjById;
+    // Nutzerauftrag 2026-09-21: UiHandle- und SolverHandle-materialisiertes Objekt je Knoten in
+    // Kleinschrift mit anzeigen (genau die zwei Identitaeten, deren Auseinanderfallen den
+    // BG22-Bug verursacht hat, siehe [[todo-mirrortosourcemap-missing-for-nested-assemblylink]])
+    // - macht einen kuenftigen aehnlichen Bug direkt im Diagramm sichtbar, statt erst durch
+    // manuelle Debug-Bindungen gefunden werden zu muessen.
+    std::unordered_map<int, App::DocumentObject*> solverObjById;
     for (const auto& [handle, id] : nodeIds) {
         handleById[id] = handle;
         App::DocumentObject* localObj = materialize(resolveForUi(handle));
         localObjById[id] = localObj;
+        solverObjById[id] = materialize(resolveForSolver(handle));
         std::vector<AssemblyLink*> chain;
         if (localObj) {
             findContainerChain(rootAssembly, localObj, chain);
@@ -1180,16 +1247,102 @@ std::string IdentityGraph::exportDot()
     auto emitNodeLine = [&](std::string& text, int id) {
         const IdentityHandle& handle = handleById[id];
         App::DocumentObject* localObj = localObjById[id];
+        App::DocumentObject* solverObj = solverObjById[id];
         std::string label = localObj ? localObj->getNameInDocument() : handleLabel(handle);
         bool grounded = groundedSet.find(handle) != groundedSet.end();
-        text += "  n" + std::to_string(id) + " [label=\"" + dotEscape(label) + "\"";
+        // Nutzerbefund 2026-09-21 (live am echten BG37/TraegerBaugruppe_Z-Projekt: "Fuehrung101"
+        // schien im Diagramm komplett zu fehlen): der Resolver behandelt einen STARREN AssemblyLink
+        // bewusst wie ein Blatt (siehe resolve()/resolveObjectIn(), "Rigid: wie ein Blatt
+        // behandeln") - fuer den Solver richtig (eine starre Unterbaugruppe ist EIN Koerper), aber
+        // in DIESEM reinen Visualisierungs-Diagramm sah so ein Blatt optisch exakt wie ein
+        // gewoehnliches Part aus. Nutzerauftrag: als "groesstes Rechteck" hervorheben (deutlich
+        // groesserer Kasten als ein normales Part) UND UiHandle/SolverHandle IMMER zeigen (nicht
+        // nur bei Abweichung) - genau hier taucht "wo steckt mein Teil" typischerweise auf.
+        bool isAssembly = localObj && localObj->isDerivedFrom<AssemblyLink>();
+        // Nutzerbefund 2026-09-21 (live an BG37/BG43 + Root-Level-Teilen 36/38/39/40/42): die
+        // bisherige "nur bei Abweichung"-Unterdrueckung blendete UiHandle/SolverHandle GENAU dort
+        // aus, wo der Nutzer sie sehen wollte - nicht nur bei starren AssemblyLinks, sondern auch
+        // bei ganz gewoehnlichen Root-Level-Teilen (kein Mirror, UI==Solver trivial) UND bei
+        // Cluster-Rahmen. Nutzerauftrag: IMMER zeigen, unabhaengig von Abweichung - die Warnfunktion
+        // bleibt implizit erhalten (zwei sichtbar UNTERSCHIEDLICHE Werte fallen weiterhin sofort
+        // auf), es entfaellt nur die bedingte Ausblendung selbst.
+        text += "  n" + std::to_string(id)
+            + " [label=<<TABLE BORDER=\"0\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"0\">";
+        text += "<TR><TD ALIGN=\"LEFT\">" + htmlEscape(label) + "</TD></TR>";
+        text += "<TR><TD HEIGHT=\"4\"></TD></TR>";
+        text += "<TR><TD ALIGN=\"LEFT\"><FONT POINT-SIZE=\"9\">UI: " + hexPointer(localObj)
+            + "</FONT></TD></TR>";
+        text += "<TR><TD ALIGN=\"LEFT\"><FONT POINT-SIZE=\"9\">Solver: "
+            + hexPointer(solverObj) + "</FONT></TD></TR>";
+        text += "</TABLE>>";
+        if (isAssembly) {
+            text += ", width=\"2.5\", height=\"1\"";
+        }
         if (grounded) {
-            text += ", fillcolor=\"#b7e4c7\", peripheries=2";
+            // Nutzerauftrag 2026-09-21: helle Farben vermeiden, die bei Schwarz-Weiss-Druck mit
+            // der neutralen Standardfuellung verschmelzen wuerden (das vorherige helle Mintgruen
+            // #b7e4c7 hatte fast denselben Grauwert wie #dee2e6) - kraeftigeres Gruen mit klarem
+            // Helligkeitsunterschied.
+            text += ", fillcolor=\"#6fae82\", peripheries=2";
         }
         text += "];\n";
     };
+    // Nutzerauftrag 2026-09-21: "auch für Assemblies UI:/Solver:" - der Cluster-Rahmen einer
+    // NICHT-starren verschachtelten Baugruppe zeigt jetzt dieselbe Kleinschrift-Adresszeile wie ein
+    // Part-Knoten. 'link' ist bereits die instanzeigene lokale AssemblyLink-Kopie (siehe
+    // findContainerChain()) - deren kanonische Solver-Identitaet ueber resolveObject()/
+    // resolveForSolver() ermittelt, exakt wie fuer jeden anderen Knoten.
+    auto emitClusterLabel = [&](std::string& text, AssemblyLink* link) {
+        if (!link) {
+            text += "    label=\"?\";\n";
+            return;
+        }
+        App::DocumentObject* solverObj = materialize(resolveForSolver(resolveObject(link)));
+        text += "    label=<<TABLE BORDER=\"0\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"0\">";
+        text += "<TR><TD ALIGN=\"LEFT\"><FONT POINT-SIZE=\"11\"><B>"
+            + htmlEscape(link->getNameInDocument()) + "</B></FONT></TD></TR>";
+        // Nutzerbefund 2026-09-21: dieselbe Umstellung wie in emitNodeLine() - IMMER zeigen, nicht
+        // nur bei Abweichung (siehe dortiger Kommentar fuer die volle Begruendung).
+        text += "<TR><TD HEIGHT=\"4\"></TD></TR>";
+        text += "<TR><TD ALIGN=\"LEFT\"><FONT POINT-SIZE=\"9\">UI: " + hexPointer(link)
+            + "</FONT></TD></TR>";
+        text += "<TR><TD ALIGN=\"LEFT\"><FONT POINT-SIZE=\"9\">Solver: "
+            + hexPointer(solverObj) + "</FONT></TD></TR>";
+        text += "<TR><TD HEIGHT=\"2\"></TD></TR>";
+        text += "</TABLE>>;\n";
+    };
+    // Nutzerbefund 2026-09-21 (live an CNC3018_037_A_TraegerBaugruppe_Z.FCStd: "du bildest gesamt
+    // Assembly 37 nicht ab"): jede VERSCHACHTELTE Unterbaugruppe bekam bereits ihren eigenen
+    // Cluster-Rahmen (emitClusterTree() oben) - die WURZEL-Baugruppe selbst (rootAssembly, hier die
+    // gerade geoeffnete/geloeste Baugruppe) dagegen nie: ihre eigenen direkten Mitglieder (Teile
+    // UND Joints, die NICHT innerhalb einer weiteren AssemblyLink-Instanz liegen) schwammen bisher
+    // rahmenlos auf oberster Ebene - fuer den Nutzer ununterscheidbar von "gehoert zu gar keiner
+    // Baugruppe". Fix: eine Ebene hoeher (Nutzerauftrag "also stufe nach oben") - EIN zusaetzlicher,
+    // aeusserster Rahmen um die GESAMTE bisherige Ausgabe, benannt nach rootAssembly selbst, als
+    // "groesstes Rechteck" dicker als jede verschachtelte Baugruppe (penwidth=2) und jede
+    // Rigid-Gruppe (penwidth=4), damit optisch klar ist: dies ist die uebergeordnete Ebene, die
+    // alles andere einschliesst.
+    out += "  subgraph cluster_root {\n";
+    out += "    label=<<TABLE BORDER=\"0\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"0\">";
+    out += "<TR><TD ALIGN=\"LEFT\"><FONT POINT-SIZE=\"13\"><B>"
+        + htmlEscape(rootAssembly->getNameInDocument()) + "</B></FONT></TD></TR>";
+    // Nutzerbefund 2026-09-21: dieselbe UI:/Solver:-Zeile auch fuer die Wurzel selbst (kein
+    // Mirror-Konzept fuer rootAssembly, deshalb UI==Solver==rootAssembly - aber konsistent mit
+    // jedem anderen Cluster/Knoten trotzdem angezeigt statt stillschweigend zu fehlen).
+    out += "<TR><TD HEIGHT=\"4\"></TD></TR>";
+    out += "<TR><TD ALIGN=\"LEFT\"><FONT POINT-SIZE=\"9\">UI: " + hexPointer(rootAssembly)
+        + "</FONT></TD></TR>";
+    out += "<TR><TD ALIGN=\"LEFT\"><FONT POINT-SIZE=\"9\">Solver: " + hexPointer(rootAssembly)
+        + "</FONT></TD></TR>";
+    out += "<TR><TD HEIGHT=\"2\"></TD></TR>";
+    out += "</TABLE>>;\n";
+    out += "    fontname=\"sans-serif Bold\";\n";
+    out += "    style=solid;\n";
+    out += "    penwidth=5;\n";
+    out += "    color=\"#495057\";\n";
     int clusterCounter = 0;
-    emitClusterTree(out, clusterRoot, clusterCounter, emitNodeLine, rigidGroupOfNode);
+    emitClusterTree(out, clusterRoot, clusterCounter, emitNodeLine, emitClusterLabel, rigidGroupOfNode);
+    out += "  }\n";
 
     // Nutzerklarstellung 2026-09-21 (siehe Kommentar oben bei den Cluster-Labels): Kanten-Label
     // ist der interne Name (getNameInDocument(), dokumentweit eindeutig, z.B. "Joint003"), NICHT
@@ -1198,9 +1351,11 @@ std::string IdentityGraph::exportDot()
         int idA = nodeIdFor(edge.a);
         int idB = nodeIdFor(edge.b);
         std::string jointName = edge.joint ? edge.joint->getNameInDocument() : "?";
+        jointName += " (" + jointTypeName(edge.type) + ")";
         bool rigid = (edge.type == JointType::Fixed);
         out += "  n" + std::to_string(idA) + " -- n" + std::to_string(idB) + " [label=\""
-            + dotEscape(jointName) + "\", style=" + (rigid ? "bold" : "dashed") + "];\n";
+            + dotEscape(jointName) + "\", fontcolor=\"#1a3a6b\", color=\"#1a3a6b\", style="
+            + (rigid ? "bold" : "dashed") + "];\n";
     }
 
     out += "}\n";
