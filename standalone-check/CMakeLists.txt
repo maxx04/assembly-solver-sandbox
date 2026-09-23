@@ -30,7 +30,7 @@ get_filename_component(SANDBOX_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 # --- Build+Install der Sandbox-Aenderungen (Assembly + OndselSolver + Python-Skripte) -----
 # /home/maxx/freecad-sandbox/freecad-source/src/Mod/Assembly (+ src/3rdParty/OndselSolver)
 # sind Symlinks auf diese Sandbox - Make erkennt selbst, dass Coin3D/Part/Gui/etc.
-# unveraendert sind (Sekunden statt Stunden, verifiziert). VIER Targets noetig, nicht nur
+# unveraendert sind (Sekunden statt Stunden, verifiziert). FUENF Targets noetig, nicht nur
 # "Assembly":
 # - "Assembly"/"OndselSolver": kompilieren+linken das App-seitige C++ (AssemblyApp.so)
 # - "AssemblyGui": kompiliert+linkt das Gui-seitige C++ (AssemblyGui.so, u.a.
@@ -45,6 +45,23 @@ get_filename_component(SANDBOX_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 #   src/Mod/Assembly/CMakeLists.txt: fc_copy_sources() fuer die eigentlichen Assembly_Scripts
 #   haengt dort dran) - live verifiziert: nur "Assembly OndselSolver" zu bauen liess eine
 #   .py-Aenderung unbemerkt liegen.
+# - "FreeCADMain" (CMake-Targetname des Haupt-Executables - die resultierende Binary heisst
+#   "FreeCAD", siehe SET_BIN_DIR(FreeCADMain FreeCAD) in src/Main/CMakeLists.txt): faellt NICHT
+#   automatisch als Abhaengigkeit der obigen Targets mit an, wird von denen naemlich nur
+#   GELADEN (dlopen), nicht gelinkt. Nach einem groesseren Vanilla-Upstream-Sync (der
+#   SURROUNDING Build-Tree wird dabei ebenfalls auf den neuen Commit gebracht, siehe
+#   [[reference-vanilla-resync-2026-09-23-methodology]]) aendern sich auch Kernbibliotheken wie
+#   libFreeCADBase.so/libFreeCADApp.so (z.B. Funktionssignaturen durch eine
+#   std::string_view-Migration) - das bereits gebaute bin/FreeCAD bleibt dann auf dem ALTEN ABI
+#   stehen und stuerzt beim Start mit "undefined symbol: ...setOperatingSystemNumericLocale..."
+#   ab, obwohl Assembly/AssemblyGui selbst tadellos bauen. Live als echter Absturz aufgetreten
+#   (2026-09-23): bin/FreeCAD zuletzt vom 2026-09-06, Kernbibliotheken frisch vom 2026-09-23 -
+#   reiner "Assembly AssemblyGui"-Build sieht das Problem gar nicht, weil es nicht in seinem
+#   Abhaengigkeitsgraphen liegt. "FreeCADMain" hier immer MIT auffuehren, auch wenn es im
+#   Alltag (reine Assembly-Aenderung, kein Vanilla-Sync) fast immer ein No-Op ist (Make erkennt
+#   selbst, dass sich nichts geaendert hat, siehe live vermessen: ~5s Mehrkosten fuer den reinen
+#   Dependency-Check) - der Preis dafuer, dass ein Vanilla-Sync nicht wieder unbemerkt eine
+#   kaputte Installation hinterlaesst.
 #
 # KEIN deploy-so.sh-Umweg noetig wie im alten /home/maxx/freecad/-Workflow: dort entstand die
 # RUNPATH-Gefahr durch `cp -a` zwischen verschiedenen Installationsordnern. Hier installiert
@@ -55,9 +72,9 @@ set(FREECAD_SANDBOX_BUILD_DIR "/home/maxx/freecad-sandbox/freecad-source/build" 
 
 add_custom_target(build-and-deploy
     COMMAND ${CMAKE_COMMAND} --build "${FREECAD_SANDBOX_BUILD_DIR}"
-            --target Assembly OndselSolver AssemblyGui AssemblyTests
+            --target Assembly OndselSolver AssemblyGui AssemblyTests FreeCADMain
     COMMAND ${CMAKE_COMMAND} --install "${FREECAD_SANDBOX_BUILD_DIR}"
-    COMMENT "Baut Assembly+OndselSolver+AssemblyGui+Python-Skripte neu und installiert nach /home/maxx/freecad-sandbox/install"
+    COMMENT "Baut Assembly+OndselSolver+AssemblyGui+Python-Skripte+FreeCAD-Executable neu und installiert nach /home/maxx/freecad-sandbox/install"
     VERBATIM
     USES_TERMINAL
 )
