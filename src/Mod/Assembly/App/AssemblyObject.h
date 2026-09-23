@@ -293,6 +293,7 @@ public:
         std::string& name,
         const std::vector<App::DocumentObject*>& excludeJoints = {}
     );
+    App::DocumentObject* getJointOfPartForUngroundedDrag(App::DocumentObject* part, std::string& name);
     std::unordered_set<App::DocumentObject*> getGroundedParts();
     std::unordered_set<App::DocumentObject*> fixGroundedParts();
     void fixGroundedPart(App::DocumentObject* obj, Base::Placement& plc, std::string& jointName);
@@ -485,6 +486,7 @@ private:
     const std::vector<App::DocumentObject*>* getRigidMembers(App::DocumentObject* part) const;
     void syncActiveRigidGroupPlacements();
     void updateRigidPlacementCache();
+    void prepareMbdForIslandDrag(std::vector<App::DocumentObject*> dragParts);
 
     // FCPROJECT-PATCH (Teilschritt 2 "adressieren statt kopieren", solver-root-cause-fix, siehe
     // patches/assembly-architecture-overview.md, Abschnitt "Teilschritt 2 - Umsetzung"): loest die
@@ -602,6 +604,9 @@ private:
     std::unordered_set<App::DocumentObject*> pendingGroundedJointRemoval;
 
     bool bundleFixed;
+
+    // True while solve() is running; breaks the solve()/updateSolveStatus() cycle.
+    bool solveInProgress {false};
 
     int lastDoF;
     bool lastHasConflict;

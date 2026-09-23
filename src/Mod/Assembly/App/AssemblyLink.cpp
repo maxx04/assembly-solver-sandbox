@@ -23,7 +23,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdint>
 #include <vector>
 
 
@@ -32,7 +31,6 @@
 #include <App/DocumentObjectGroup.h>
 #include <App/FeaturePythonPyImp.h>
 #include <App/Link.h>
-#include <App/PropertyLinks.h>
 #include <App/PropertyPythonObject.h>
 #include <Base/Console.h>
 #include <Base/Placement.h>
@@ -40,6 +38,7 @@
 #include <Base/Tools.h>
 #include <Base/Interpreter.h>
 
+#include <Mod/Part/App/LinkArray.h>
 #include <Mod/Part/App/PartFeature.h>
 #include <Mod/Part/App/TopoShape.h>
 #include <Mod/PartDesign/App/Body.h>
@@ -55,6 +54,19 @@
 namespace PartApp = Part;
 
 using namespace Assembly;
+
+namespace
+{
+void syncSuppressedState(App::DocumentObject* source, App::DocumentObject* target)
+{
+    auto* sourceExt = source ? source->getExtension<App::SuppressibleExtension>() : nullptr;
+    auto* targetExt = target ? target->getExtension<App::SuppressibleExtension>() : nullptr;
+    if (sourceExt && targetExt
+        && sourceExt->Suppressed.getValue() != targetExt->Suppressed.getValue()) {
+        targetExt->Suppressed.setValue(sourceExt->Suppressed.getValue());
+    }
+}
+}  // namespace
 
 // ================================ Assembly Object ============================
 
@@ -378,6 +390,7 @@ void AssemblyLink::synchronizeComponents()
 
     objLinkMap.clear();
     mirrorToSourceMap.clear();
+    objSubPrefixMap.clear();
 
     std::vector<App::DocumentObject*> assemblyGroup = assembly->Group.getValues();
     std::vector<App::DocumentObject*> assemblyLinkGroup = Group.getValues();
@@ -417,6 +430,9 @@ void AssemblyLink::synchronizeComponents()
 
     // We check if a component needs to be added to the AssemblyLink
     for (auto* obj : topLevelComponents) {
+        if (isSuppressedLinkElement(obj)) {
+            continue;
+        }
         if (!obj->isDerivedFrom<App::Part>() && !obj->isDerivedFrom<PartApp::Feature>()
             && !obj->isDerivedFrom<App::Link>()) {
             continue;
@@ -454,6 +470,13 @@ void AssemblyLink::synchronizeComponents()
                         const std::vector<App::DocumentObject*> newElements
                             = link2->ElementList.getValues();
                         for (size_t i = 0; i < srcElements.size(); ++i) {
+                            if (i >= newElements.size() || !srcElements[i] || !newElements[i]) {
+                                continue;
+                            }
+                            syncSuppressedState(srcElements[i], newElements[i]);
+                            if (isSuppressedLinkElement(srcElements[i])) {
+                                continue;
+                            }
                             objLinkMap[srcElements[i]] = newElements[i];
                             mirrorToSourceMap[newElements[i]] = srcElements[i];
                         }
@@ -505,10 +528,21 @@ void AssemblyLink::synchronizeComponents()
                 const std::vector<App::DocumentObject*> srcElements = srcLink->ElementList.getValues();
                 const std::vector<App::DocumentObject*> newElements = newLink->ElementList.getValues();
                 for (size_t i = 0; i < srcElements.size(); ++i) {
+                    if (i >= newElements.size()) {
+                        continue;
+                    }
                     auto* newObj = newElements[i];
                     auto* srcObj = srcElements[i];
-                    if (newObj && srcObj) {
-                        syncPlacements(srcObj, newObj);
+
+                    if (!newObj || !srcObj) {
+                        continue;
+                    }
+
+                    syncSuppressedState(srcObj, newObj);
+                    syncPlacements(srcObj, newObj);
+
+                    if (isSuppressedLinkElement(srcObj)) {
+                        continue;
                     }
                     objLinkMap[srcObj] = newObj;
                     mirrorToSourceMap[newObj] = srcObj;
@@ -528,6 +562,18 @@ void AssemblyLink::synchronizeComponents()
 
         objLinkMap[obj] = link;
         mirrorToSourceMap[link] = obj;
+
+        if (auto* srcLinkArray = freecad_cast<PartApp::LinkArray*>(obj)) {
+            if (srcLinkArray->ShowElement.getValue()) {
+                const auto srcElements = srcLinkArray->ElementList.getValues();
+                for (size_t i = 0; i < srcElements.size(); ++i) {
+                    if (!srcElements[i] || isSuppressedLinkElement(srcElements[i])) {
+                        continue;
+                    }
+                    objSubPrefixMap[srcElements[i]] = std::to_string(i) + ".";
+                }
+            }
+        }
     }
 
     // If the assemblyLink is rigid, then we keep all placements synchronized.
@@ -595,20 +641,6 @@ namespace
 }
 };  // namespace
 
-// FCPROJECT-PATCH (Migrationsschritt 4.5 "Adressieren statt Kopieren", siehe
-// docs/ARCHITECTURE.md Abschnitt 5, Abschluss der Migration): hier standen bis 2026-09-11
-// synchronizeJoints(), handleJointReference() und findLocalAncestor() (die alte
-// Joint-Kopier-Pipeline) sowie das bereits deaktivierte synchronizeGroundedAndRigidJoints() und
-// sein Helfer mapToLocalComponent() (GroundedJoint/RigidGroupJoint-Spiegelung). Seit
-// Migrationsschritt 4.3 rief updateContents() synchronizeJoints() im Flexibel-Zweig nicht mehr
-// auf (ensureNoJointGroup() stattdessen) - der komplette Solve-/Drag-/Sichtbarkeits-Pfad hing
-// bereits seit Migrationsschritt 2 an den echten Joint-Objekten, nicht an diesen Kopien. Nach
-// Stabilisierung von 4.3 (volle Testmatrix + gezielte Legacy-Fixture-Verifikation ohne
-// Abweichung) hier entfernt, da beide Funktionsketten seitdem ohne verbleibende Aufrufer waren -
-// die frueheren Bugreports/Fixes dazu (u.a. patches/bugreport-rigid-nested-joint-reference/,
-// "GroundedJoint/RigidGroupJoint verschwindet bei verschachtelter flexibler Baugruppe") bleiben
-// in docs/JOURNAL.md nachvollziehbar, die vollstaendige letzte Fassung des Codes im
-// Git-Verlauf (siehe Commit unmittelbar vor dieser Loeschung).
 void AssemblyLink::ensureNoJointGroup()
 {
     // Make sure there is no joint group

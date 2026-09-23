@@ -22,6 +22,7 @@
  ***************************************************************************/
 
 #include <boost/core/ignore_unused.hpp>
+#include <algorithm>
 #include <cmath>
 #include <algorithm>
 #include <vector>
@@ -403,6 +404,9 @@ std::string jointInstanceName(App::DocumentObject* joint, const std::string& nes
 
 int AssemblyObject::solve(bool enableRedo)
 {
+    // updateSolveStatus() solves on demand; suppress that while a solve is running.
+    Base::StateLocker lock(solveInProgress);
+
     // FCPROJECT-PATCH (11): mehr Rueckmeldung ueber den Solver-Ablauf. Bisher blieb sowohl ein
     // erfolgreicher Solve als auch ein mangels geerdetem Teil komplett uebersprungener Solve
     // (groundedObjs.empty() -> return -6) OHNE JEDE Konsolen-Ausgabe - nur echte Exceptions
@@ -542,7 +546,9 @@ void AssemblyObject::updateSolveStatus()
     // +1 because the assembly origin is also represented by a solver body.
     lastDoF = (1 + numberOfSolverBodies) * 6;
 
-    if (!mbdAssembly || !mbdAssembly->mbdSystem) {
+    // Solve on demand when queried before the system is solved, but not from within
+    // a solve: solve() calls this, so a failed solve would recurse indefinitely.
+    if (!solveInProgress && (!mbdAssembly || !mbdAssembly->mbdSystem)) {
         solve();
     }
 
@@ -695,10 +701,20 @@ bool AssemblyObject::requiresRigidSolveForMove(const std::vector<App::DocumentOb
 void AssemblyObject::preDrag(std::vector<App::DocumentObject*> dragParts)
 {
     bundleFixed = true;
-    solve();
+    bool hasUnconnectedDragPart = std::ranges::any_of(dragParts, [this](App::DocumentObject* part) {
+        return part && !isPartConnected(part);
+    });
+
+    if (hasUnconnectedDragPart) {
+        prepareMbdForIslandDrag(dragParts);
+    }
+    else {
+        solve();
+    }
     bundleFixed = false;
 
     draggedParts.clear();
+
     for (auto part : dragParts) {
         const bool isRigidClustered = getRigidRepresentative(part) != nullptr;
 
@@ -707,15 +723,17 @@ void AssemblyObject::preDrag(std::vector<App::DocumentObject*> dragParts)
             continue;
         }
 
-        // Active rigid-cluster members are solver-connected through the shared MbD part.
-        if (!isRigidClustered && !isPartConnected(part)) {
+        // - Free-floating parts should not be added since they are ignored by the solver.
+        // During ungrounded island dragging, prepareMbdForIslandDrag seeds the MBD system from
+        // the dragged parts, so objectPartMap is the source of truth instead.
+        // - Active rigid-cluster members are solver-connected through the shared MbD part.
+        if (!isPartConnected(part) && (!objectPartMap.contains(part) || !isRigidClustered)) {
             continue;
         }
 
         // Rigid-cluster members stay draggable because they share one MbD part.
         if (isRigidClustered) {
             draggedParts.push_back(part);
-            continue;
         }
 
         Base::Placement plc;
@@ -737,8 +755,55 @@ void AssemblyObject::preDrag(std::vector<App::DocumentObject*> dragParts)
     }
 }
 
+void AssemblyObject::prepareMbdForIslandDrag(std::vector<App::DocumentObject*> dragParts)
+{
+    ensureIdentityPlacements();
+    syncGroundedJoints();
+
+    mbdAssembly = makeMbdAssembly();
+    objectPartMap.clear();
+    motions.clear();
+
+    auto seededParts = fixGroundedParts();
+    for (auto* part : dragParts) {
+        if (part) {
+            seededParts.insert(part);
+        }
+    }
+
+    std::vector<JointRef> joints = getJoints();
+    removeUnconnectedJoints(joints, seededParts);
+    if (joints.empty()) {
+        objectPartMap.clear();
+        mbdAssembly.reset();
+        return;
+    }
+
+    jointParts(joints);
+
+    try {
+        mbdAssembly->runPreDrag();
+    }
+    catch (const std::exception& e) {
+        FC_ERR("Drag setup failed: " << e.what());
+        objectPartMap.clear();
+        mbdAssembly.reset();
+        return;
+    }
+    catch (...) {
+        FC_ERR("Drag setup failed: unhandled exception");
+        objectPartMap.clear();
+        mbdAssembly.reset();
+        return;
+    }
+}
+
 void AssemblyObject::doDragStep()
 {
+    if (!mbdAssembly || draggedParts.empty()) {
+        return;
+    }
+
     try {
         std::vector<std::shared_ptr<MbD::ASMTPart>> dragMbdParts;
         std::unordered_set<ASMTPart*> seenMbdParts;
@@ -866,6 +931,10 @@ bool AssemblyObject::validateNewPlacements()
 
 void AssemblyObject::postDrag()
 {
+    if (!mbdAssembly) {
+        return;
+    }
+
     mbdAssembly->runPostDrag();  // Do this after last drag
     purgeTouched();
 }
@@ -986,28 +1055,8 @@ void AssemblyObject::rebuildRigidClusters()
             continue;
         }
 
-        // FCPROJECT-PATCH (2026-09-09, "Starre Verbindung"/RigidGroupJoint in verschachtelter
-        // flexibler Baugruppe hebt kein 1-DOF-Gelenk richtig auf): ObjectsToRigidGroup liefert
-        // die ROHEN, lokal ausgewaehlten Objekte (z.B. den Spiegel 'mirror_BoxA' hier in
-        // GrandTop) - der Rest dieser Klasse (getConnectedParts()/removeUnconnectedJoints() via
-        // resolvePartForMbD(), traverseAndMarkConnectedParts()) arbeitet aber durchgaengig mit
-        // KANONISCHEN Identitaeten (canonicalizeForMbD() - das ECHTE, tiefste Objekt in der
-        // verschachtelten Unterbaugruppe, nicht dessen lokale Spiegelkopie). Ohne Kanonisierung
-        // HIER landen rigidRepByPart/rigidMembersByRep auf dem rohen Spiegel als Schluessel -
-        // getConnectedParts()s Rigid-Cluster-Kante (s.u.) liefert dann ebenfalls den rohen
-        // Spiegel als naechsten Traversal-Schritt, und der naechste Traversal-Schritt (ein
-        // ECHTER Joint in der Unterbaugruppe, dessen Reference1/2 bereits kanonisch aufgeloest
-        // wird) erkennt diesen rohen Spiegel nie als Uebereinstimmung - die Traversal-Kette
-        // bricht GENAU an der Rigid-Cluster-Kante ab. Live reproduziert: eine "Starre
-        // Verbindung" zwischen GrandTops BoxC und Subs (gespiegeltem) BoxB verhinderte NICHT,
-        // dass Subs eigene interne Erdung von BoxA redundant bestehen blieb - beide Enden des
-        // inneren Slider-Joints wurden dadurch unabhaengig voneinander fixiert, das Gelenk war
-        // komplett eingefroren statt seinen 1 Freiheitsgrad zu behalten. Fix: Mitglieder vor dem
-        // Verschmelzen kanonisieren, damit rigidRepByPart/rigidMembersByRep im SELBEN
-        // Identitaetsraum liegen wie der Rest der Traversal-Logik.
-        auto* const first = canonicalizeForMbD(members.front());
-        for (auto* const rawMember : members | std::views::drop(1)) {
-            auto* const member = canonicalizeForMbD(rawMember);
+        auto* const first = members.front();
+        for (auto* const member : members | std::views::drop(1)) {
             unite(first, member);
         }
     }
@@ -1161,6 +1210,24 @@ void AssemblyObject::updateRigidPlacementCache()
     });
 }
 
+namespace
+{
+// A singular solve can return NaN or infinite placements. NaN coordinates defeat
+// the bounding-box rejection in SoRayPickAction, so writing one into the document
+// makes every ray pick hit everything; reject them at the solver/document boundary.
+bool isFinitePlacement(const Base::Placement& plc)
+{
+    const Base::Vector3d& pos = plc.getPosition();
+    double q0 {};
+    double q1 {};
+    double q2 {};
+    double q3 {};
+    plc.getRotation().getValue(q0, q1, q2, q3);
+    return std::isfinite(pos.x) && std::isfinite(pos.y) && std::isfinite(pos.z) && std::isfinite(q0)
+        && std::isfinite(q1) && std::isfinite(q2) && std::isfinite(q3);
+}
+}  // namespace
+
 Base::Placement AssemblyObject::computeGroundCorrection()
 {
     // FCPROJECT-PATCH (2026-09-13, "Erdung driftet trotz Solve-Erfolg" - siehe
@@ -1239,6 +1306,14 @@ void AssemblyObject::setNewPlacements()
             // absolute Weltposition direkt als lokale (Container-relative) Placement geschrieben -
             // beim Rendern kaeme der Container-Offset dann ein ZWEITES Mal oben drauf.
             newPlacement = pair.second.containerChainPlc.inverse() * newPlacement;
+        }
+        if (!isFinitePlacement(newPlacement)) {
+            Base::Console().warning(
+                "Assembly: solver returned a non-finite placement for '%s'; keeping its "
+                "previous position.\n",
+                obj->getFullName().c_str()
+            );
+            continue;
         }
         if (!propPlacement->getValue().isSame(newPlacement)) {
             propPlacement->setValue(newPlacement);
@@ -1403,25 +1478,32 @@ void AssemblyObject::redrawJointPlacement(App::DocumentObject* joint)
 
     Base::PyGILStateLocker lock;
 
-    App::PropertyPythonObject* proxy = joint
-        ? dynamic_cast<App::PropertyPythonObject*>(joint->getPropertyByName("Proxy"))
-        : nullptr;
+    try {
+        auto* proxy = dynamic_cast<App::PropertyPythonObject*>(joint->getPropertyByName("Proxy"));
 
-    if (!proxy) {
-        return;
+        if (!proxy) {
+            return;
+        }
+
+        Py::Object jointPy = proxy->getValue();
+
+        if (!jointPy.hasAttr("redrawJointPlacements")) {
+            return;
+        }
+
+        Py::Object attr = jointPy.getAttr("redrawJointPlacements");
+        if (attr.ptr() && attr.isCallable()) {
+            Py::Tuple args(1);
+            args.setItem(0, Py::asObject(joint->getPyObject()));
+            Py::Callable(attr).apply(args);
+        }
     }
-
-    Py::Object jointPy = proxy->getValue();
-
-    if (!jointPy.hasAttr("redrawJointPlacements")) {
-        return;
-    }
-
-    Py::Object attr = jointPy.getAttr("redrawJointPlacements");
-    if (attr.ptr() && attr.isCallable()) {
-        Py::Tuple args(1);
-        args.setItem(0, Py::asObject(joint->getPyObject()));
-        Py::Callable(attr).apply(args);
+    catch (Py::Exception&) {
+        // Callers run inside Qt event handlers, which cannot propagate C++ exceptions
+        // out of the joint's Python callback. Report the error and keep redrawing the
+        // remaining joints.
+        Base::PyException e;
+        e.reportException();
     }
 }
 
@@ -1480,6 +1562,53 @@ App::DocumentObject* AssemblyObject::getJointOfPartConnectingToGround(
             return joint;
         }
     }
+    return nullptr;
+}
+
+App::DocumentObject* AssemblyObject::getJointOfPartForUngroundedDrag(
+    App::DocumentObject* part,
+    std::string& name
+)
+{
+    if (!part) {
+        return nullptr;
+    }
+
+    // FCPROJECT-PATCH (Vanilla-Drift-Kollision, siehe getJointsOfPart()-Deklaration): diese
+    // Funktion kam erst mit dem Upstream-Merge #30998 (asm_island_drag) zwischen dem alten und
+    // dem neuen Vanilla-Sync-Stand hinzu - unsere JointRef-Migration von getJointsOfPart()
+    // wusste beim urspruenglichen Schreiben noch nichts von ihr.
+    std::vector<JointRef> joints = getJointsOfPart(part);
+    for (auto& jr : joints) {
+        App::DocumentObject* joint = jr.joint;
+        if (!joint || !isJointTypeConnecting(joint)) {
+            continue;
+        }
+        if (getJointType(joint) == JointType::Fixed) {
+            continue;
+        }
+
+        App::DocumentObject* part1 = getMovingPartFromRef(joint, "Reference1");
+        App::DocumentObject* part2 = getMovingPartFromRef(joint, "Reference2");
+        if (!part1 || !part2) {
+            continue;
+        }
+
+        std::string refName;
+        if (part == part1) {
+            refName = "Reference1";
+        }
+        else if (part == part2) {
+            refName = "Reference2";
+        }
+        else {
+            continue;
+        }
+
+        name = refName;
+        return joint;
+    }
+
     return nullptr;
 }
 
@@ -1912,46 +2041,30 @@ std::unordered_set<App::DocumentObject*> AssemblyObject::getGroundedParts()
     // Eintrag, keine Redundanz). Nur wenn ein verschachteltes Teil auf KEINE andere Weise
     // erreichbar waere, zaehlt seine eigene Erdung weiterhin (z.B. wenn die betroffene
     // Unterbaugruppe gar nicht an die aeussere Kette angebunden ist).
-    //
-    // FCPROJECT-PATCH (Migrationsschritt 4.5 "Adressieren statt Kopieren", siehe
-    // docs/ARCHITECTURE.md Abschnitt 5): die Berechnung von reachableFromLocalGrounding/
-    // reachabilityJoints, die hier bis 2026-09-11 stand, war bereits seit der 2026-09-09-
-    // Entscheidung direkt darunter (s.u., "ENTFERNT statt weiter ausgeflickt") toter Code -
-    // berechnet, aber nie gelesen (die Funktion gibt weiter unten unveraendert groundedSet
-    // zurueck). Als Aufraeum-Rest jetzt entfernt.
-    //
-    // FCPROJECT-PATCH (2026-09-09, ENTFERNT statt weiter ausgeflickt - siehe Befund-3-Kommentar
-    // oben fuer die Vorgeschichte dieses Blocks): die rekursive Uebernahme einer verschachtelten
-    // Unterbaugruppe eigener interner Erdung (nestedAssembly->getGroundedParts()) erwies sich
-    // als grundsaetzlich falsch dosiert, egal wie fein die Ausnahme dafuer gefasst wurde - live
-    // reproduziert in ZWEI verschiedenen, gegensaetzlich unmoeglich gleichzeitig zu loesenden
-    // Faellen:
-    // 1. Eine frisch eingefuegte, KOMPLETT unverbundene flexible Unterbaugruppe (kein aeusserer
-    //    Joint) wurde dadurch sofort komplett unbeweglich, statt frei verschiebbar zu bleiben.
-    // 2. Selbst mit einem aeusseren Joint (z.B. GrandTop-BoxC zu Subs BoxB) blieb Subs davon
-    //    UNABHAENGIGE eigene Erdung (BoxA) bestehen, sobald der INNERE Joint (BoxA-BoxB)
-    //    geloescht wurde - obwohl BoxA dann eine eigene, vom aeusseren Anschlusspunkt komplett
-    //    GETRENNTE Insel ist, fror das die ganze eingebettete Baugruppe grundlos ein.
-    // Ein Versuch, Fall 1 durch eine dokumentweite Erreichbarkeitspruefung zu loesen ("ist
-    // UEBERHAUPT etwas aus diesem Dokument erreichbar") behob Fall 1, machte aber Fall 2 nicht
-    // besser (BoxB IST erreichbar, die Erdung von BoxA - einer davon komplett getrennten Insel
-    // im selben Dokument - wurde trotzdem weiter reingezogen). Eine wirklich korrekte Loesung
-    // braeuchte eine Pro-Insel- statt Pro-Dokument-Erreichbarkeitspruefung (ueber Subs EIGENE
-    // interne Joints, unabhaengig vom aeusseren Anschluss) - dafuer besteht aber der begruendete
-    // Verdacht, dass sie sich mit der urspruenglichen Absicht dieses Blocks (ein 2+ Ebenen tief
-    // NUR ueber sein eigenes GroundedJoint erreichbares Teil, dessen NORMALE Joint-Kette zur
-    // Wurzel aus einem NUR HIER liegenden Sync-Bug der alten Kopier-Pipeline heraus nicht
-    // erkannt wurde) nicht sauber unterscheiden laesst: beide Situationen sehen aus reiner
-    // Joint-Graph-Sicht identisch aus ("Teil X ist ueber keinen Reference1/2-Joint-Pfad von der
-    // lokalen Erdung dieser Ebene aus erreichbar"). Nutzerentscheidung (2026-09-09): diesen
-    // gesamten Rekursionsblock ERSATZLOS entfernen, um die BEIDEN reproduzierten, aktuellen
-    // Regressionsfaelle zu beheben - reine Joint-Graph-Erreichbarkeit (die dank getJoints()'
-    // eigener subJoints-Rekursion bereits echte, tief verschachtelte Joint-Ketten korrekt mit
-    // einschliesst, siehe removeUnconnectedJoints()/getConnectedParts()) reicht als alleinige
-    // Grundlage. Falls die
-    // urspruengliche Befund-3-Situation (Sync-Bug der alten Kopier-Pipeline bei isReadOnly())
-    // dadurch wieder auftritt, ist das ein bekanntes, akzeptiertes Risiko dieser Entscheidung -
-    // noch nicht erneut getestet, siehe [[reference-nested-grounding-leak-bugfix]].
+    std::vector<JointRef> reachabilityJoints = getJoints();
+    std::vector<ObjRef> reachableFromLocalGrounding;
+    for (auto* g : groundedSet) {
+        reachableFromLocalGrounding.push_back({g, nullptr});
+    }
+    for (auto* g : groundedSet) {
+        traverseAndMarkConnectedParts(g, reachableFromLocalGrounding, reachabilityJoints);
+    }
+
+    for (auto* assembly : getSubAssemblies()) {
+        if (!assembly || assembly->isRigid()) {
+            continue;
+        }
+        AssemblyObject* nestedAssembly = assembly->getLinkedAssembly();
+        if (!nestedAssembly || nestedAssembly == this) {
+            continue;
+        }
+        auto nestedGrounded = nestedAssembly->getGroundedParts();
+        for (auto* g : nestedGrounded) {
+            if (!isObjInSetOfObjRefs(g, reachableFromLocalGrounding)) {
+                groundedSet.insert(g);
+            }
+        }
+    }
 
     // Propagate grounding through active rigid clusters.
     std::vector<App::DocumentObject*> groundedSnapshot(groundedSet.begin(), groundedSet.end());

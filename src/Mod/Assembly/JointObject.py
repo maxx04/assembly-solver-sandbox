@@ -1184,6 +1184,11 @@ class ViewProviderJoint:
 
     def updateData(self, joint, prop):
         """If a property of the handled feature has changed we have the chance to handle this here"""
+        # The JCS switches are created in attach(); updateData() can fire on a
+        # property change before attach() has run (e.g. during document restore).
+        if not hasattr(self, "switch_JCS1"):
+            return
+
         if prop == "Placement1" and hasattr(joint, "Reference1"):
             self.redrawJointPlacement(self.switch_JCS1, joint.Placement1, joint.Reference1)
 
@@ -1191,6 +1196,11 @@ class ViewProviderJoint:
             self.redrawJointPlacement(self.switch_JCS2, joint.Placement2, joint.Reference2)
 
     def redrawJointPlacements(self, joint):
+        # Called from AssemblyObject::solve(), which can run before attach() has
+        # created the JCS switches (e.g. right after a document restore).
+        if not hasattr(self, "switch_JCS1"):
+            return
+
         if not hasattr(joint, "Reference1") or not hasattr(joint, "Reference2"):
             return
 
@@ -1347,20 +1357,8 @@ class RigidGroupJoint:
 
         joint.addExtension("App::SuppressibleExtensionPython")
 
-        # FCPROJECT-PATCH (2026-09-09, "Starre Verbindung" ueber eine verschachtelte flexible
-        # Baugruppe hinweg wirkungslos): urspruenglich "App::PropertyLinkList" (normaler Scope) -
-        # live per Warnung gefunden ("RigidGroupJoint links are out of scope. Out of scope links
-        # to: BoxA"), wenn eines der Mitglieder (z.B. der Spiegel einer Unterbaugruppe innerhalb
-        # einer AssemblyLink::Group) aus einem anderen Gruppenzweig als das GRUPPIERENDE Joint
-        # selbst kommt - FreeCAD verwirft/markiert solche Links dann als ausserhalb des
-        # erlaubten Scopes. GroundedJoint's Pendant "ObjectToGround" (siehe unten in dieser
-        # Datei) nutzt fuer genau dieses Problem bereits "App::PropertyLinkGlobal" statt
-        # "App::PropertyLink" - "App::PropertyLinkListGlobal" ist dessen Listen-Pendant
-        # (existiert bereits in FreeCAD, siehe App/PropertyLinks.h) und behebt dasselbe Problem
-        # hier fuer mehrere Referenzen. Reine Property-TYP-Aenderung, kein neues Feature - die
-        # gespeicherte Werteliste bleibt kompatibel (beide sind PropertyLinkList-Ableitungen).
         joint.addProperty(
-            "App::PropertyLinkListGlobal",
+            "App::PropertyLinkList",
             "ObjectsToRigidGroup",
             "RigidGroup",
             QT_TRANSLATE_NOOP("App::Property", "List of references to compnents to group together"),
@@ -1758,6 +1756,12 @@ class MakeJointSelGate:
 
         ref = [obj, [sub]]
         sel_obj = UtilsAssembly.getObject(ref)
+
+        if not sel_obj:
+            return False
+
+        if UtilsAssembly.isLinkArray(sel_obj):
+            return True
 
         if UtilsAssembly.isLink(sel_obj):
             linked = sel_obj.getLinkedObject()

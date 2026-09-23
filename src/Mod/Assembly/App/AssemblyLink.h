@@ -115,6 +115,8 @@ private:
     // an denselben Stellen in synchronizeComponents() wie objLinkMap.
     std::unordered_map<App::DocumentObject*, App::DocumentObject*> mirrorToSourceMap;
 
+    std::unordered_map<App::DocumentObject*, std::string> objSubPrefixMap;
+
     // Reentrancy guard for updateContents(). synchronizeComponents() adds/removes objects in
     // this AssemblyLink's own Group, which synchronously re-enters onChanged(&Group) ->
     // updateContents(). That re-entry is not limited to the same instance: onChanged(&Group)
