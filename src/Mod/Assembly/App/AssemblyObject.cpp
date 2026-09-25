@@ -306,7 +306,11 @@ App::DocumentObjectExecReturn* AssemblyObject::execute()
         // Abschnitt "NEUER, noch offener Befund"). Betrifft NUR diesen Recompute-Pfad -
         // interaktives Ziehen (preDrag()/doDragStep()) ruft solve() weiterhin direkt und
         // unbedingt auf der gerade aktiven Instanz auf.
-        if (isNestedUnderFlexibleParent()) {
+        // FCPROJECT-PATCH (2026-09-25, siehe setActiveEditContext()-Deklaration in
+        // AssemblyObject.h): waehrend der Nutzer GENAU DIESE Instanz aktiv bearbeitet, wird sie
+        // wie eine echte Top-Level-Instanz behandelt (eigener solve()), egal ob eine aeussere
+        // Baugruppe sie ohnehin (schlecht oder gut) mitloest.
+        if (isNestedUnderFlexibleParent() && !activeEditContext) {
             Base::Console().message(
                 "Assembly: '%s' skipped its own solve() - nested under a flexible parent "
                 "assembly, which solves it as part of its own recompute.\n",

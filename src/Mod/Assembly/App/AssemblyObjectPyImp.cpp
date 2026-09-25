@@ -281,3 +281,50 @@ PyObject* AssemblyObjectPy::getDownstreamParts(PyObject* args) const
 
     return Py::new_reference_to(ret);
 }
+
+// FCPROJECT-PATCH (2026-09-23, siehe feedback-drag-test-strategy-needed.md): preDrag()/
+// doDragStep()/postDrag() nach Python exportiert, damit sich ein interaktiver Zug headless
+// nachstellen laesst (Placement der dragParts-Objekte manuell um ein festes Delta verschieben,
+// dann doDragStep() aufrufen - genau das, was tryMouseMove()/ViewProviderAssembly.cpp sonst pro
+// Mausereignis tut), statt jedes Mal einen Live-Test mit echter Maus in der GUI zu brauchen.
+PyObject* AssemblyObjectPy::preDrag(PyObject* args) const
+{
+    PyObject* pyList;
+    if (!PyArg_ParseTuple(args, "O!", &PyList_Type, &pyList)) {
+        return nullptr;
+    }
+
+    std::vector<App::DocumentObject*> dragParts;
+    Py_ssize_t size = PyList_Size(pyList);
+    for (Py_ssize_t i = 0; i < size; i++) {
+        PyObject* item = PyList_GetItem(pyList, i);
+        if (!PyObject_TypeCheck(item, &(App::DocumentObjectPy::Type))) {
+            PyErr_SetString(PyExc_TypeError, "Expected a list of App.DocumentObject");
+            return nullptr;
+        }
+        dragParts.push_back(static_cast<App::DocumentObjectPy*>(item)->getDocumentObjectPtr());
+    }
+
+    this->getAssemblyObjectPtr()->preDrag(dragParts);
+    Py_Return;
+}
+
+PyObject* AssemblyObjectPy::doDragStep(PyObject* args) const
+{
+    if (!PyArg_ParseTuple(args, "")) {
+        return nullptr;
+    }
+
+    this->getAssemblyObjectPtr()->doDragStep();
+    Py_Return;
+}
+
+PyObject* AssemblyObjectPy::postDrag(PyObject* args) const
+{
+    if (!PyArg_ParseTuple(args, "")) {
+        return nullptr;
+    }
+
+    this->getAssemblyObjectPtr()->postDrag();
+    Py_Return;
+}

@@ -364,6 +364,64 @@ und **deaktiviert die redundanten Zwangsbedingungen automatisch** (`RedundantCon
 ein Decorator um `Constraint`) statt den Solve scheitern zu lassen - das ist die Quelle der
 "redundante Joints"-Meldung, die FreeCAD dem Nutzer anzeigt (`AssemblyObject.cpp:491-505`).
 
+### 3.2a Interaktives Ziehen: Gewichtung statt harter Zwangserfüllung (2026-09-23)
+
+Waehrend der Untersuchung eines BG22-Drag-Bugs (siehe Memory
+`reference-bg22-drag-weighted-solver-mechanics.md`) wurde die Gewichtungsmechanik hinter
+`PosICDragNewtonRaphson`/`PosICDragLimitNewtonRaphson` (§3.2-Tabelle) am Quellcode
+nachvollzogen - das ist der Grund, warum ein interaktiver Zug ein eigentlich **hartes** Gelenk
+(z.B. ein Fixed-Joint mit 0 Freiheitsgraden) sichtbar verletzen kann, obwohl ein regulaerer
+`solve()` fuer dieselbe Topologie nachweislich immer exakt und stabil loest.
+
+**Wer vergibt die Gewichte (`qsuWeights`, eine Diagonalmatrix ueber alle Positions-/
+Rotations-Freiheitsgrade des gesamten Systems)?**
+
+1. `AnyPosICNewtonRaphson::initializeGlobally()` (`AnyPosICNewtonRaphson.cpp:25-33`, Basisklasse
+   von `PosICNewtonRaphson`/`PosICDragNewtonRaphson`/`PosICDragLimitNewtonRaphson`/
+   `PosICKineNewtonRaphson` - siehe §3.2-Tabelle) laesst zunaechst JEDES `Item` (Part/Joint/
+   Motion/Limit) ueber `item->fillqsuWeights(qsuWeights)` seinen EIGENEN Basiswert eintragen.
+   Fuer einen `Part` (`Part.cpp:261-291`) ist das **massenproportional**: Gewicht = `1e6 * (m /
+   mMax) + 1e3`, wobei `mMax` die groesste Masse im System ist - ein masseloses/Default-Teil
+   landet nahe 1e3, das schwerste Teil nahe 1e6+1e3. Bei typischen CAD-Baugruppen mit
+   aehnlichen/Default-Massen bleibt diese Verteilung NAHEZU GLEICHMAESSIG - das ist der Fall,
+   den der normale `solve()` (`PosICNewtonRaphson`, KEINE eigene `initializeGlobally()`-
+   Ueberschreibung) tatsaechlich nutzt.
+2. `PosICDragNewtonRaphson::initializeGlobally()` (`PosICDragNewtonRaphson.cpp:23-39`) WIRFT DAS
+   KOMPLETT UEBER BORD: setzt erst ALLE Gewichte (Position UND Rotation, alle Teile) pauschal
+   auf `1e3`, dann fuer jedes Teil in der von `AssemblyObject::doDragStep()` uebergebenen
+   `dragParts`-Liste NUR dessen Positions-Freiheitsgrade (x/y/z, NICHT die Rotation/Quaternion)
+   auf `1e6`. Eine starre, binaere Verteilung - ein deutlich schaerferer kuenstlicher Kontrast
+   als das, was reine Masse je erzeugen wuerde.
+   ⚠ **Zu pruefen (noch offen, siehe Memory):** da NUR Position, nie Rotation angehoben wird,
+   ist ein Drag-Modus, der ROTATION eines Teils erfordert (z.B. `DragMode::RotationOnPlane`
+   fuer ein Revolute-Gelenk), potenziell anders/schwaecher gewichtet als ein reiner
+   Translations-Drag - noch nicht am realen Fall verifiziert.
+3. **Wer entscheidet, WELCHE Teile in `dragParts` landen** (also das hohe Gewicht bekommen)?
+   Das ist reine FreeCAD-Seite, nicht der Solver: `AssemblyObject::preDrag()`/`doDragStep()`
+   (`AssemblyObject.cpp`) bauen diese Liste aus dem, was `ViewProviderAssembly::findDragMode()`
+   (§2.2) als bewegte Gruppe (Leitkoerper + `getDownstreamParts()`) ermittelt hat - der Solver
+   selbst trifft dabei keine eigene Auswahl.
+
+**Warum das ein hartes Gelenk sichtbar verletzen kann:** `AnyPosICNewtonRaphson::isConverged()`
+(`AnyPosICNewtonRaphson.cpp:104`, von ALLEN vier PosIC-Varianten geteilt, also KEIN
+Drag-spezifischer Fehler fuer sich genommen) prueft nur die SCHRITTGROESSE
+(`dxNorms->at(iterNo) < dxTol`), NICHT direkt, wie klein der tatsaechliche Constraint-Fehler
+(`fillPosICError()`, Teil des Residuums `y` in `fillY()`, `AnyPosICNewtonRaphson.cpp:42-54`)
+noch ist. Bei der milden, massebasierten Gewichtung eines normalen `solve()` faellt das nicht
+auf - das lineare Gleichungssystem bleibt gutartig genug, dass kleine Schritte auch kleine
+Constraint-Fehler bedeuten. Bei der scharfen, kuenstlichen 1e3/1e6-Zweiteilung eines Drags kann
+das Newton-Raphson-Verfahren "konvergieren" (kleine Schrittgroesse), OBWOHL ein Constraint wie
+ein Fixed-Joint zwischen einem stark gewichteten (gezogenen) und einem normal gewichteten
+(nicht gezogenen) Teil noch messbar verletzt ist - besonders wenn zusaetzlich ein Gelenklimit
+aktiv wird (`PosICDragLimitNewtonRaphson`, eigene, ungewichtete Nachiteration, siehe §3.2).
+
+**Praktische Konsequenz (siehe `todo-bg22-drag-fix-status.md`):** ein Teil, das NUR ueber ein
+eigentlich hartes Gelenk an einem gezogenen Teil haengt, aber selbst NICHT in `dragParts` ist,
+hat kein Gegengewicht, das die harte Bedingung numerisch durchsetzen wuerde - es kann drifen.
+Der aktuell verfolgte Fix-Ansatz: konsequent ALLE Teile ausserhalb der bewegten Gruppe
+(Leitkoerper + Downstream) ebenfalls mit dem hohen 1e6-Gewicht "anpinnen" (eigene, unveraenderte
+Placement als Ziel), statt nur direkte Gelenk-Nachbarn - noch nicht implementiert/verifiziert.
+
 ### 3.3 Kopplungs-Sequenz (Zusammenfassung von §2.1 + hier)
 
 ```

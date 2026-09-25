@@ -410,6 +410,24 @@ public:
     // im Bearbeiten-Modus aktiven Instanz auf, unveraendert.
     bool isNestedUnderFlexibleParent() const;
 
+    // FCPROJECT-PATCH (2026-09-25, "ich kann nicht aktive Gruppe bearbeiten" - Nutzeranforderung):
+    // isNestedUnderFlexibleParent() (s.o.) laesst execute() JEDE nested Instanz uebersprungen, ganz
+    // gleich ob der Nutzer sie gerade aktiv im Bearbeiten-Modus hat oder nicht - dadurch blockiert
+    // ein singulaeres/scheiterndes Solve der AEUSSEREN Baugruppe (z.B. CNC3018_037_A_TraegerBau-
+    // gruppe_Z's 8-Joint-Doppelschienen-Singularitaet) auch das Bearbeiten einer inneren, fuer
+    // sich genommen voellig unproblematischen Unterbaugruppe (empirisch bestaetigt: deren eigener
+    // solve() gibt isoliert 0/Erfolg zurueck). ViewProviderAssembly::setEdit()/unsetEdit() setzen
+    // dieses Flag, solange der Nutzer GENAU DIESE Instanz aktiv bearbeitet - execute() behandelt
+    // sie dann wie eine echte Top-Level-Instanz (eigener solve()-Aufruf statt Ueberspringen),
+    // unabhaengig vom Zustand einer aeusseren Baugruppe. Betrifft nur den Anzeige-/Bearbeiten-Kom-
+    // fort waehrend der aktiven Bearbeitung dieser einen Instanz - die WELT-Position (deren
+    // Placement relativ zu allem ausserhalb) haengt weiterhin von der aeusseren Baugruppe ab und
+    // wird durch dieses Flag nicht veraendert.
+    void setActiveEditContext(bool active)
+    {
+        activeEditContext = active;
+    }
+
     // FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix, 2026-09-03,
     // live durch Nutzer-Maus-Drag aufgedeckt - dritte Baustelle nach getMovingPartFromSel()/
     // isPartConnected()): App::Part::hasObject() (GroupExtension::hasObject()) vergleicht nur
@@ -604,6 +622,9 @@ private:
     std::unordered_set<App::DocumentObject*> pendingGroundedJointRemoval;
 
     bool bundleFixed;
+
+    // Siehe setActiveEditContext()-Deklaration weiter oben.
+    bool activeEditContext {false};
 
     // True while solve() is running; breaks the solve()/updateSolveStatus() cycle.
     bool solveInProgress {false};

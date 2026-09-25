@@ -211,5 +211,58 @@ class AssemblyObject(Part):
             A list of App.DocumentObject instances representing the downstream parts.
         """
         ...
+
+    @constmethod
+    def preDrag(self, drag_parts: list[DocumentObject], /) -> None:
+        """
+        Prepare the assembly for an interactive drag, headless/scriptable equivalent of what
+        ViewProviderAssembly::tryInitMove() triggers for a real mouse-down (see
+        docs/ARCHITECTURE.md #2.2).
+
+        Runs one full solve() (with fixed-joint bundling enabled) to (re)build the MbD model,
+        then determines which of drag_parts will actually be driven independently in MbD during
+        the following doDragStep() calls (see AssemblyObject.h's dragRigidLeader/
+        dragRigidFollowerCache/draggedParts members for the current, evolving rules).
+
+        Args:
+            drag_parts: the App.DocumentObject instances to drag - pass the SAME list
+                        ViewProviderAssembly::findDragMode() would compute (typically the moving
+                        joint's part plus everything getDownstreamParts() returns for it), in
+                        the SAME order (the first entry is treated as the leading/grounding-
+                        connected body).
+
+        For a scripted drag test: call this once, then repeatedly set the Placement property of
+        each drag_parts entry by the SAME per-frame delta (mirroring what
+        ViewProviderAssembly::tryMouseMove() does for a real mouse move) and call doDragStep()
+        after each change; call postDrag() once at the end (mouse-up equivalent).
+        """
+        ...
+
+    @constmethod
+    def doDragStep(self) -> None:
+        """
+        Run one interactive-drag solve step (headless/scriptable equivalent of what a single
+        mouseMove() event triggers via ViewProviderAssembly::tryMouseMove(), see
+        docs/ARCHITECTURE.md #2.2).
+
+        Reads the CURRENT Placement of whichever parts preDrag() decided to drive independently,
+        feeds them into the MbD solver as high-weight targets (see
+        PosICDragNewtonRaphson::initializeGlobally()), runs one drag solve, and - if the result
+        validates - applies it to the document (including the rigid-transport/pin corrections
+        for the parts preDrag() did NOT drive independently).
+
+        Must be called after preDrag(); has no effect (raises no error but does nothing useful)
+        if preDrag() was never called or postDrag() already ended the drag.
+        """
+        ...
+
+    @constmethod
+    def postDrag(self) -> None:
+        """
+        End an interactive drag (headless/scriptable equivalent of a mouse-up after
+        preDrag()/doDragStep(), see docs/ARCHITECTURE.md #2.2). Lets the MbD solver do its own
+        post-drag bookkeeping and marks the object as touched.
+        """
+        ...
     Joints: Final[list]
     """A list of all joints this assembly has."""

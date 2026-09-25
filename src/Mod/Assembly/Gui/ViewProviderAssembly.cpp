@@ -342,6 +342,14 @@ bool ViewProviderAssembly::setEdit(int mode)
         if (!assembly) {
             return false;
         }
+
+        // FCPROJECT-PATCH (2026-09-25, siehe AssemblyObject::setActiveEditContext()): solange der
+        // Nutzer GENAU DIESE Instanz aktiv bearbeitet, soll sie eigenstaendig loesen, auch wenn
+        // eine aeussere Baugruppe sie ansonsten (per execute()) ohnehin mitloesen wuerde - eine
+        // scheiternde/singulaere aeussere Baugruppe blockiert sonst auch das Bearbeiten einer fuer
+        // sich genommen unproblematischen inneren Unterbaugruppe.
+        assembly->setActiveEditContext(true);
+
         connectSolverUpdate = assembly->signalSolverUpdate.connect([this] {
             UpdateSolverInformation();
         });
@@ -374,6 +382,16 @@ void ViewProviderAssembly::unsetEdit(int mode)
         canStartDragging = false;
         partMoving = false;
         docsToMove.clear();
+
+        // FCPROJECT-PATCH (2026-09-25, Gegenstueck zu setEdit(), siehe
+        // AssemblyObject::setActiveEditContext()): eigenstaendiges Solve-Verhalten nur waehrend
+        // der aktiven Bearbeitung - danach uebernimmt wieder die aeussere Baugruppe (execute()s
+        // normales isNestedUnderFlexibleParent()-Verhalten), ein abschliessender recomputeFeature()
+        // stellt sicher, dass die Placement wieder aus deren Sicht konsistent ist.
+        if (auto* assembly = getObject<AssemblyObject>()) {
+            assembly->setActiveEditContext(false);
+            assembly->recomputeFeature(true);
+        }
 
         unsetDragger();
         detachSelection();
