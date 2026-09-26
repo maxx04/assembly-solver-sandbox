@@ -41,6 +41,12 @@
 #      dann NICHT versucht (koennten vom fehlgeschlagenen abhaengen).
 #   7. Zusammenfassung: was sich in src/Mod/Assembly geaendert hat, plus
 #      Hinweis auf naechste Schritte (Build+Deploy, Kinematik-Tests).
+#   8. standalone-check/check-neon-sync.sh (rein lesend, siehe dortiger
+#      Kommentar): prueft nebenbei, ob die eigene Neon-Qt6/PySide6/Shiboken6-
+#      Umgebung noch dem aktuellen Stand des Neon-Repos entspricht - FreeCADs
+#      eigenes CI-Skript pinnt dort selbst keine Version, "synchron mit
+#      FreeCAD" heisst hier "synchron mit dem Neon-Repo". Kein automatisches
+#      Update, nur ein Hinweis.
 #
 # Aufruf:
 #   ./update-sandbox.sh                     # Zielcommit = aktueller freecad-source-HEAD
@@ -101,7 +107,7 @@ if [[ -z "$TARGET_COMMIT" ]]; then
   echo "Kein Zielcommit angegeben - nehme aktuellen HEAD von freecad-source: ${TARGET_COMMIT}"
 fi
 
-log "Schritt 1/7: von PATCHES.txt betroffene Dateien zuruecksetzen (damit sie den Sync nicht blockieren)"
+log "Schritt 1/8: von PATCHES.txt betroffene Dateien zuruecksetzen (damit sie den Sync nicht blockieren)"
 # Dateiliste dynamisch aus den Patches selbst ableiten (jede "+++ b/<pfad>"-Zeile) statt
 # manuell gepflegt - bleibt automatisch aktuell, wenn PATCHES.txt sich aendert.
 PATCHED_FILES=()
@@ -118,7 +124,7 @@ for f in "${PATCHED_FILES[@]}"; do
   [[ -f "$f" ]] && run git checkout -- "$f"
 done
 
-log "Schritt 2/7: pruefe auf unerwartete lokale Aenderungen an getrackten Dateien"
+log "Schritt 2/8: pruefe auf unerwartete lokale Aenderungen an getrackten Dateien"
 KNOWN_DIRTY=("src/3rdParty/OndselSolver")
 UNEXPECTED=""
 while IFS= read -r line; do
@@ -136,11 +142,11 @@ if [[ -n "$UNEXPECTED" && $DRY_RUN -eq 0 ]]; then
   exit 1
 fi
 
-log "Schritt 3/7: git fetch origin"
+log "Schritt 3/8: git fetch origin"
 run git fetch origin
 
 BEFORE="$(git rev-parse HEAD)"
-log "Schritt 4/7: src/Mod/Assembly + src/3rdParty/OndselSolver auf ${TARGET_COMMIT} bringen"
+log "Schritt 4/8: src/Mod/Assembly + src/3rdParty/OndselSolver auf ${TARGET_COMMIT} bringen"
 # WICHTIG (live als echter Vorfall aufgetreten, 2026-09-07): NIEMALS ein volles
 # "git checkout <upstream-commit>" hier - das ersetzt den KOMPLETTEN Arbeitsbaum durch den
 # Tree dieses reinen Upstream-Commits, der patches/, docs/, standalone-check/, resources/,
@@ -152,26 +158,29 @@ log "Schritt 4/7: src/Mod/Assembly + src/3rdParty/OndselSolver auf ${TARGET_COMM
 # nichts sonst wird angefasst.
 run git checkout "$TARGET_COMMIT" -- src/Mod/Assembly src/3rdParty/OndselSolver
 
-log "Schritt 5/7: Submodule synchronisieren (OndselSolver)"
+log "Schritt 5/8: Submodule synchronisieren (OndselSolver)"
 run git submodule update --init -- src/3rdParty/OndselSolver
 
 if [[ $APPLY_PATCHES -eq 1 ]]; then
-  log "Schritt 6/7: Patches aus PATCHES.txt neu anwenden (${#PATCHES[@]} Stueck)"
+  log "Schritt 6/8: Patches aus PATCHES.txt neu anwenden (${#PATCHES[@]} Stueck)"
   for p in "${PATCHES[@]}"; do
     echo "--- ${p} ---"
     run git apply "${PATCHES_DIR}/${p}"
   done
 else
-  log "Schritt 6/7: uebersprungen (--no-patches)"
+  log "Schritt 6/8: uebersprungen (--no-patches)"
 fi
 
 if [[ $DRY_RUN -eq 0 ]]; then
-  log "Schritt 7/7: Zusammenfassung src/Mod/Assembly (${BEFORE:0:10}..${TARGET_COMMIT:0:10})"
+  log "Schritt 7/8: Zusammenfassung src/Mod/Assembly (${BEFORE:0:10}..${TARGET_COMMIT:0:10})"
   git diff --stat "$BEFORE" "$TARGET_COMMIT" -- src/Mod/Assembly | tail -5
   echo
   echo "Naechste Schritte:"
   echo "  - Build+Deploy: cmake --build standalone-check/build --target build-and-deploy  (oder Strg+Shift+B)"
   echo "  - Kinematik-Test: cmake --build standalone-check/build --target kinematic-test-patched"
+
+  log "Schritt 8/8: pruefe Neon-Qt6/PySide6/Shiboken6-Umgebung auf Versionsdrift (rein lesend)"
+  "${SANDBOX_DIR}/standalone-check/check-neon-sync.sh" || true
 else
   log "Dry-Run Ende - keine Aenderung vorgenommen."
 fi
