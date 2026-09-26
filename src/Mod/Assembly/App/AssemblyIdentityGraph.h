@@ -187,6 +187,16 @@ public:
     App::DocumentObject* materialize(const SolverHandle& h) const;
     App::DocumentObject* materialize(const UiHandle& h) const;
 
+    // FCPROJECT-PATCH (2026-09-26, Nutzerauftrag "ShowIdentityGraph: templated Instanzen zeigen
+    // richtige eigene Solve-Handles"): materialize(SolverHandle) liefert IMMER den geteilten
+    // Vorlage-Zeiger (handle.templateObj), unabhaengig von Instanz-Duplikation - fuer den echten
+    // Solver-Datensatz (Masse/Geometrie/Joint-Definitionen) korrekt, aber NICHT der Zeiger, der
+    // tatsaechlich als objectPartMap-Schluessel landet (siehe AssemblyObject.cpp,
+    // canonicalizeForMbD()). Diese Funktion war bisher eine anonyme-Namespace-Kopie dort
+    // (materializeForObjectPartMap()) - hierher verschoben, damit exportDot() dieselbe, EINE
+    // Quelle der Wahrheit nutzen kann statt den Solver-Handle naiv zu materialisieren.
+    App::DocumentObject* materializeForObjectPartMap(const IdentityHandle& handle);
+
     // Jeder lokale Spiegel-Kandidat (auf JEDER Tiefe), der auf 'h' aufloest - ersetzt
     // collectLocalMirrorCandidates() + Brute-Force-Abgleich in syncLocalMirrorPlacement().
     std::vector<App::DocumentObject*> mirrorsOf(const IdentityHandle& h);

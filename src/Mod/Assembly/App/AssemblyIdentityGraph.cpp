@@ -391,8 +391,27 @@ bool resolveObjectIn(AssemblyObject* scope, App::DocumentObject* obj, IdentityHa
             previousLink = realAsmLink;
         }
 
+        // FCPROJECT-PATCH (2026-09-26, live an BG23/BG25 gefunden - Nutzerauftrag "warum kein
+        // Template of bei BG25/BG23", "Parts haben auch Links"): 'obj' kann OHNE jeden Zwischen-
+        // Container direktes Mitglied von scope's EIGENER Gruppe sein (dann ist 'path' leer) -
+        // der Slot1/Slot2-Geschwister-Check weiter unten greift NUR fuer den NICHT-leeren Fall
+        // (er braucht 'path.back()' als Bezugs-Container). hasSiblingInstances() erkennt jetzt
+        // (siehe dortiger Kommentar in AssemblyUtils.cpp) sowohl Unterbaugruppen- als auch
+        // einfache Teil-Duplikation - kanonische Vorlage ist in BEIDEN Faellen einheitlich
+        // getLinkedObject(), dasselbe Feld, auf dem der neue hasSiblingInstances()-Zweig fuer
+        // einfache Teile bereits vergleicht (Konsistenz zwischen Erkennung und Aufloesung).
         if (path.empty()) {
-            outHandle.templateObj = obj;
+            App::DocumentObject* resolved = obj;
+            if (auto* objAsLink = freecad_cast<AssemblyLink*>(obj)) {
+                if (hasSiblingInstances(candidatesFor(scope, nullptr), objAsLink)) {
+                    duplicatePath.push_back(objAsLink);
+                    if (auto* linked = objAsLink->getLinkedObject2(false)) {
+                        resolved = linked;
+                    }
+                }
+            }
+            outHandle.templateObj = resolved;
+            outHandle.duplicateInstancePath = duplicatePath;
             return true;
         }
         // FCPROJECT-PATCH (2026-09-21, live an der echten CNC3018_022-Datei gefunden, per
@@ -718,6 +737,24 @@ App::DocumentObject* IdentityGraph::materialize(const UiHandle& h) const
     return h.localObj();
 }
 
+// FCPROJECT-PATCH (2026-09-26): siehe Deklaration in AssemblyIdentityGraph.h - identische Logik
+// zur vormaligen anonymen-Namespace-Funktion materializeForObjectPartMap() in AssemblyObject.cpp,
+// hierher verschoben als EINE gemeinsame Quelle der Wahrheit fuer beide Aufrufer
+// (canonicalizeForMbD() UND exportDot()).
+App::DocumentObject* IdentityGraph::materializeForObjectPartMap(const IdentityHandle& handle)
+{
+    if (!handle.templateObj) {
+        return nullptr;
+    }
+    if (handle.duplicateInstancePath.empty()) {
+        return handle.templateObj;
+    }
+    auto mirrors = mirrorsOf(handle);
+    // Defensiver Ruecksfall (mirrors.empty()) sollte praktisch nie eintreten - jede tatsaechlich
+    // dupliziert erkannte Ebene hat per Konstruktion einen lokalen Spiegel.
+    return mirrors.empty() ? handle.templateObj : mirrors.front();
+}
+
 // FCPROJECT-PATCH (2026-09-19, IdentityGraph-Umbau, Phase 0): ersetzt
 // collectLocalMirrorCandidates()/hasRealObject()'s Brute-Force-Abgleich durch eine gezielte
 // rekursive Suche, die bei der TIEFSTEN instanz-aufgeloesten Container-Ebene aus 'h' startet
@@ -787,6 +824,26 @@ std::vector<App::DocumentObject*> IdentityGraph::mirrorsOf(const IdentityHandle&
         AssemblyLink* deepest = h.duplicateInstancePath.back();
         AssemblyLink* container = h.duplicateInstancePath[h.duplicateInstancePath.size() - 2];
         if (container->getSourceForMirror(deepest) == h.templateObj) {
+            return {deepest};
+        }
+    }
+
+    // FCPROJECT-PATCH (2026-09-26, live an BG25 gefunden ueber ShowIdentityGraph - Nutzerfrage
+    // "warum haben alle BG25 unterschiedliche Template of"): der obige Spezialfall deckt nur die
+    // Rigid-Grenze MITTEN in einer Kette ab (Vergleich ueber container->getSourceForMirror()).
+    // Ein root-level-Geschwister OHNE jeden umschliessenden Container (z.B. zwei eigenstaendige
+    // Halterbaugruppe-Instanzen direkt in scope->Group, ueber resolveObjectIn()s path.empty()-
+    // Zweig aufgeloest) hat KEINEN 'container' fuer getSourceForMirror() - dessen templateObj kommt
+    // stattdessen DIREKT aus deepest->getLinkedObject2(). Die Suche unten haengt sich dann an
+    // deepest->Group.getValues() auf (deepest's EIGENE lokale Kinder), findet templateObj dort NIE
+    // (es lebt im FREMDEN verlinkten Dokument, nicht als Kind von deepest selbst), liefert leer
+    // zurueck - und JEDE root-level-Geschwister-Instanz faellt in materializeForObjectPartMap() auf
+    // denselben geteilten Vorlage-Zeiger zurueck statt auf ihre eigene, unterscheidbare Instanz.
+    // Analog zum Fall oben: wenn deepest SELBST (nicht eines seiner Kinder) sich direkt auf
+    // h.templateObj aufloest, ist deepest bereits der gesuchte instanzeigene Spiegel.
+    if (!h.duplicateInstancePath.empty()) {
+        AssemblyLink* deepest = h.duplicateInstancePath.back();
+        if (deepest->getLinkedObject2(false) == h.templateObj) {
             return {deepest};
         }
     }
@@ -1239,7 +1296,12 @@ std::string IdentityGraph::exportDot()
         handleById[id] = handle;
         App::DocumentObject* localObj = materialize(resolveForUi(handle));
         localObjById[id] = localObj;
-        solverObjById[id] = materialize(resolveForSolver(handle));
+        // FCPROJECT-PATCH (2026-09-26): materialize(resolveForSolver(handle)) liefert IMMER den
+        // geteilten Vorlage-Zeiger (siehe materializeForObjectPartMap()-Deklaration in
+        // AssemblyIdentityGraph.h) - fuer eine duplizierte/templated Instanz zeigte das Diagramm
+        // damit faelschlich fuer ALLE Instanzen denselben "Solver:"-Zeiger, statt des tatsaechlich
+        // instanzeigenen, der als objectPartMap-Schluessel landet.
+        solverObjById[id] = materializeForObjectPartMap(handle);
         std::vector<AssemblyLink*> chain;
         if (localObj) {
             findContainerChain(rootAssembly, localObj, chain);
@@ -1277,6 +1339,14 @@ std::string IdentityGraph::exportDot()
             + "</FONT></TD></TR>";
         text += "<TR><TD ALIGN=\"LEFT\"><FONT POINT-SIZE=\"9\">Solver: "
             + hexPointer(solverObj) + "</FONT></TD></TR>";
+        // FCPROJECT-PATCH (2026-09-26, Nutzerauftrag): fuer eine templated/duplizierte Instanz
+        // (duplicateInstancePath nicht leer) zusaetzlich zeigen, von welcher geteilten Vorlage sie
+        // abstammt - der "Solver:"-Wert oben ist jetzt bewusst der INSTANZEIGENE Spiegel, diese
+        // Zeile macht die gemeinsame Herkunft trotzdem sichtbar.
+        if (!handle.duplicateInstancePath.empty()) {
+            text += "<TR><TD ALIGN=\"LEFT\"><FONT POINT-SIZE=\"9\">Template of: "
+                + hexPointer(handle.templateObj) + "</FONT></TD></TR>";
+        }
         text += "</TABLE>>";
         if (isAssembly) {
             text += ", width=\"2.5\", height=\"1\"";
@@ -1300,7 +1370,12 @@ std::string IdentityGraph::exportDot()
             text += "    label=\"?\";\n";
             return;
         }
-        App::DocumentObject* solverObj = materialize(resolveForSolver(resolveObject(link)));
+        // FCPROJECT-PATCH (2026-09-26): siehe emitNodeLine() weiter oben fuer die volle
+        // Begruendung - materializeForObjectPartMap() statt materialize(resolveForSolver(...)),
+        // damit eine duplizierte/templated Unterbaugruppen-Instanz ihren eigenen, instanzeigenen
+        // Solver-Zeiger zeigt statt bei jeder Instanz denselben geteilten Vorlage-Zeiger.
+        IdentityHandle handle = resolveObject(link);
+        App::DocumentObject* solverObj = materializeForObjectPartMap(handle);
         text += "    label=<<TABLE BORDER=\"0\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"0\">";
         text += "<TR><TD ALIGN=\"LEFT\"><FONT POINT-SIZE=\"11\"><B>"
             + htmlEscape(link->getNameInDocument()) + "</B></FONT></TD></TR>";
@@ -1311,6 +1386,10 @@ std::string IdentityGraph::exportDot()
             + "</FONT></TD></TR>";
         text += "<TR><TD ALIGN=\"LEFT\"><FONT POINT-SIZE=\"9\">Solver: "
             + hexPointer(solverObj) + "</FONT></TD></TR>";
+        if (!handle.duplicateInstancePath.empty()) {
+            text += "<TR><TD ALIGN=\"LEFT\"><FONT POINT-SIZE=\"9\">Template of: "
+                + hexPointer(handle.templateObj) + "</FONT></TD></TR>";
+        }
         text += "<TR><TD HEIGHT=\"2\"></TD></TR>";
         text += "</TABLE>>;\n";
     };

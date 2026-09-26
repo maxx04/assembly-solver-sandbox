@@ -3522,18 +3522,13 @@ App::DocumentObject* AssemblyObject::canonicalizeForMbDLegacy(App::DocumentObjec
 // resolvePartForMbD() gemeinsam genutzt.
 namespace
 {
+// FCPROJECT-PATCH (2026-09-26): eigentliche Logik nach IdentityGraph::materializeForObjectPartMap()
+// verschoben (siehe dortiger Kommentar) - EINE gemeinsame Quelle der Wahrheit fuer diese Datei UND
+// exportDot(). Duennes Wrapper hier belassen, um alle bestehenden Aufrufstellen unveraendert zu
+// lassen.
 App::DocumentObject* materializeForObjectPartMap(IdentityGraph& graph, const IdentityHandle& handle)
 {
-    if (!handle.templateObj) {
-        return nullptr;
-    }
-    if (handle.duplicateInstancePath.empty()) {
-        return handle.templateObj;
-    }
-    auto mirrors = graph.mirrorsOf(handle);
-    // Defensiver Ruecksfall (mirrors.empty()) sollte praktisch nie eintreten - jede tatsaechlich
-    // dupliziert erkannte Ebene hat per Konstruktion einen lokalen Spiegel.
-    return mirrors.empty() ? handle.templateObj : mirrors.front();
+    return graph.materializeForObjectPartMap(handle);
 }
 }  // namespace
 

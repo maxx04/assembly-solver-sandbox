@@ -681,15 +681,37 @@ bool hasSiblingInstances(const std::vector<App::DocumentObject*>& candidates, As
         return false;
     }
 
-    auto* linkedAssembly = asmLink->getLinkedAssembly();
-    if (!linkedAssembly) {
+    if (auto* linkedAssembly = asmLink->getLinkedAssembly()) {
+        int matches = 0;
+        for (auto* candidate : candidates) {
+            auto* sibling = freecad_cast<AssemblyLink*>(candidate);
+            if (sibling && sibling->getLinkedAssembly() == linkedAssembly) {
+                ++matches;
+                if (matches >= 2) {
+                    return true;
+                }
+            }
+        }
         return false;
     }
 
+    // FCPROJECT-PATCH (2026-09-26, Nutzerauftrag "Parts haben auch Links" - live an
+    // CNC3018_023_A_Halterbaugruppe gefunden): 'asmLink' hat KEIN eigenes Assembly-Objekt
+    // (getLinkedAssembly() == nullptr) - das trifft auf ein einfaches verlinktes TEIL zu (z.B.
+    // eine Schraube/Scheibe/Mutter), nicht nur auf eine Unterbaugruppe. Bis hierhin lieferte diese
+    // Funktion fuer so ein Teil IMMER false, unabhaengig davon, ob tatsaechlich mehrere Instanzen
+    // desselben Teils nebeneinander liegen (z.B. zwei "M5_Scheibe") - die Duplikations-Erkennung
+    // war unbeabsichtigt auf Unterbaugruppen beschraenkt, obwohl ein einfaches Teil genau
+    // denselben Mechanismus (App::Link -> LinkedObject) fuer Mehrfachverwendung nutzt. Analoger
+    // Geschwister-Check ueber das gemeinsame LinkedObject statt getLinkedAssembly().
+    auto* linkedObj = asmLink->getLinkedObject(false);
+    if (!linkedObj) {
+        return false;
+    }
     int matches = 0;
     for (auto* candidate : candidates) {
         auto* sibling = freecad_cast<AssemblyLink*>(candidate);
-        if (sibling && sibling->getLinkedAssembly() == linkedAssembly) {
+        if (sibling && sibling->getLinkedObject(false) == linkedObj) {
             ++matches;
             if (matches >= 2) {
                 return true;
