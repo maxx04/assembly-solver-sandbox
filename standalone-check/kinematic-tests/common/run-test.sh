@@ -47,18 +47,26 @@ if [[ ! -x "$FC_BIN" ]]; then
 fi
 FC_LIB_DIR="$(cd "$(dirname "$FC_BIN")/../lib" && pwd)"
 
+# FCPROJECT-PATCH (2026-09-24, siehe Projekt-Memory "reference-neon-qt6-pyside6-environment"):
+# FreeCAD wird jetzt gegen eine eigene, in sich konsistente Qt6/PySide6/Shiboken6-Umgebung
+# gebaut (neon-qt6-pyside6/root/, aus dem KDE-Neon-Repo als .deb-Pakete entpackt, kein
+# Systemeingriff) statt gegen System-Qt + pip-PySide6 zu mischen. Die alte
+# ".venv/.../PySide6/Qt/lib"-Struktur (spezifisch fuer pip-Wheels, die ihr eigenes Qt buendeln)
+# existiert dadurch nicht mehr - Neons PySide6 erwartet Qt separat unter
+# neon-qt6-pyside6/root/usr/lib/x86_64-linux-gnu. VIRTUAL_ENV bleibt trotzdem noetig: FreeCADs
+# eigener Interpreter.cpp haengt "$VIRTUAL_ENV/lib/pythonX.Y/site-packages" an sys.path an (das
+# .venv verweist dort per Symlinks auf die Neon-Pakete) - PYTHONPATH selbst wird von FreeCADs
+# isoliertem Python-Start ignoriert, deshalb hier bewusst nicht mehr gesetzt.
 VENV_DIR="/home/maxx/Dokumente/FreeCAD-Development/.venv"
-# shellcheck disable=SC1091
-source "${VENV_DIR}/bin/activate"
 export VIRTUAL_ENV="${VENV_DIR}"
-PYSIDE_QT="${VIRTUAL_ENV}/lib/python3.12/site-packages/PySide6/Qt"
-export QT_PLUGIN_PATH="${PYSIDE_QT}/plugins"
+NEON_ROOT="/home/maxx/Dokumente/FreeCAD-Development/neon-qt6-pyside6/root/usr"
+NEON_LIB="${NEON_ROOT}/lib/x86_64-linux-gnu"
+export QT_PLUGIN_PATH="${NEON_LIB}/qt6/plugins"
 # RUNPATH-Fix (eigener lib-Ordner zuerst) - siehe docs/JOURNAL.md "ROOT CAUSE GEFUNDEN UND
 # BEHOBEN": jede kopierte FreeCAD-Installation traegt sonst ein fest einprogrammiertes RUNPATH
 # auf die urspruengliche Installation.
-export LD_LIBRARY_PATH="${FC_LIB_DIR}:${PYSIDE_QT}/lib:/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export LD_LIBRARY_PATH="${FC_LIB_DIR}:${NEON_LIB}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export PYTHONNOUSERSITE=1
-export PYTHONPATH="${VIRTUAL_ENV}/lib/python3.12/site-packages"
 export QT_QPA_PLATFORM=xcb
 
 # Eigenes, isoliertes Xvfb starten falls das gewuenschte Display noch nicht läuft - nie ein

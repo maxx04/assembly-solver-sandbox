@@ -16,6 +16,19 @@
 # (siehe ../Dokumente/FreeCAD-Development/assembly-solver-sandbox/docs/JOURNAL.md, "ROOT CAUSE
 # GEFUNDEN UND BEHOBEN" fuer die urspruengliche Herleitung).
 #
+# WICHTIG (2026-09-24, "wie FreeCAD selbst arbeiten"): FreeCAD wird jetzt gegen eine EIGENE,
+# in sich konsistente Qt6/PySide6/Shiboken6-Umgebung gebaut (neon-qt6-pyside6/root/, aus dem
+# offiziellen KDE-Neon-Repo als .deb-Pakete heruntergeladen und in einen reinen Projektordner
+# entpackt - GENAU der Weg, den FreeCADs eigenes CI-Skript package/ubuntu/install-apt-packages.sh
+# geht, nur ohne das System zu veraendern). Grund: System-Qt (Ubuntu 24.04, 6.4.2) und
+# pip-PySide6 (aus .venv) hatten unterschiedliche, inkompatible Qt-ABI-Erwartungen - das fuehrte
+# zu "Cannot call meta function ... Base::Quantity cannot be converted" im Simulation-Dialog UND
+# verhinderte FREECAD_USE_SHIBOKEN=ON komplett (Linker-Fehler gegen System-Qt). Mit dieser
+# einheitlichen Umgebung (alles Qt 6.11.1) funktioniert Shiboken sauber. Das alte .venv wird
+# hierfuer nicht mehr gebraucht (nur noch als beschreibbares Ziel fuer FreeCADs eigenes kleines
+# "freecad"-Python-Paket, das System-Python-dist-packages verlangt - PySide6/Shiboken6 selbst
+# liegen dort als Symlinks auf dieses Neon-PySide6, siehe weiter unten).
+#
 # WICHTIG (2026-08-29): FREECAD_USER_HOME erzwingt ein eigenes, dauerhaftes Profil-Verzeichnis
 # (App::Application::getCustomPaths(), src/App/Application.cpp), damit dieses Skript sich nicht
 # versehentlich ~/.config/FreeCAD/v26-3/user.cfg mit der echten Installation teilt - Falle
@@ -29,21 +42,19 @@ export FREECAD_USER_HOME="$ISOLATED_PROFILE"
 FC_BIN="/home/maxx/freecad-sandbox/install/bin/FreeCAD"
 FC_LIB_DIR="$(cd "$(dirname "$FC_BIN")/../lib" && pwd)"
 
-FALLBACK_VENV_DIR="/home/maxx/Dokumente/FreeCAD-Development/.venv"
-if VENV_DIR="$(cd "${SCRIPT_DIR}/../../.venv" 2>/dev/null && pwd)"; then
-    :
-else
-    VENV_DIR="${FALLBACK_VENV_DIR}"
-fi
-source "${VENV_DIR}/bin/activate"
-export VIRTUAL_ENV="${VENV_DIR}"
+NEON_ROOT="/home/maxx/Dokumente/FreeCAD-Development/neon-qt6-pyside6/root/usr"
+NEON_LIB="${NEON_ROOT}/lib/x86_64-linux-gnu"
 
-PYSIDE_QT="${VIRTUAL_ENV}/lib/python3.12/site-packages/PySide6/Qt"
+# FCPROJECT-PATCH (2026-09-24): FreeCADs eigener Interpreter.cpp::initInterpreter() ignoriert
+# PYTHONPATH (isolierter Python-Start), liest aber explizit VIRTUAL_ENV aus und haengt
+# "$VIRTUAL_ENV/lib/pythonX.Y/site-packages" an sys.path an - das ist der einzige Weg, wie
+# unser aus dem Neon-Repo entpacktes PySide6/Shiboken6 6.11.1 gefunden wird. Unser eigenes
+# .venv leitet dorthin per .pth-Datei um (venv-eigenes PySide6 6.6.3 wurde deinstalliert).
+export VIRTUAL_ENV="/home/maxx/Dokumente/FreeCAD-Development/.venv"
 
-export QT_PLUGIN_PATH="${PYSIDE_QT}/plugins"
-export LD_LIBRARY_PATH="${FC_LIB_DIR}:${PYSIDE_QT}/lib:/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export QT_PLUGIN_PATH="${NEON_LIB}/qt6/plugins"
+export LD_LIBRARY_PATH="${FC_LIB_DIR}:${NEON_LIB}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export PYTHONNOUSERSITE=1
-export PYTHONPATH="${VIRTUAL_ENV}/lib/python3.12/site-packages"
 export QT_QPA_PLATFORM=xcb
 
 LOG_DIR="${SCRIPT_DIR}/logs"

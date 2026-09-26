@@ -3,9 +3,20 @@
   "cmake.sourceDirectory": "/home/maxx/freecad-sandbox/freecad-source",
   "cmake.buildDirectory": "/home/maxx/freecad-sandbox/freecad-source/build",
   "cmake.installPrefix": "/home/maxx/freecad-sandbox/install",
+
+  "//useCMakePresets": "FreeCADs eigenes, mitgeliefertes CMakePresets.json (Presets 'debug'/'rel-with-deb-info' etc.) wird von CMake Tools sonst automatisch bevorzugt und konfiguriert dann in build/debug bzw. build/relWithDebInfo - VOELLIG SEPARATE, nie eingerichtete Verzeichnisse ohne unsere Neon-Qt6/venv-Umgebung. Dort greift dann System-Python (~/.platformio/penv statt unserem .venv), Shiboken6/PySide6 fehlen komplett, und der fehlende 'lark'-Python-Package bricht die Konfiguration sogar hart ab (CMake Error, nicht nur Warning). cmake.buildDirectory/installPrefix oben werden in diesem Preset-Modus nur TEILWEISE respektiert (installPrefix ja, binaryDir nein) - deshalb komplett auf den klassischen, nicht-Preset-Modus zurueckschalten, der unsere obigen Einstellungen vollstaendig nutzt.",
+  "cmake.useCMakePresets": "never",
   "cmake.configureOnOpen": true,
   "cmake.automaticReconfigure": false,
   "cmake.configureOnEdit": false,
+
+  "//environment": "Ohne diese Variablen findet CMake Tools' eigener Configure-Lauf die Neon-Qt6/Shiboken6-Umgebung nicht (siehe reference-neon-qt6-pyside6-environment.md) - der PySide6-Python-Import-Check in SetupShibokenAndPyside.cmake schlaegt dann fehl ('libshiboken6.abi3.so.6.11: cannot open shared object file'), FREECAD_USE_SHIBOKEN wird fuer DIESEN Lauf lokal auf OFF gesetzt (nicht dauerhaft im Cache, aber der dabei erzeugte Build-Stand waere trotzdem ohne Shiboken - der Simulation-Dialog-Base::Quantity-Bug kaeme zurueck). CMAKE_PREFIX_PATH selbst bleibt unabhaengig davon im Cache erhalten (urspruenglich per -D gesetzt), nur LD_LIBRARY_PATH/QT_PLUGIN_PATH fehlen CMake Tools' eigenem Prozessumfeld.",
+  "cmake.environment": {
+    "VIRTUAL_ENV": "/home/maxx/Dokumente/FreeCAD-Development/.venv",
+    "LD_LIBRARY_PATH": "/home/maxx/Dokumente/FreeCAD-Development/neon-qt6-pyside6/root/usr/lib/x86_64-linux-gnu",
+    "QT_PLUGIN_PATH": "/home/maxx/Dokumente/FreeCAD-Development/neon-qt6-pyside6/root/usr/lib/x86_64-linux-gnu/qt6/plugins",
+    "PYTHONNOUSERSITE": "1"
+  },
   "cmake.defaultVariants": {
     "buildType": { "default": "release", "description": "", "choices": { "release": { "short": "Release", "long": "wie bereits konfiguriert (CMAKE_BUILD_TYPE=Release)", "buildType": "Release" } } }
   },
