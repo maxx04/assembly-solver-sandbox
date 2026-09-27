@@ -1323,6 +1323,19 @@ void AssemblyObject::setNewPlacements()
             propPlacement->setValue(newPlacement);
             obj->purgeTouched();
         }
+        else if (obj->isTouched()) {
+            // Nutzerbefund 2026-09-27 ("still touched after recompute" bei geerdeten Teilen wie
+            // Fuehrung330/331): ein geerdetes Teil AENDERT seine Placement nie (isSame() bleibt
+            // immer true), bekommt aber trotzdem gelegentlich ein gesetztes Touched-Flag - nicht
+            // von uns, sondern von FreeCADs eigener dokumentuebergreifender Link-Weiterleitung
+            // (_LinkTouched), wenn dasselbe kanonische Objekt ueber eine ANDERE Instanz (z.B. eine
+            // zweite FuerungsBaugruppe, die dieselbe Fuehrung referenziert) im selben Rekompute-
+            // Zyklus erneut beruehrt wird, NACHDEM dieser solve()-Durchlauf sein eigenes
+            // purgeTouched() schon laengst ausgefuehrt hat. Ohne diesen Zweig bleibt das Flag bis
+            // zum Ende des gesamten Dokument-Rekomputes stehen, obwohl inhaltlich alles korrekt
+            // ist - siehe Document.cpp's Warnung "still touched after recompute".
+            obj->purgeTouched();
+        }
 
         // FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix,
         // 2026-09-03, erweitert 2026-09-04 - live durch Nutzer aufgedeckt: "Boxen nach dem
@@ -1343,6 +1356,32 @@ void AssemblyObject::setNewPlacements()
         // unnoetige Schreibvorgaenge auf bereits korrekte lokale Kopien bleiben also trotzdem
         // aus - nur der FEHLENDE erste Sync-Versuch wird hier nachgeholt.
         syncLocalMirrorPlacement(obj, newPlacement);
+    }
+
+    // Nutzerbefund 2026-09-27 ("still touched after recompute" bei geerdeten Teilen wie
+    // Fuehrung330/331, live an BG22): die beiden isTouched()-Zweige oben (im Hauptzweig und in
+    // syncLocalMirrorPlacement()) faengen den haeufigsten Fall ab, aber NICHT eine
+    // Querbeeinflussung ZWISCHEN zwei verschiedenen objectPartMap-Eintraegen - z.B. wenn das
+    // Setzen der Placement fuer EIN kanonisches Teil (per FreeCADs eigener dokumentuebergreifender
+    // Link-Weiterleitung, _LinkTouched) ein BEREITS in einer FRUEHEREN Schleifen-Iteration
+    // verarbeitetes und schon gesaeubertes Teil (bzw. dessen lokalen Spiegel) im selben Dokument
+    // erneut beruehrt. Ein abschliessender, zweiter Durchlauf ueber ALLE Eintraege nach der
+    // Hauptschleife faengt genau das ab, unabhaengig von der Bearbeitungsreihenfolge.
+    IdentityGraph finalSweepGraph(this);
+    for (auto& pair : objectPartMap) {
+        App::DocumentObject* obj = pair.first;
+        if (!obj) {
+            continue;
+        }
+        if (obj->isTouched()) {
+            obj->purgeTouched();
+        }
+        IdentityHandle handle = finalSweepGraph.resolveObject(obj);
+        for (auto* mirror : finalSweepGraph.mirrorsOf(handle)) {
+            if (mirror && mirror != obj && mirror->isTouched()) {
+                mirror->purgeTouched();
+            }
+        }
     }
 }
 
@@ -1436,6 +1475,12 @@ void AssemblyObject::syncLocalMirrorPlacement(App::DocumentObject* realObj, cons
         }
         if (!propPlc->getValue().isSame(plc)) {
             propPlc->setValue(plc);
+            candidate->purgeTouched();
+        }
+        else if (candidate->isTouched()) {
+            // Nutzerbefund 2026-09-27: siehe ausfuehrliche Begruendung am analogen Zweig in
+            // setNewPlacements() - derselbe Effekt trifft hier den lokalen Spiegel (z.B. BG22s
+            // Fuehrung330/331-Link), nicht nur das kanonische Objekt selbst.
             candidate->purgeTouched();
         }
     }

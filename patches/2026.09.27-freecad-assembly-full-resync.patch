@@ -1,9 +1,9 @@
 diff --git a/src/Mod/Assembly/App/AssemblyIdentityGraph.cpp b/src/Mod/Assembly/App/AssemblyIdentityGraph.cpp
 new file mode 100644
-index 00000000000..b0edd638a2b
+index 00000000000..68673ea561d
 --- /dev/null
 +++ b/src/Mod/Assembly/App/AssemblyIdentityGraph.cpp
-@@ -0,0 +1,1612 @@
+@@ -0,0 +1,1756 @@
 +// SPDX-License-Identifier: LGPL-2.1-or-later
 +/****************************************************************************
 + *                                                                          *
@@ -225,7 +225,8 @@ index 00000000000..b0edd638a2b
 +
 +bool IdentityHandle::operator==(const IdentityHandle& other) const
 +{
-+    return templateObj == other.templateObj && duplicateInstancePath == other.duplicateInstancePath;
++    return templateObj == other.templateObj && duplicateInstancePath == other.duplicateInstancePath
++        && duplicateLeaf == other.duplicateLeaf;
 +}
 +
 +std::size_t IdentityHandleHash::operator()(const IdentityHandle& h) const
@@ -235,6 +236,7 @@ index 00000000000..b0edd638a2b
 +        // Boost-style hash_combine, ohne die Boost-Abhaengigkeit hier zu brauchen.
 +        seed ^= std::hash<const void*> {}(link) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
 +    }
++    seed ^= std::hash<const void*> {}(h.duplicateLeaf) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
 +    return seed;
 +}
 +
@@ -341,6 +343,10 @@ index 00000000000..b0edd638a2b
 +            IdentityHandle canonical = resolveObject(obj);
 +            result.templateObj = canonical.templateObj ? canonical.templateObj : obj;
 +            duplicatePath = canonical.duplicateInstancePath;
++            // Nutzerauftrag 2026-09-27: resolveObject() kann jetzt auch ein dupliziertes
++            // einfaches Teil (App::Link) melden - siehe IdentityHandle::duplicateLeaf. Das ging
++            // hier bisher verloren, weil nur duplicateInstancePath uebernommen wurde.
++            result.duplicateLeaf = canonical.duplicateLeaf;
 +        }
 +        result.duplicateInstancePath = duplicatePath;
 +        return result;
@@ -397,8 +403,43 @@ index 00000000000..b0edd638a2b
 +            previousLink = realAsmLink;
 +        }
 +
++        // FCPROJECT-PATCH (2026-09-26, live an BG23/BG25 gefunden - Nutzerauftrag "warum kein
++        // Template of bei BG25/BG23", "Parts haben auch Links"): 'obj' kann OHNE jeden Zwischen-
++        // Container direktes Mitglied von scope's EIGENER Gruppe sein (dann ist 'path' leer) -
++        // der Slot1/Slot2-Geschwister-Check weiter unten greift NUR fuer den NICHT-leeren Fall
++        // (er braucht 'path.back()' als Bezugs-Container). hasSiblingInstances() erkennt jetzt
++        // (siehe dortiger Kommentar in AssemblyUtils.cpp) sowohl Unterbaugruppen- als auch
++        // einfache Teil-Duplikation - kanonische Vorlage ist in BEIDEN Faellen einheitlich
++        // getLinkedObject(), dasselbe Feld, auf dem der neue hasSiblingInstances()-Zweig fuer
++        // einfache Teile bereits vergleicht (Konsistenz zwischen Erkennung und Aufloesung).
 +        if (path.empty()) {
-+            outHandle.templateObj = obj;
++            App::DocumentObject* resolved = obj;
++            if (auto* objAsLink = freecad_cast<AssemblyLink*>(obj)) {
++                if (hasSiblingInstances(candidatesFor(scope, nullptr), objAsLink)) {
++                    duplicatePath.push_back(objAsLink);
++                    if (auto* linked = objAsLink->getLinkedObject2(false)) {
++                        resolved = linked;
++                    }
++                }
++            }
++            // Nutzerauftrag 2026-09-27: candidatesFor(scope, nullptr) liefert bei
++            // currentContainer==nullptr NUR scope->getSubAssemblies() (per Definition
++            // AssemblyLink-only, siehe dortiger Kommentar) - ein einfaches Teil wie Scheibe/
++            // Schraube taucht darin NIE auf, auch nicht als Kandidat fuer sich selbst. Fuer den
++            // Part-Zweig deshalb scope->Group.getValues() (ALLE direkten Kinder) verwenden.
++            else if (hasSiblingInstances(scope->Group.getValues(), obj)) {
++                // 'obj' ist ein echtes, dupliziertes einfaches Teil (App::Link, z.B. Scheibe/
++                // Schraube/Nutenstein) - kein AssemblyLink, kann also nie als Zwischen-Container in
++                // duplicateInstancePath auftreten (siehe IdentityHandle::duplicateLeaf-Kommentar
++                // fuer die volle Begruendung). getLinkedObject() ist bei echtem App::Link korrekt
++                // ueberschrieben (anders als bei AssemblyLink).
++                outHandle.duplicateLeaf = obj;
++                if (auto* linked = obj->getLinkedObject(false)) {
++                    resolved = linked;
++                }
++            }
++            outHandle.templateObj = resolved;
++            outHandle.duplicateInstancePath = duplicatePath;
 +            return true;
 +        }
 +        // FCPROJECT-PATCH (2026-09-21, live an der echten CNC3018_022-Datei gefunden, per
@@ -694,6 +735,10 @@ index 00000000000..b0edd638a2b
 +            IdentityHandle canonical = resolveObject(obj);
 +            result.templateObj = canonical.templateObj ? canonical.templateObj : obj;
 +            duplicatePath = canonical.duplicateInstancePath;
++            // Nutzerauftrag 2026-09-27: resolveObject() kann jetzt auch ein dupliziertes
++            // einfaches Teil (App::Link) melden - siehe IdentityHandle::duplicateLeaf. Das ging
++            // hier bisher verloren, weil nur duplicateInstancePath uebernommen wurde.
++            result.duplicateLeaf = canonical.duplicateLeaf;
 +        }
 +        result.duplicateInstancePath = duplicatePath;
 +        return result;
@@ -722,6 +767,24 @@ index 00000000000..b0edd638a2b
 +App::DocumentObject* IdentityGraph::materialize(const UiHandle& h) const
 +{
 +    return h.localObj();
++}
++
++// FCPROJECT-PATCH (2026-09-26): siehe Deklaration in AssemblyIdentityGraph.h - identische Logik
++// zur vormaligen anonymen-Namespace-Funktion materializeForObjectPartMap() in AssemblyObject.cpp,
++// hierher verschoben als EINE gemeinsame Quelle der Wahrheit fuer beide Aufrufer
++// (canonicalizeForMbD() UND exportDot()).
++App::DocumentObject* IdentityGraph::materializeForObjectPartMap(const IdentityHandle& handle)
++{
++    if (!handle.templateObj) {
++        return nullptr;
++    }
++    if (handle.duplicateInstancePath.empty() && !handle.duplicateLeaf) {
++        return handle.templateObj;
++    }
++    auto mirrors = mirrorsOf(handle);
++    // Defensiver Ruecksfall (mirrors.empty()) sollte praktisch nie eintreten - jede tatsaechlich
++    // dupliziert erkannte Ebene hat per Konstruktion einen lokalen Spiegel.
++    return mirrors.empty() ? handle.templateObj : mirrors.front();
 +}
 +
 +// FCPROJECT-PATCH (2026-09-19, IdentityGraph-Umbau, Phase 0): ersetzt
@@ -777,6 +840,13 @@ index 00000000000..b0edd638a2b
 +        return result;
 +    }
 +
++    // Nutzerauftrag 2026-09-27: 'duplicateLeaf' ist bei einem duplizierten einfachen Teil (App::Link,
++    // z.B. Scheibe002) gesetzt - dieses Teil selbst IST bereits sein eigener lokaler Spiegel (kein
++    // Container, keine Kinder zum Durchsuchen), analog zum Rigid-Grenz-Sonderfall direkt darunter.
++    if (h.duplicateLeaf) {
++        return {h.duplicateLeaf};
++    }
++
 +    // FCPROJECT-PATCH (2026-09-20, live am echten BG22-Projekt gefunden: verschachtelte
 +    // Duplikation - 3x FuehrungsBaugruppe, je 2x Halterbaugruppe - bricht die Erreichbarkeit):
 +    // wenn 'h.templateObj' selbst schon die GETEILTE VORLAGE der TIEFSTEN duplicateInstancePath-
@@ -793,6 +863,26 @@ index 00000000000..b0edd638a2b
 +        AssemblyLink* deepest = h.duplicateInstancePath.back();
 +        AssemblyLink* container = h.duplicateInstancePath[h.duplicateInstancePath.size() - 2];
 +        if (container->getSourceForMirror(deepest) == h.templateObj) {
++            return {deepest};
++        }
++    }
++
++    // FCPROJECT-PATCH (2026-09-26, live an BG25 gefunden ueber ShowIdentityGraph - Nutzerfrage
++    // "warum haben alle BG25 unterschiedliche Template of"): der obige Spezialfall deckt nur die
++    // Rigid-Grenze MITTEN in einer Kette ab (Vergleich ueber container->getSourceForMirror()).
++    // Ein root-level-Geschwister OHNE jeden umschliessenden Container (z.B. zwei eigenstaendige
++    // Halterbaugruppe-Instanzen direkt in scope->Group, ueber resolveObjectIn()s path.empty()-
++    // Zweig aufgeloest) hat KEINEN 'container' fuer getSourceForMirror() - dessen templateObj kommt
++    // stattdessen DIREKT aus deepest->getLinkedObject2(). Die Suche unten haengt sich dann an
++    // deepest->Group.getValues() auf (deepest's EIGENE lokale Kinder), findet templateObj dort NIE
++    // (es lebt im FREMDEN verlinkten Dokument, nicht als Kind von deepest selbst), liefert leer
++    // zurueck - und JEDE root-level-Geschwister-Instanz faellt in materializeForObjectPartMap() auf
++    // denselben geteilten Vorlage-Zeiger zurueck statt auf ihre eigene, unterscheidbare Instanz.
++    // Analog zum Fall oben: wenn deepest SELBST (nicht eines seiner Kinder) sich direkt auf
++    // h.templateObj aufloest, ist deepest bereits der gesuchte instanzeigene Spiegel.
++    if (!h.duplicateInstancePath.empty()) {
++        AssemblyLink* deepest = h.duplicateInstancePath.back();
++        if (deepest->getLinkedObject2(false) == h.templateObj) {
 +            return {deepest};
 +        }
 +    }
@@ -1245,7 +1335,12 @@ index 00000000000..b0edd638a2b
 +        handleById[id] = handle;
 +        App::DocumentObject* localObj = materialize(resolveForUi(handle));
 +        localObjById[id] = localObj;
-+        solverObjById[id] = materialize(resolveForSolver(handle));
++        // FCPROJECT-PATCH (2026-09-26): materialize(resolveForSolver(handle)) liefert IMMER den
++        // geteilten Vorlage-Zeiger (siehe materializeForObjectPartMap()-Deklaration in
++        // AssemblyIdentityGraph.h) - fuer eine duplizierte/templated Instanz zeigte das Diagramm
++        // damit faelschlich fuer ALLE Instanzen denselben "Solver:"-Zeiger, statt des tatsaechlich
++        // instanzeigenen, der als objectPartMap-Schluessel landet.
++        solverObjById[id] = materializeForObjectPartMap(handle);
 +        std::vector<AssemblyLink*> chain;
 +        if (localObj) {
 +            findContainerChain(rootAssembly, localObj, chain);
@@ -1283,6 +1378,33 @@ index 00000000000..b0edd638a2b
 +            + "</FONT></TD></TR>";
 +        text += "<TR><TD ALIGN=\"LEFT\"><FONT POINT-SIZE=\"9\">Solver: "
 +            + hexPointer(solverObj) + "</FONT></TD></TR>";
++        // FCPROJECT-PATCH (2026-09-26, Nutzerauftrag): fuer eine templated/duplizierte Instanz
++        // (duplicateInstancePath nicht leer) zusaetzlich zeigen, von welcher geteilten Vorlage sie
++        // abstammt - der "Solver:"-Wert oben ist jetzt bewusst der INSTANZEIGENE Spiegel, diese
++        // Zeile macht die gemeinsame Herkunft trotzdem sichtbar.
++        if (!handle.duplicateInstancePath.empty() || handle.duplicateLeaf) {
++            text += "<TR><TD ALIGN=\"LEFT\"><FONT POINT-SIZE=\"9\">Template of: "
++                + hexPointer(handle.templateObj) + "</FONT></TD></TR>";
++            // Nutzerauftrag 2026-09-27: die reine Adresse allein beantwortet nicht "wovon bin ich
++            // eine Vorlage" - der Name macht sichtbar, ob das Template die tiefste externe Datei
++            // ist oder (wie bei Slot1/Slot2 innerhalb einer Fuerungsbaugruppe) ein Objekt EINE
++            // Ebene hoeher, innerhalb der naechsten gemeinsamen Vorlage.
++            // Nutzerbefund 2026-09-27 (Live-Screenshot BG22/Halterbaugruppe001): der bloße Name
++            // allein ist irrefuehrend - eine lokale Spiegel-Kopie traegt per FreeCAD-Konvention
++            // denselben Namen wie ihr kanonisches Vorbild, obwohl beide in VERSCHIEDENEN
++            // Dokumenten leben (bewiesen: zwei verschiedene reale Instanzen zeigen dieselbe
++            // Template-Adresse, siehe Diskussion) - sieht aber wie "Template von sich selbst" aus.
++            // Dokumentname mit anzeigen loest die Mehrdeutigkeit auf.
++            std::string templateDocName = handle.templateObj->getDocument()
++                ? handle.templateObj->getDocument()->getName()
++                : "?";
++            // Nutzerauftrag 2026-09-27: Zeilenbruch nach "#" fuer Lesbarkeit - Dokumentname und
++            // Objektname koennen beide lang sein, in einer Zeile schwer auseinanderzuhalten.
++            text += "<TR><TD ALIGN=\"RIGHT\"><FONT POINT-SIZE=\"9\">"
++                + htmlEscape(templateDocName) + "#</FONT></TD></TR>";
++            text += "<TR><TD ALIGN=\"RIGHT\"><FONT POINT-SIZE=\"9\">"
++                + htmlEscape(handle.templateObj->getNameInDocument()) + "</FONT></TD></TR>";
++        }
 +        text += "</TABLE>>";
 +        if (isAssembly) {
 +            text += ", width=\"2.5\", height=\"1\"";
@@ -1306,7 +1428,12 @@ index 00000000000..b0edd638a2b
 +            text += "    label=\"?\";\n";
 +            return;
 +        }
-+        App::DocumentObject* solverObj = materialize(resolveForSolver(resolveObject(link)));
++        // FCPROJECT-PATCH (2026-09-26): siehe emitNodeLine() weiter oben fuer die volle
++        // Begruendung - materializeForObjectPartMap() statt materialize(resolveForSolver(...)),
++        // damit eine duplizierte/templated Unterbaugruppen-Instanz ihren eigenen, instanzeigenen
++        // Solver-Zeiger zeigt statt bei jeder Instanz denselben geteilten Vorlage-Zeiger.
++        IdentityHandle handle = resolveObject(link);
++        App::DocumentObject* solverObj = materializeForObjectPartMap(handle);
 +        text += "    label=<<TABLE BORDER=\"0\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"0\">";
 +        text += "<TR><TD ALIGN=\"LEFT\"><FONT POINT-SIZE=\"11\"><B>"
 +            + htmlEscape(link->getNameInDocument()) + "</B></FONT></TD></TR>";
@@ -1317,6 +1444,23 @@ index 00000000000..b0edd638a2b
 +            + "</FONT></TD></TR>";
 +        text += "<TR><TD ALIGN=\"LEFT\"><FONT POINT-SIZE=\"9\">Solver: "
 +            + hexPointer(solverObj) + "</FONT></TD></TR>";
++        if (!handle.duplicateInstancePath.empty() || handle.duplicateLeaf) {
++            text += "<TR><TD ALIGN=\"LEFT\"><FONT POINT-SIZE=\"9\">Template of: "
++                + hexPointer(handle.templateObj) + "</FONT></TD></TR>";
++            // Nutzerauftrag 2026-09-27: siehe emitNodeLine() fuer die volle Begruendung - Name UND
++            // Dokument zeigen, da ein Spiegel und sein Vorbild per FreeCAD-Konvention denselben
++            // Namen tragen, aber IMMER in verschiedenen Dokumenten leben (Namenseindeutigkeit gilt
++            // nur pro Dokument) - ohne Dokumentnamen sieht das faelschlich wie Selbstreferenz aus.
++            std::string templateDocName = handle.templateObj->getDocument()
++                ? handle.templateObj->getDocument()->getName()
++                : "?";
++            // Nutzerauftrag 2026-09-27: Zeilenbruch nach "#" fuer Lesbarkeit - Dokumentname und
++            // Objektname koennen beide lang sein, in einer Zeile schwer auseinanderzuhalten.
++            text += "<TR><TD ALIGN=\"RIGHT\"><FONT POINT-SIZE=\"9\">"
++                + htmlEscape(templateDocName) + "#</FONT></TD></TR>";
++            text += "<TR><TD ALIGN=\"RIGHT\"><FONT POINT-SIZE=\"9\">"
++                + htmlEscape(handle.templateObj->getNameInDocument()) + "</FONT></TD></TR>";
++        }
 +        text += "<TR><TD HEIGHT=\"2\"></TD></TR>";
 +        text += "</TABLE>>;\n";
 +    };
@@ -1618,10 +1762,10 @@ index 00000000000..b0edd638a2b
 +}  // namespace Assembly
 diff --git a/src/Mod/Assembly/App/AssemblyIdentityGraph.h b/src/Mod/Assembly/App/AssemblyIdentityGraph.h
 new file mode 100644
-index 00000000000..6a5fda7af76
+index 00000000000..92115d6fe87
 --- /dev/null
 +++ b/src/Mod/Assembly/App/AssemblyIdentityGraph.h
-@@ -0,0 +1,244 @@
+@@ -0,0 +1,267 @@
 +// SPDX-License-Identifier: LGPL-2.1-or-later
 +/****************************************************************************
 + *                                                                          *
@@ -1702,6 +1846,19 @@ index 00000000000..6a5fda7af76
 +{
 +    App::DocumentObject* templateObj = nullptr;
 +    std::vector<AssemblyLink*> duplicateInstancePath;
++
++    // Nutzerauftrag 2026-09-27 ("Parts werden genauso an den Solver weitergegeben wie
++    // Assemblies, muessen also genauso auffindbar/unterscheidbar sein"): ein dupliziertes
++    // EINFACHES Teil (App::Link, z.B. Scheibe/Schraube/Nutenstein - KEIN Assembly::AssemblyLink)
++    // kann laut findLocalGroupPath() NIE als durchquerbarer Zwischen-Container auftreten - nur
++    // AssemblyLink wird dort als Container behandelt. Ein Part-Link ist also immer nur das ENDE
++    // eines Pfads, nie eine Zwischenstation. Statt duplicateInstancePath auf App::DocumentObject*
++    // aufzuweiten (was resolve()/resolveJointRef()/refineNestedMirrorTarget() unnoetig mit
++    // anfassen wuerde, obwohl deren eigene Logik die neue Faehigkeit gar nicht braucht), ein
++    // eigenes, einfaches Feld NUR fuer diesen Blatt-Fall: gesetzt, wenn 'obj' selbst ein
++    // dupliziertes einfaches Teil ist. duplicateInstancePath und duplicateLeaf schliessen sich
++    // gegenseitig aus (siehe resolveObjectIn()).
++    App::DocumentObject* duplicateLeaf = nullptr;
 +
 +    bool operator==(const IdentityHandle& other) const;
 +    bool operator!=(const IdentityHandle& other) const
@@ -1810,6 +1967,16 @@ index 00000000000..6a5fda7af76
 +
 +    App::DocumentObject* materialize(const SolverHandle& h) const;
 +    App::DocumentObject* materialize(const UiHandle& h) const;
++
++    // FCPROJECT-PATCH (2026-09-26, Nutzerauftrag "ShowIdentityGraph: templated Instanzen zeigen
++    // richtige eigene Solve-Handles"): materialize(SolverHandle) liefert IMMER den geteilten
++    // Vorlage-Zeiger (handle.templateObj), unabhaengig von Instanz-Duplikation - fuer den echten
++    // Solver-Datensatz (Masse/Geometrie/Joint-Definitionen) korrekt, aber NICHT der Zeiger, der
++    // tatsaechlich als objectPartMap-Schluessel landet (siehe AssemblyObject.cpp,
++    // canonicalizeForMbD()). Diese Funktion war bisher eine anonyme-Namespace-Kopie dort
++    // (materializeForObjectPartMap()) - hierher verschoben, damit exportDot() dieselbe, EINE
++    // Quelle der Wahrheit nutzen kann statt den Solver-Handle naiv zu materialisieren.
++    App::DocumentObject* materializeForObjectPartMap(const IdentityHandle& handle);
 +
 +    // Jeder lokale Spiegel-Kandidat (auf JEDER Tiefe), der auf 'h' aufloest - ersetzt
 +    // collectLocalMirrorCandidates() + Brute-Force-Abgleich in syncLocalMirrorPlacement().
@@ -2290,7 +2457,7 @@ index 7ca17b4e3be..6e38571c0c2 100644
  
      return ret;
 diff --git a/src/Mod/Assembly/App/AssemblyObject.cpp b/src/Mod/Assembly/App/AssemblyObject.cpp
-index ee7aa5d3d2c..4175549c10b 100644
+index ee7aa5d3d2c..8c291dd2cad 100644
 --- a/src/Mod/Assembly/App/AssemblyObject.cpp
 +++ b/src/Mod/Assembly/App/AssemblyObject.cpp
 @@ -81,6 +81,7 @@
@@ -2311,7 +2478,7 @@ index ee7aa5d3d2c..4175549c10b 100644
          if (!joint || joint == gearJoint || !getJointActivated(joint)) {
              continue;
          }
-@@ -292,7 +294,28 @@ App::DocumentObjectExecReturn* AssemblyObject::execute()
+@@ -292,7 +294,32 @@ App::DocumentObjectExecReturn* AssemblyObject::execute()
          "User parameter:BaseApp/Preferences/Mod/Assembly"
      );
      if (hGrp->GetBool("SolveOnRecompute", true)) {
@@ -2328,7 +2495,11 @@ index ee7aa5d3d2c..4175549c10b 100644
 +        // Abschnitt "NEUER, noch offener Befund"). Betrifft NUR diesen Recompute-Pfad -
 +        // interaktives Ziehen (preDrag()/doDragStep()) ruft solve() weiterhin direkt und
 +        // unbedingt auf der gerade aktiven Instanz auf.
-+        if (isNestedUnderFlexibleParent()) {
++        // FCPROJECT-PATCH (2026-09-25, siehe setActiveEditContext()-Deklaration in
++        // AssemblyObject.h): waehrend der Nutzer GENAU DIESE Instanz aktiv bearbeitet, wird sie
++        // wie eine echte Top-Level-Instanz behandelt (eigener solve()), egal ob eine aeussere
++        // Baugruppe sie ohnehin (schlecht oder gut) mitloest.
++        if (isNestedUnderFlexibleParent() && !activeEditContext) {
 +            Base::Console().message(
 +                "Assembly: '%s' skipped its own solve() - nested under a flexible parent "
 +                "assembly, which solves it as part of its own recompute.\n",
@@ -2341,7 +2512,7 @@ index ee7aa5d3d2c..4175549c10b 100644
      }
      return ret;
  }
-@@ -310,11 +333,89 @@ void AssemblyObject::onChanged(const App::Property* prop)
+@@ -310,11 +337,89 @@ void AssemblyObject::onChanged(const App::Property* prop)
      App::Part::onChanged(prop);
  }
  
@@ -2431,7 +2602,7 @@ index ee7aa5d3d2c..4175549c10b 100644
      ensureIdentityPlacements();
  
      syncGroundedJoints();
-@@ -328,14 +429,22 @@ int AssemblyObject::solve(bool enableRedo)
+@@ -328,14 +433,22 @@ int AssemblyObject::solve(bool enableRedo)
      auto groundedObjs = fixGroundedParts();
      if (groundedObjs.empty()) {
          // If no part fixed we can't solve.
@@ -2457,7 +2628,7 @@ index ee7aa5d3d2c..4175549c10b 100644
  
      if (enableRedo) {
          savePlacementsForUndo();
-@@ -358,6 +467,35 @@ int AssemblyObject::solve(bool enableRedo)
+@@ -358,6 +471,35 @@ int AssemblyObject::solve(bool enableRedo)
          return -1;
      }
  
@@ -2493,7 +2664,7 @@ index ee7aa5d3d2c..4175549c10b 100644
      setNewPlacements();
      updateRigidPlacementCache();
  
-@@ -365,6 +503,25 @@ int AssemblyObject::solve(bool enableRedo)
+@@ -365,6 +507,25 @@ int AssemblyObject::solve(bool enableRedo)
  
      updateSolveStatus();
  
@@ -2519,7 +2690,7 @@ index ee7aa5d3d2c..4175549c10b 100644
      return 0;
  }
  
-@@ -473,11 +630,11 @@ int AssemblyObject::generateSimulation(App::DocumentObject* sim)
+@@ -473,11 +634,11 @@ int AssemblyObject::generateSimulation(App::DocumentObject* sim)
          return -6;
      }
  
@@ -2534,7 +2705,7 @@ index ee7aa5d3d2c..4175549c10b 100644
  
      create_mbdSimulationParameters(sim);
  
-@@ -522,7 +679,7 @@ int Assembly::AssemblyObject::updateForFrame(size_t index)
+@@ -522,7 +683,7 @@ int Assembly::AssemblyObject::updateForFrame(size_t index)
  
      mbdAssembly->updateForFrame(index);
      setNewPlacements();
@@ -2543,7 +2714,7 @@ index ee7aa5d3d2c..4175549c10b 100644
      redrawJointPlacements(jointDocs);
      return 0;
  }
-@@ -614,7 +771,7 @@ void AssemblyObject::prepareMbdForIslandDrag(std::vector<App::DocumentObject*> d
+@@ -614,7 +775,7 @@ void AssemblyObject::prepareMbdForIslandDrag(std::vector<App::DocumentObject*> d
          }
      }
  
@@ -2552,7 +2723,7 @@ index ee7aa5d3d2c..4175549c10b 100644
      removeUnconnectedJoints(joints, seededParts);
      if (joints.empty()) {
          objectPartMap.clear();
-@@ -668,9 +825,22 @@ void AssemblyObject::doDragStep()
+@@ -668,9 +829,22 @@ void AssemblyObject::doDragStep()
              dragMbdParts.push_back(mbdPart);
  
              Base::Placement plc = getPlacementFromProp(part, "Placement");
@@ -2578,7 +2749,7 @@ index ee7aa5d3d2c..4175549c10b 100644
              }
              Base::Vector3d pos = plc.getPosition();
              mbdPart->updateMbDFromPosition3D(
-@@ -695,7 +865,7 @@ void AssemblyObject::doDragStep()
+@@ -695,7 +869,7 @@ void AssemblyObject::doDragStep()
              setNewPlacements();
              updateRigidPlacementCache();
  
@@ -2587,7 +2758,7 @@ index ee7aa5d3d2c..4175549c10b 100644
              for (auto* joint : joints) {
                  if (joint->Visibility.getValue()) {
                      // redraw only the moving joint as its quite slow as its python code.
-@@ -831,9 +1001,9 @@ void AssemblyObject::exportAsASMT(std::string fileName)
+@@ -831,9 +1005,9 @@ void AssemblyObject::exportAsASMT(std::string fileName)
      rebuildRigidClusters();
      fixGroundedParts();
  
@@ -2599,7 +2770,7 @@ index ee7aa5d3d2c..4175549c10b 100644
  
      mbdAssembly->outputFile(fileName);
  }
-@@ -1058,8 +1228,49 @@ bool isFinitePlacement(const Base::Placement& plc)
+@@ -1058,8 +1232,49 @@ bool isFinitePlacement(const Base::Placement& plc)
  }
  }  // namespace
  
@@ -2649,7 +2820,7 @@ index ee7aa5d3d2c..4175549c10b 100644
      for (auto& pair : objectPartMap) {
          App::DocumentObject* obj = pair.first;
          std::shared_ptr<ASMTPart> mbdPart = pair.second.part;
-@@ -1079,6 +1290,23 @@ void AssemblyObject::setNewPlacements()
+@@ -1079,6 +1294,23 @@ void AssemblyObject::setNewPlacements()
          if (!pair.second.offsetPlc.isIdentity()) {
              newPlacement = newPlacement * pair.second.offsetPlc;
          }
@@ -2673,10 +2844,23 @@ index ee7aa5d3d2c..4175549c10b 100644
          if (!isFinitePlacement(newPlacement)) {
              Base::Console().warning(
                  "Assembly: solver returned a non-finite placement for '%s'; keeping its "
-@@ -1091,8 +1319,145 @@ void AssemblyObject::setNewPlacements()
+@@ -1091,9 +1323,191 @@ void AssemblyObject::setNewPlacements()
              propPlacement->setValue(newPlacement);
              obj->purgeTouched();
          }
++        else if (obj->isTouched()) {
++            // Nutzerbefund 2026-09-27 ("still touched after recompute" bei geerdeten Teilen wie
++            // Fuehrung330/331): ein geerdetes Teil AENDERT seine Placement nie (isSame() bleibt
++            // immer true), bekommt aber trotzdem gelegentlich ein gesetztes Touched-Flag - nicht
++            // von uns, sondern von FreeCADs eigener dokumentuebergreifender Link-Weiterleitung
++            // (_LinkTouched), wenn dasselbe kanonische Objekt ueber eine ANDERE Instanz (z.B. eine
++            // zweite FuerungsBaugruppe, die dieselbe Fuehrung referenziert) im selben Rekompute-
++            // Zyklus erneut beruehrt wird, NACHDEM dieser solve()-Durchlauf sein eigenes
++            // purgeTouched() schon laengst ausgefuehrt hat. Ohne diesen Zweig bleibt das Flag bis
++            // zum Ende des gesamten Dokument-Rekomputes stehen, obwohl inhaltlich alles korrekt
++            // ist - siehe Document.cpp's Warnung "still touched after recompute".
++            obj->purgeTouched();
++        }
 +
 +        // FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix,
 +        // 2026-09-03, erweitert 2026-09-04 - live durch Nutzer aufgedeckt: "Boxen nach dem
@@ -2698,8 +2882,34 @@ index ee7aa5d3d2c..4175549c10b 100644
 +        // aus - nur der FEHLENDE erste Sync-Versuch wird hier nachgeholt.
 +        syncLocalMirrorPlacement(obj, newPlacement);
 +    }
-+}
 +
++    // Nutzerbefund 2026-09-27 ("still touched after recompute" bei geerdeten Teilen wie
++    // Fuehrung330/331, live an BG22): die beiden isTouched()-Zweige oben (im Hauptzweig und in
++    // syncLocalMirrorPlacement()) faengen den haeufigsten Fall ab, aber NICHT eine
++    // Querbeeinflussung ZWISCHEN zwei verschiedenen objectPartMap-Eintraegen - z.B. wenn das
++    // Setzen der Placement fuer EIN kanonisches Teil (per FreeCADs eigener dokumentuebergreifender
++    // Link-Weiterleitung, _LinkTouched) ein BEREITS in einer FRUEHEREN Schleifen-Iteration
++    // verarbeitetes und schon gesaeubertes Teil (bzw. dessen lokalen Spiegel) im selben Dokument
++    // erneut beruehrt. Ein abschliessender, zweiter Durchlauf ueber ALLE Eintraege nach der
++    // Hauptschleife faengt genau das ab, unabhaengig von der Bearbeitungsreihenfolge.
++    IdentityGraph finalSweepGraph(this);
++    for (auto& pair : objectPartMap) {
++        App::DocumentObject* obj = pair.first;
++        if (!obj) {
++            continue;
++        }
++        if (obj->isTouched()) {
++            obj->purgeTouched();
++        }
++        IdentityHandle handle = finalSweepGraph.resolveObject(obj);
++        for (auto* mirror : finalSweepGraph.mirrorsOf(handle)) {
++            if (mirror && mirror != obj && mirror->isTouched()) {
++                mirror->purgeTouched();
++            }
++        }
+     }
+ }
+ 
 +namespace
 +{
 +// FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix, 2026-09-03):
@@ -2732,8 +2942,8 @@ index ee7aa5d3d2c..4175549c10b 100644
 +            continue;
 +        }
 +        out.push_back(obj);
-     }
- }
++    }
++}
 +}  // namespace
 +
 +// FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix, 2026-09-03,
@@ -2792,6 +3002,12 @@ index ee7aa5d3d2c..4175549c10b 100644
 +            propPlc->setValue(plc);
 +            candidate->purgeTouched();
 +        }
++        else if (candidate->isTouched()) {
++            // Nutzerbefund 2026-09-27: siehe ausfuehrliche Begruendung am analogen Zweig in
++            // setNewPlacements() - derselbe Effekt trifft hier den lokalen Spiegel (z.B. BG22s
++            // Fuehrung330/331-Link), nicht nur das kanonische Objekt selbst.
++            candidate->purgeTouched();
++        }
 +    }
 +}
 +
@@ -2816,10 +3032,11 @@ index ee7aa5d3d2c..4175549c10b 100644
 +    }
 +    return false;
 +}
- 
++
  void AssemblyObject::redrawJointPlacements(std::vector<App::DocumentObject*> joints)
  {
-@@ -1166,9 +1531,10 @@ App::DocumentObject* AssemblyObject::getJointOfPartConnectingToGround(
+     // Notify the joint objects that the transform of the coin object changed.
+@@ -1166,9 +1580,10 @@ App::DocumentObject* AssemblyObject::getJointOfPartConnectingToGround(
          return nullptr;
      }
  
@@ -2832,7 +3049,7 @@ index ee7aa5d3d2c..4175549c10b 100644
          if (!joint) {
              continue;
          }
-@@ -1177,17 +1543,21 @@ App::DocumentObject* AssemblyObject::getJointOfPartConnectingToGround(
+@@ -1177,17 +1592,21 @@ App::DocumentObject* AssemblyObject::getJointOfPartConnectingToGround(
              continue;
          }
  
@@ -2858,7 +3075,7 @@ index ee7aa5d3d2c..4175549c10b 100644
              name = "Reference2";
              return joint;
          }
-@@ -1204,8 +1574,13 @@ App::DocumentObject* AssemblyObject::getJointOfPartForUngroundedDrag(
+@@ -1204,8 +1623,13 @@ App::DocumentObject* AssemblyObject::getJointOfPartForUngroundedDrag(
          return nullptr;
      }
  
@@ -2874,7 +3091,7 @@ index ee7aa5d3d2c..4175549c10b 100644
          if (!joint || !isJointTypeConnecting(joint)) {
              continue;
          }
-@@ -1275,15 +1650,43 @@ ViewGroup* AssemblyObject::getExplodedViewGroup() const
+@@ -1275,15 +1699,43 @@ ViewGroup* AssemblyObject::getExplodedViewGroup() const
      return nullptr;
  }
  
@@ -2920,7 +3137,7 @@ index ee7aa5d3d2c..4175549c10b 100644
      Base::PyGILStateLocker lock;
      for (auto joint : jointGroup->getObjects()) {
          if (!joint) {
-@@ -1291,16 +1694,58 @@ std::vector<App::DocumentObject*> AssemblyObject::getJoints(bool delBadJoints, b
+@@ -1291,16 +1743,58 @@ std::vector<App::DocumentObject*> AssemblyObject::getJoints(bool delBadJoints, b
          }
  
          auto* prop = dynamic_cast<App::PropertyBool*>(joint->getPropertyByName("Suppressed"));
@@ -2979,7 +3196,7 @@ index ee7aa5d3d2c..4175549c10b 100644
              if (delBadJoints) {
                  getDocument()->removeObject(joint->getNameInDocument());
              }
-@@ -1310,16 +1755,71 @@ std::vector<App::DocumentObject*> AssemblyObject::getJoints(bool delBadJoints, b
+@@ -1310,16 +1804,71 @@ std::vector<App::DocumentObject*> AssemblyObject::getJoints(bool delBadJoints, b
          auto proxy = dynamic_cast<App::PropertyPythonObject*>(joint->getPropertyByName("Proxy"));
          if (proxy) {
              if (proxy->getValue().hasAttr("setJointConnectors")) {
@@ -3055,7 +3272,7 @@ index ee7aa5d3d2c..4175549c10b 100644
          }
      }
  
-@@ -1419,7 +1919,7 @@ std::vector<App::DocumentObject*> AssemblyObject::getJointsOfObj(App::DocumentOb
+@@ -1419,7 +1968,7 @@ std::vector<App::DocumentObject*> AssemblyObject::getJointsOfObj(App::DocumentOb
          return {};
      }
  
@@ -3064,7 +3281,7 @@ index ee7aa5d3d2c..4175549c10b 100644
      std::vector<App::DocumentObject*> jointsOf;
  
      for (auto joint : joints) {
-@@ -1433,20 +1933,33 @@ std::vector<App::DocumentObject*> AssemblyObject::getJointsOfObj(App::DocumentOb
+@@ -1433,20 +1982,33 @@ std::vector<App::DocumentObject*> AssemblyObject::getJointsOfObj(App::DocumentOb
      return jointsOf;
  }
  
@@ -3106,7 +3323,7 @@ index ee7aa5d3d2c..4175549c10b 100644
          }
      }
      return jointsOf;
-@@ -1482,8 +1995,76 @@ std::unordered_set<App::DocumentObject*> AssemblyObject::getGroundedParts()
+@@ -1482,8 +2044,76 @@ std::unordered_set<App::DocumentObject*> AssemblyObject::getGroundedParts()
          }
      }
  
@@ -3185,7 +3402,7 @@ index ee7aa5d3d2c..4175549c10b 100644
  
      // Propagate grounding through active rigid clusters.
      std::vector<App::DocumentObject*> groundedSnapshot(groundedSet.begin(), groundedSet.end());
-@@ -1508,12 +2089,42 @@ std::unordered_set<App::DocumentObject*> AssemblyObject::fixGroundedParts()
+@@ -1508,12 +2138,42 @@ std::unordered_set<App::DocumentObject*> AssemblyObject::fixGroundedParts()
  {
      auto groundedParts = getGroundedParts();
  
@@ -3228,7 +3445,7 @@ index ee7aa5d3d2c..4175549c10b 100644
          std::string str = obj->getFullName();
          fixGroundedPart(obj, plc, str);
      }
-@@ -1548,13 +2159,23 @@ void AssemblyObject::fixGroundedPart(App::DocumentObject* obj, Base::Placement&
+@@ -1548,13 +2208,23 @@ void AssemblyObject::fixGroundedPart(App::DocumentObject* obj, Base::Placement&
      mbdAssembly->addJoint(mbdJoint);
  }
  
@@ -3254,7 +3471,7 @@ index ee7aa5d3d2c..4175549c10b 100644
      if (!part) {
          return false;
      }
-@@ -1572,10 +2193,11 @@ bool AssemblyObject::isJointConnectingPartToGround(App::DocumentObject* joint, c
+@@ -1572,10 +2242,11 @@ bool AssemblyObject::isJointConnectingPartToGround(App::DocumentObject* joint, c
      }
  
      // to know if a joint is connecting to ground we disable all the other joints
@@ -3268,7 +3485,7 @@ index ee7aa5d3d2c..4175549c10b 100644
          if (jointi->getFullName() == joint->getFullName()) {
              continue;
          }
-@@ -1587,7 +2209,8 @@ bool AssemblyObject::isJointConnectingPartToGround(App::DocumentObject* joint, c
+@@ -1587,7 +2258,8 @@ bool AssemblyObject::isJointConnectingPartToGround(App::DocumentObject* joint, c
      isConnected = isPartConnected(part);
  
      // restore activation states
@@ -3278,7 +3495,7 @@ index ee7aa5d3d2c..4175549c10b 100644
          if (jointi->getFullName() == joint->getFullName() || activatedStates.empty()) {
              continue;
          }
-@@ -1626,34 +2249,87 @@ bool AssemblyObject::isObjInSetOfObjRefs(App::DocumentObject* obj, const std::ve
+@@ -1626,34 +2298,87 @@ bool AssemblyObject::isObjInSetOfObjRefs(App::DocumentObject* obj, const std::ve
  }
  
  void AssemblyObject::removeUnconnectedJoints(
@@ -3376,7 +3593,7 @@ index ee7aa5d3d2c..4175549c10b 100644
              }
          ),
          joints.end()
-@@ -1663,7 +2339,7 @@ void AssemblyObject::removeUnconnectedJoints(
+@@ -1663,7 +2388,7 @@ void AssemblyObject::removeUnconnectedJoints(
  void AssemblyObject::traverseAndMarkConnectedParts(
      App::DocumentObject* currentObj,
      std::vector<ObjRef>& connectedParts,
@@ -3385,7 +3602,7 @@ index ee7aa5d3d2c..4175549c10b 100644
  )
  {
      // getConnectedParts returns the objs connected to the currentObj by any joint
-@@ -1679,7 +2355,7 @@ void AssemblyObject::traverseAndMarkConnectedParts(
+@@ -1679,7 +2404,7 @@ void AssemblyObject::traverseAndMarkConnectedParts(
  
  std::vector<ObjRef> AssemblyObject::getConnectedParts(
      App::DocumentObject* part,
@@ -3394,7 +3611,7 @@ index ee7aa5d3d2c..4175549c10b 100644
  )
  {
      if (!part) {
-@@ -1688,13 +2364,21 @@ std::vector<ObjRef> AssemblyObject::getConnectedParts(
+@@ -1688,13 +2413,21 @@ std::vector<ObjRef> AssemblyObject::getConnectedParts(
  
      std::vector<ObjRef> connectedParts;
  
@@ -3419,7 +3636,7 @@ index ee7aa5d3d2c..4175549c10b 100644
  
          if (!obj1 || !obj2) {
              continue;
-@@ -1746,44 +2430,149 @@ bool AssemblyObject::isPartGrounded(App::DocumentObject* obj)
+@@ -1746,44 +2479,149 @@ bool AssemblyObject::isPartGrounded(App::DocumentObject* obj)
      return false;
  }
  
@@ -3578,7 +3795,7 @@ index ee7aa5d3d2c..4175549c10b 100644
          for (auto& mbdJoint : mbdJoints) {
              mbdAssembly->addJoint(mbdJoint);
          }
-@@ -2050,7 +2839,10 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointDistance(App::DocumentObj
+@@ -2050,7 +2888,10 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointDistance(App::DocumentObj
      }
  }
  
@@ -3590,7 +3807,7 @@ index ee7aa5d3d2c..4175549c10b 100644
  {
      if (!joint) {
          return {};
-@@ -2059,7 +2851,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2059,7 +2900,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
      JointType jointType = getJointType(joint);
  
      std::shared_ptr<ASMTJoint> mbdJoint = makeMbdJointOfType(joint, jointType);
@@ -3599,7 +3816,7 @@ index ee7aa5d3d2c..4175549c10b 100644
          return {};
      }
      if ((jointType == JointType::Gears || jointType == JointType::Belt)
-@@ -2069,17 +2861,20 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2069,17 +2910,20 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
  
      std::string fullMarkerNameI, fullMarkerNameJ;
      if (jointType == JointType::RackPinion) {
@@ -3624,7 +3841,7 @@ index ee7aa5d3d2c..4175549c10b 100644
      mbdJoint->setMarkerI(fullMarkerNameI);
      mbdJoint->setMarkerJ(fullMarkerNameJ);
  
-@@ -2116,7 +2911,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2116,7 +2960,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
  
                  if (minEnabled) {
                      auto limit = ASMTTranslationLimit::With();
@@ -3633,7 +3850,7 @@ index ee7aa5d3d2c..4175549c10b 100644
                      limit->setMarkerI(fullMarkerNameI);
                      limit->setMarkerJ(fullMarkerNameJ);
                      limit->settype("=>");
-@@ -2127,7 +2922,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2127,7 +2971,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
  
                  if (maxEnabled) {
                      auto limit2 = ASMTTranslationLimit::With();
@@ -3642,7 +3859,7 @@ index ee7aa5d3d2c..4175549c10b 100644
                      limit2->setMarkerI(fullMarkerNameI);
                      limit2->setMarkerJ(fullMarkerNameJ);
                      limit2->settype("=<");
-@@ -2167,7 +2962,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2167,7 +3011,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
  
                  if (minEnabled) {
                      auto limit = ASMTRotationLimit::With();
@@ -3651,7 +3868,7 @@ index ee7aa5d3d2c..4175549c10b 100644
                      limit->setMarkerI(fullMarkerNameI);
                      limit->setMarkerJ(fullMarkerNameJ);
                      limit->settype("=>");
-@@ -2178,7 +2973,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2178,7 +3022,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
  
                  if (maxEnabled) {
                      auto limit2 = ASMTRotationLimit::With();
@@ -3660,7 +3877,7 @@ index ee7aa5d3d2c..4175549c10b 100644
                      limit2->setMarkerI(fullMarkerNameI);
                      limit2->setMarkerJ(fullMarkerNameJ);
                      limit2->settype("=<");
-@@ -2267,7 +3062,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2267,7 +3111,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
              replaceInitialValue(formula2, joint, motionType2);
  
              auto ASMTmotion = CREATE<ASMTGeneralMotion>::With();
@@ -3669,7 +3886,7 @@ index ee7aa5d3d2c..4175549c10b 100644
              ASMTmotion->setMarkerI(fullMarkerNameI);
              ASMTmotion->setMarkerJ(fullMarkerNameJ);
              ASMTmotion->rIJI->atiput(2, motionType == "Angular" ? formula2 : formula);
-@@ -2279,7 +3074,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2279,7 +3123,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
  
          if (motionType == "Angular") {
              auto ASMTmotion = CREATE<ASMTRotationalMotion>::With();
@@ -3678,7 +3895,7 @@ index ee7aa5d3d2c..4175549c10b 100644
              ASMTmotion->setMarkerI(fullMarkerNameI);
              ASMTmotion->setMarkerJ(fullMarkerNameJ);
              ASMTmotion->setRotationZ(formula);
-@@ -2287,7 +3082,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2287,7 +3131,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
          }
          else if (motionType == "Linear") {
              auto ASMTmotion = CREATE<ASMTTranslationalMotion>::With();
@@ -3687,7 +3904,7 @@ index ee7aa5d3d2c..4175549c10b 100644
              ASMTmotion->setMarkerI(fullMarkerNameI);
              ASMTmotion->setMarkerJ(fullMarkerNameJ);
              ASMTmotion->setTranslationZ(formula);
-@@ -2302,10 +3097,18 @@ std::string AssemblyObject::handleOneSideOfJoint(
+@@ -2302,10 +3146,18 @@ std::string AssemblyObject::handleOneSideOfJoint(
      App::DocumentObject* joint,
      const char* propRefName,
      const char* propPlcName,
@@ -3708,7 +3925,7 @@ index ee7aa5d3d2c..4175549c10b 100644
      App::DocumentObject* obj = getObjFromJointRef(joint, propRefName);
  
      if (!part || !obj) {
-@@ -2314,7 +3117,9 @@ std::string AssemblyObject::handleOneSideOfJoint(
+@@ -2314,7 +3166,9 @@ std::string AssemblyObject::handleOneSideOfJoint(
          return "";
      }
  
@@ -3719,7 +3936,7 @@ index ee7aa5d3d2c..4175549c10b 100644
      std::shared_ptr<ASMTPart> mbdPart = data.part;
      Base::Placement plc = getPlacementFromProp(joint, propPlcName);
      // Now we have plc which is the JCS placement, but its relative to the Object, not to the
-@@ -2338,7 +3143,7 @@ std::string AssemblyObject::handleOneSideOfJoint(
+@@ -2338,7 +3192,7 @@ std::string AssemblyObject::handleOneSideOfJoint(
          plc = data.offsetPlc * plc;
      }
  
@@ -3728,7 +3945,7 @@ index ee7aa5d3d2c..4175549c10b 100644
      auto mbdMarker = makeMbdMarker(markerNameCopy, plc);
      mbdPart->addMarker(mbdMarker);
  
-@@ -2348,7 +3153,8 @@ std::string AssemblyObject::handleOneSideOfJoint(
+@@ -2348,7 +3202,8 @@ std::string AssemblyObject::handleOneSideOfJoint(
  void AssemblyObject::getRackPinionMarkers(
      App::DocumentObject* joint,
      std::string& markerNameI,
@@ -3738,7 +3955,7 @@ index ee7aa5d3d2c..4175549c10b 100644
  )
  {
      // ASMT rack pinion joint must get the rack as I and pinion as J.
-@@ -2366,7 +3172,12 @@ void AssemblyObject::getRackPinionMarkers(
+@@ -2366,7 +3221,12 @@ void AssemblyObject::getRackPinionMarkers(
          swapJCS(joint);  // make sure that rack is first.
      }
  
@@ -3752,7 +3969,7 @@ index ee7aa5d3d2c..4175549c10b 100644
      App::DocumentObject* obj1 = getObjFromJointRef(joint, "Reference1");
      Base::Placement plc1 = getPlacementFromProp(joint, "Placement1");
  
-@@ -2379,7 +3190,7 @@ void AssemblyObject::getRackPinionMarkers(
+@@ -2379,7 +3239,7 @@ void AssemblyObject::getRackPinionMarkers(
      }
  
      // For the pinion nothing special needed :
@@ -3761,7 +3978,7 @@ index ee7aa5d3d2c..4175549c10b 100644
  
      // For the rack we need to change the placement :
      // make the pinion plc relative to the rack placement.
-@@ -2418,7 +3229,9 @@ void AssemblyObject::getRackPinionMarkers(
+@@ -2418,7 +3278,9 @@ void AssemblyObject::getRackPinionMarkers(
      plc1.setRotation(adjustedRotation);
  
      // Then end of processing similar to handleOneSideOfJoint :
@@ -3772,7 +3989,7 @@ index ee7aa5d3d2c..4175549c10b 100644
      std::shared_ptr<ASMTPart> mbdPart = data1.part;
      if (obj1->getNameInDocument() != part1->getNameInDocument()) {
          plc1 = rack_global_plc * plc1;
-@@ -2431,7 +3244,7 @@ void AssemblyObject::getRackPinionMarkers(
+@@ -2431,7 +3293,7 @@ void AssemblyObject::getRackPinionMarkers(
          plc1 = data1.offsetPlc * plc1;
      }
  
@@ -3781,7 +3998,7 @@ index ee7aa5d3d2c..4175549c10b 100644
      auto mbdMarker = makeMbdMarker(markerName, plc1);
      mbdPart->addMarker(mbdMarker);
  
-@@ -2451,7 +3264,8 @@ int AssemblyObject::slidingPartIndex(App::DocumentObject* joint)
+@@ -2451,7 +3313,8 @@ int AssemblyObject::slidingPartIndex(App::DocumentObject* joint)
      Base::Placement plc2 = getPlacementFromProp(joint, "Placement2");
  
      int slidingFound = 0;
@@ -3791,7 +4008,7 @@ index ee7aa5d3d2c..4175549c10b 100644
          if (getJointType(jt) == JointType::Slider) {
              App::DocumentObject* jpart1 = getMovingPartFromRef(jt, "Reference1");
              App::DocumentObject* jpart2 = getMovingPartFromRef(jt, "Reference2");
-@@ -2483,31 +3297,378 @@ int AssemblyObject::slidingPartIndex(App::DocumentObject* joint)
+@@ -2483,31 +3346,373 @@ int AssemblyObject::slidingPartIndex(App::DocumentObject* joint)
      return slidingFound;
  }
  
@@ -4017,18 +4234,13 @@ index ee7aa5d3d2c..4175549c10b 100644
 +// resolvePartForMbD() gemeinsam genutzt.
 +namespace
 +{
++// FCPROJECT-PATCH (2026-09-26): eigentliche Logik nach IdentityGraph::materializeForObjectPartMap()
++// verschoben (siehe dortiger Kommentar) - EINE gemeinsame Quelle der Wahrheit fuer diese Datei UND
++// exportDot(). Duennes Wrapper hier belassen, um alle bestehenden Aufrufstellen unveraendert zu
++// lassen.
 +App::DocumentObject* materializeForObjectPartMap(IdentityGraph& graph, const IdentityHandle& handle)
 +{
-+    if (!handle.templateObj) {
-+        return nullptr;
-+    }
-+    if (handle.duplicateInstancePath.empty()) {
-+        return handle.templateObj;
-+    }
-+    auto mirrors = graph.mirrorsOf(handle);
-+    // Defensiver Ruecksfall (mirrors.empty()) sollte praktisch nie eintreten - jede tatsaechlich
-+    // dupliziert erkannte Ebene hat per Konstruktion einen lokalen Spiegel.
-+    return mirrors.empty() ? handle.templateObj : mirrors.front();
++    return graph.materializeForObjectPartMap(handle);
 +}
 +}  // namespace
 +
@@ -4177,7 +4389,7 @@ index ee7aa5d3d2c..4175549c10b 100644
      auto it = objectPartMap.find(part);
      if (it != objectPartMap.end()) {
          // part has been associated with an ASMTPart before
-@@ -2549,21 +3710,76 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
+@@ -2549,21 +3754,76 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
  
      // part has not been associated with an ASMTPart before
      std::string str = part->getFullName();
@@ -4260,7 +4472,7 @@ index ee7aa5d3d2c..4175549c10b 100644
                      App::DocumentObject* partToAdd = currentPart == part1 ? part2 : part1;
  
                      if (objectPartMap.find(partToAdd) != objectPartMap.end()) {
-@@ -2571,9 +3787,83 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
+@@ -2571,9 +3831,83 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
                          continue;
                      }
  
@@ -4346,7 +4558,7 @@ index ee7aa5d3d2c..4175549c10b 100644
  
                      // Recursively call for partToAdd
                      self(partToAdd, self);
-@@ -2586,12 +3876,12 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
+@@ -2586,12 +3920,12 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
      return data;
  }
  
@@ -4361,7 +4573,7 @@ index ee7aa5d3d2c..4175549c10b 100644
  }
  
  std::shared_ptr<ASMTPart> AssemblyObject::makeMbdPart(std::string& name, Base::Placement plc, double mass)
-@@ -2656,7 +3946,9 @@ std::vector<ObjRef> AssemblyObject::getDownstreamParts(
+@@ -2656,7 +3990,9 @@ std::vector<ObjRef> AssemblyObject::getDownstreamParts(
          setJointActivated(joint, false);
      }
  
@@ -4372,7 +4584,7 @@ index ee7aa5d3d2c..4175549c10b 100644
  
      std::vector<ObjRef> connectedParts = {{part, nullptr}};
      traverseAndMarkConnectedParts(part, connectedParts, joints);
-@@ -2675,6 +3967,23 @@ std::vector<ObjRef> AssemblyObject::getDownstreamParts(
+@@ -2675,6 +4011,23 @@ std::vector<ObjRef> AssemblyObject::getDownstreamParts(
      return downstreamParts;
  }
  
@@ -4396,7 +4608,7 @@ index ee7aa5d3d2c..4175549c10b 100644
  App::DocumentObject* AssemblyObject::getUpstreamMovingPart(
      App::DocumentObject* part,
      App::DocumentObject*& joint,
-@@ -2694,7 +4003,11 @@ App::DocumentObject* AssemblyObject::getUpstreamMovingPart(
+@@ -2694,7 +4047,11 @@ App::DocumentObject* AssemblyObject::getUpstreamMovingPart(
          return part;
      }
  
@@ -4409,7 +4621,7 @@ index ee7aa5d3d2c..4175549c10b 100644
  
      return getUpstreamMovingPart(part, joint, name);
  }
-@@ -2718,7 +4031,7 @@ void AssemblyObject::setObjMasses(std::vector<std::pair<App::DocumentObject*, do
+@@ -2718,7 +4075,7 @@ void AssemblyObject::setObjMasses(std::vector<std::pair<App::DocumentObject*, do
      objMasses = objectMasses;
  }
  
@@ -4418,7 +4630,7 @@ index ee7aa5d3d2c..4175549c10b 100644
  {
      std::vector<AssemblyLink*> subAssemblies = {};
  
-@@ -2736,6 +4049,112 @@ std::vector<AssemblyLink*> AssemblyObject::getSubAssemblies()
+@@ -2736,6 +4093,112 @@ std::vector<AssemblyLink*> AssemblyObject::getSubAssemblies()
      return subAssemblies;
  }
  
@@ -4531,7 +4743,7 @@ index ee7aa5d3d2c..4175549c10b 100644
  void AssemblyObject::ensureIdentityPlacements()
  {
      std::vector<App::DocumentObject*> group = Group.getValues();
-@@ -2799,9 +4218,40 @@ void AssemblyObject::syncGroundedJoints()
+@@ -2799,9 +4262,40 @@ void AssemblyObject::syncGroundedJoints()
  
          // Create grounding joint if placement is locked but no joint exists
          if (isReadOnly && !hasJoint) {
@@ -4572,7 +4784,7 @@ index ee7aa5d3d2c..4175549c10b 100644
                  std::string asmName = getNameInDocument();
                  std::string partName = part->getNameInDocument();
                  std::string code = "import FreeCAD\n"
-@@ -2810,11 +4260,14 @@ void AssemblyObject::syncGroundedJoints()
+@@ -2810,11 +4304,14 @@ void AssemblyObject::syncGroundedJoints()
                                     "    import UtilsAssembly\n"
                                     "    doc = FreeCAD.getDocument('"
                      + docName
@@ -4588,7 +4800,7 @@ index ee7aa5d3d2c..4175549c10b 100644
                      + partName
                      + "')\n"
                        "    jg = UtilsAssembly.getJointGroup(asm)\n"
-@@ -2832,9 +4285,35 @@ void AssemblyObject::syncGroundedJoints()
+@@ -2832,9 +4329,35 @@ void AssemblyObject::syncGroundedJoints()
              catch (...) {
              }
          }
@@ -4627,7 +4839,7 @@ index ee7aa5d3d2c..4175549c10b 100644
      }
  }
 diff --git a/src/Mod/Assembly/App/AssemblyObject.h b/src/Mod/Assembly/App/AssemblyObject.h
-index 63bb7168d88..55722790866 100644
+index 63bb7168d88..6d8932b2f6e 100644
 --- a/src/Mod/Assembly/App/AssemblyObject.h
 +++ b/src/Mod/Assembly/App/AssemblyObject.h
 @@ -26,6 +26,7 @@
@@ -4900,7 +5112,7 @@ index 63bb7168d88..55722790866 100644
  
      std::vector<ObjRef> getDownstreamParts(
          App::DocumentObject* part,
-@@ -209,11 +374,65 @@ public:
+@@ -209,11 +374,83 @@ public:
      double getObjMass(App::DocumentObject* obj);
      void setObjMasses(std::vector<std::pair<App::DocumentObject*, double>> objectMasses);
  
@@ -4941,6 +5153,24 @@ index 63bb7168d88..55722790866 100644
 +    // im Bearbeiten-Modus aktiven Instanz auf, unveraendert.
 +    bool isNestedUnderFlexibleParent() const;
 +
++    // FCPROJECT-PATCH (2026-09-25, "ich kann nicht aktive Gruppe bearbeiten" - Nutzeranforderung):
++    // isNestedUnderFlexibleParent() (s.o.) laesst execute() JEDE nested Instanz uebersprungen, ganz
++    // gleich ob der Nutzer sie gerade aktiv im Bearbeiten-Modus hat oder nicht - dadurch blockiert
++    // ein singulaeres/scheiterndes Solve der AEUSSEREN Baugruppe (z.B. CNC3018_037_A_TraegerBau-
++    // gruppe_Z's 8-Joint-Doppelschienen-Singularitaet) auch das Bearbeiten einer inneren, fuer
++    // sich genommen voellig unproblematischen Unterbaugruppe (empirisch bestaetigt: deren eigener
++    // solve() gibt isoliert 0/Erfolg zurueck). ViewProviderAssembly::setEdit()/unsetEdit() setzen
++    // dieses Flag, solange der Nutzer GENAU DIESE Instanz aktiv bearbeitet - execute() behandelt
++    // sie dann wie eine echte Top-Level-Instanz (eigener solve()-Aufruf statt Ueberspringen),
++    // unabhaengig vom Zustand einer aeusseren Baugruppe. Betrifft nur den Anzeige-/Bearbeiten-Kom-
++    // fort waehrend der aktiven Bearbeitung dieser einen Instanz - die WELT-Position (deren
++    // Placement relativ zu allem ausserhalb) haengt weiterhin von der aeusseren Baugruppe ab und
++    // wird durch dieses Flag nicht veraendert.
++    void setActiveEditContext(bool active)
++    {
++        activeEditContext = active;
++    }
++
 +    // FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix, 2026-09-03,
 +    // live durch Nutzer-Maus-Drag aufgedeckt - dritte Baustelle nach getMovingPartFromSel()/
 +    // isPartConnected()): App::Part::hasObject() (GroupExtension::hasObject()) vergleicht nur
@@ -4968,7 +5198,7 @@ index 63bb7168d88..55722790866 100644
  
      bool isEmpty() const;
      int numberOfComponents() const;
-@@ -269,9 +488,99 @@ private:
+@@ -269,9 +506,99 @@ private:
      void updateRigidPlacementCache();
      void prepareMbdForIslandDrag(std::vector<App::DocumentObject*> dragParts);
  
@@ -5068,7 +5298,7 @@ index 63bb7168d88..55722790866 100644
      std::unordered_map<App::DocumentObject*, App::DocumentObject*> rigidRepByPart;
      std::unordered_map<App::DocumentObject*, std::vector<App::DocumentObject*>> rigidMembersByRep;
      std::unordered_map<App::DocumentObject*, Base::Placement> rigidPlacementCache;
-@@ -281,6 +590,19 @@ private:
+@@ -281,8 +608,24 @@ private:
  
      std::vector<std::pair<App::DocumentObject*, Base::Placement>> previousPositions;
  
@@ -5087,9 +5317,14 @@ index 63bb7168d88..55722790866 100644
 +
      bool bundleFixed;
  
++    // Siehe setActiveEditContext()-Deklaration weiter oben.
++    bool activeEditContext {false};
++
      // True while solve() is running; breaks the solve()/updateSolveStatus() cycle.
+     bool solveInProgress {false};
+ 
 diff --git a/src/Mod/Assembly/App/AssemblyObject.pyi b/src/Mod/Assembly/App/AssemblyObject.pyi
-index 95db04dc83b..ac9ab65019f 100644
+index 95db04dc83b..3b9054e595b 100644
 --- a/src/Mod/Assembly/App/AssemblyObject.pyi
 +++ b/src/Mod/Assembly/App/AssemblyObject.pyi
 @@ -118,6 +118,30 @@ class AssemblyObject(Part):
@@ -5144,8 +5379,67 @@ index 95db04dc83b..ac9ab65019f 100644
      @constmethod
      def exportAsASMT(self, file_name: str, /) -> None:
          """
+@@ -173,5 +211,58 @@ class AssemblyObject(Part):
+             A list of App.DocumentObject instances representing the downstream parts.
+         """
+         ...
++
++    @constmethod
++    def preDrag(self, drag_parts: list[DocumentObject], /) -> None:
++        """
++        Prepare the assembly for an interactive drag, headless/scriptable equivalent of what
++        ViewProviderAssembly::tryInitMove() triggers for a real mouse-down (see
++        docs/ARCHITECTURE.md #2.2).
++
++        Runs one full solve() (with fixed-joint bundling enabled) to (re)build the MbD model,
++        then determines which of drag_parts will actually be driven independently in MbD during
++        the following doDragStep() calls (see AssemblyObject.h's dragRigidLeader/
++        dragRigidFollowerCache/draggedParts members for the current, evolving rules).
++
++        Args:
++            drag_parts: the App.DocumentObject instances to drag - pass the SAME list
++                        ViewProviderAssembly::findDragMode() would compute (typically the moving
++                        joint's part plus everything getDownstreamParts() returns for it), in
++                        the SAME order (the first entry is treated as the leading/grounding-
++                        connected body).
++
++        For a scripted drag test: call this once, then repeatedly set the Placement property of
++        each drag_parts entry by the SAME per-frame delta (mirroring what
++        ViewProviderAssembly::tryMouseMove() does for a real mouse move) and call doDragStep()
++        after each change; call postDrag() once at the end (mouse-up equivalent).
++        """
++        ...
++
++    @constmethod
++    def doDragStep(self) -> None:
++        """
++        Run one interactive-drag solve step (headless/scriptable equivalent of what a single
++        mouseMove() event triggers via ViewProviderAssembly::tryMouseMove(), see
++        docs/ARCHITECTURE.md #2.2).
++
++        Reads the CURRENT Placement of whichever parts preDrag() decided to drive independently,
++        feeds them into the MbD solver as high-weight targets (see
++        PosICDragNewtonRaphson::initializeGlobally()), runs one drag solve, and - if the result
++        validates - applies it to the document (including the rigid-transport/pin corrections
++        for the parts preDrag() did NOT drive independently).
++
++        Must be called after preDrag(); has no effect (raises no error but does nothing useful)
++        if preDrag() was never called or postDrag() already ended the drag.
++        """
++        ...
++
++    @constmethod
++    def postDrag(self) -> None:
++        """
++        End an interactive drag (headless/scriptable equivalent of a mouse-up after
++        preDrag()/doDragStep(), see docs/ARCHITECTURE.md #2.2). Lets the MbD solver do its own
++        post-drag bookkeeping and marks the object as touched.
++        """
++        ...
+     Joints: Final[list]
+     """A list of all joints this assembly has."""
 diff --git a/src/Mod/Assembly/App/AssemblyObjectPyImp.cpp b/src/Mod/Assembly/App/AssemblyObjectPyImp.cpp
-index ddd002de8af..2064200ef8e 100644
+index ddd002de8af..5f177e6c52a 100644
 --- a/src/Mod/Assembly/App/AssemblyObjectPyImp.cpp
 +++ b/src/Mod/Assembly/App/AssemblyObjectPyImp.cpp
 @@ -152,6 +152,24 @@ PyObject* AssemblyObjectPy::isPartConnected(PyObject* args) const
@@ -5205,11 +5499,62 @@ index ddd002de8af..2064200ef8e 100644
  
      for (auto It : list) {
          ret.append(Py::Object(It->getPyObject(), true));
+@@ -243,3 +281,50 @@ PyObject* AssemblyObjectPy::getDownstreamParts(PyObject* args) const
+ 
+     return Py::new_reference_to(ret);
+ }
++
++// FCPROJECT-PATCH (2026-09-23, siehe feedback-drag-test-strategy-needed.md): preDrag()/
++// doDragStep()/postDrag() nach Python exportiert, damit sich ein interaktiver Zug headless
++// nachstellen laesst (Placement der dragParts-Objekte manuell um ein festes Delta verschieben,
++// dann doDragStep() aufrufen - genau das, was tryMouseMove()/ViewProviderAssembly.cpp sonst pro
++// Mausereignis tut), statt jedes Mal einen Live-Test mit echter Maus in der GUI zu brauchen.
++PyObject* AssemblyObjectPy::preDrag(PyObject* args) const
++{
++    PyObject* pyList;
++    if (!PyArg_ParseTuple(args, "O!", &PyList_Type, &pyList)) {
++        return nullptr;
++    }
++
++    std::vector<App::DocumentObject*> dragParts;
++    Py_ssize_t size = PyList_Size(pyList);
++    for (Py_ssize_t i = 0; i < size; i++) {
++        PyObject* item = PyList_GetItem(pyList, i);
++        if (!PyObject_TypeCheck(item, &(App::DocumentObjectPy::Type))) {
++            PyErr_SetString(PyExc_TypeError, "Expected a list of App.DocumentObject");
++            return nullptr;
++        }
++        dragParts.push_back(static_cast<App::DocumentObjectPy*>(item)->getDocumentObjectPtr());
++    }
++
++    this->getAssemblyObjectPtr()->preDrag(dragParts);
++    Py_Return;
++}
++
++PyObject* AssemblyObjectPy::doDragStep(PyObject* args) const
++{
++    if (!PyArg_ParseTuple(args, "")) {
++        return nullptr;
++    }
++
++    this->getAssemblyObjectPtr()->doDragStep();
++    Py_Return;
++}
++
++PyObject* AssemblyObjectPy::postDrag(PyObject* args) const
++{
++    if (!PyArg_ParseTuple(args, "")) {
++        return nullptr;
++    }
++
++    this->getAssemblyObjectPtr()->postDrag();
++    Py_Return;
++}
 diff --git a/src/Mod/Assembly/App/AssemblyUtils.cpp b/src/Mod/Assembly/App/AssemblyUtils.cpp
-index 3e0b804b8f6..42afe0dc55a 100644
+index 3e0b804b8f6..e2a3166c5b6 100644
 --- a/src/Mod/Assembly/App/AssemblyUtils.cpp
 +++ b/src/Mod/Assembly/App/AssemblyUtils.cpp
-@@ -670,10 +670,50 @@ App::DocumentObject* getLinkedObjFromRef(const App::DocumentObject* joint, const
+@@ -670,10 +670,98 @@ App::DocumentObject* getLinkedObjFromRef(const App::DocumentObject* joint, const
      return nullptr;
  }
  
@@ -5218,21 +5563,69 @@ index 3e0b804b8f6..42afe0dc55a 100644
 +// Begruendung. Generische Fassung - dies ist seit 2026-09-17 die einzige Implementierung, die
 +// AssemblyObject-Fassung darunter ist nur noch ein duenner Wrapper (candidates =
 +// solvingAssembly->getSubAssemblies() als oberste Ebene).
-+bool hasSiblingInstances(const std::vector<App::DocumentObject*>& candidates, AssemblyLink* asmLink)
++bool hasSiblingInstances(const std::vector<App::DocumentObject*>& candidates, App::DocumentObject* obj)
 +{
-+    if (!asmLink) {
++    if (!obj) {
 +        return false;
 +    }
 +
-+    auto* linkedAssembly = asmLink->getLinkedAssembly();
-+    if (!linkedAssembly) {
++    if (auto* asmLink = freecad_cast<AssemblyLink*>(obj)) {
++        if (auto* linkedAssembly = asmLink->getLinkedAssembly()) {
++            int matches = 0;
++            for (auto* candidate : candidates) {
++                auto* sibling = freecad_cast<AssemblyLink*>(candidate);
++                if (sibling && sibling->getLinkedAssembly() == linkedAssembly) {
++                    ++matches;
++                    if (matches >= 2) {
++                        return true;
++                    }
++                }
++            }
++            return false;
++        }
++
++        // FCPROJECT-PATCH (2026-09-26, Nutzerauftrag "Parts haben auch Links" - live an
++        // CNC3018_023_A_Halterbaugruppe gefunden): 'asmLink' hat KEIN eigenes Assembly-Objekt
++        // (getLinkedAssembly() == nullptr) - das trifft auf ein einfaches verlinktes TEIL zu (z.B.
++        // eine Schraube/Scheibe/Mutter), das trotzdem als Assembly::AssemblyLink eingebunden
++        // wurde, nicht nur auf eine Unterbaugruppe. Analoger Geschwister-Check ueber das
++        // gemeinsame LinkedObject statt getLinkedAssembly().
++        auto* linkedObj = asmLink->getLinkedObject(false);
++        if (!linkedObj) {
++            return false;
++        }
++        int matches = 0;
++        for (auto* candidate : candidates) {
++            auto* sibling = freecad_cast<AssemblyLink*>(candidate);
++            if (sibling && sibling->getLinkedObject(false) == linkedObj) {
++                ++matches;
++                if (matches >= 2) {
++                    return true;
++                }
++            }
++        }
 +        return false;
 +    }
 +
++    // FCPROJECT-PATCH (2026-09-27, Nutzerauftrag "Parts werden genauso an den Solver
++    // weitergegeben wie Assemblies - muessen also genauso auffindbar sein"): 'obj' ist KEIN
++    // Assembly::AssemblyLink - kann ein echtes App::Link sein (Scheibe/Schraube/Nutenstein).
++    // Anders als AssemblyLink hat App::Link ein KORREKT ueberschriebenes getLinkedObject() (siehe
++    // Kommentar in AssemblyLink.h: "Overriding DocumentObject::getLinkedObject is giving bugs" -
++    // das gilt nur fuer AssemblyLink, nicht fuer die echte App::Link-Basisklasse), deshalb reicht
++    // hier der direkte Aufruf ohne Sonderbehandlung.
++    auto* linkedObj = obj->getLinkedObject(false);
++    if (!linkedObj || linkedObj == obj) {
++        return false;
++    }
 +    int matches = 0;
 +    for (auto* candidate : candidates) {
-+        auto* sibling = freecad_cast<AssemblyLink*>(candidate);
-+        if (sibling && sibling->getLinkedAssembly() == linkedAssembly) {
++        if (!candidate || freecad_cast<AssemblyLink*>(candidate)) {
++            // AssemblyLink-Kandidaten werden bereits vom Zweig oben abgedeckt - hier nur
++            // echte Nicht-AssemblyLink-Geschwister (z.B. andere Scheiben) zaehlen.
++            continue;
++        }
++        if (candidate->getLinkedObject(false) == linkedObj) {
 +            ++matches;
 +            if (matches >= 2) {
 +                return true;
@@ -5261,7 +5654,7 @@ index 3e0b804b8f6..42afe0dc55a 100644
  )
  {
      if (!obj) {
-@@ -687,14 +727,98 @@ App::DocumentObject* getMovingPartFromSel(
+@@ -687,14 +775,98 @@ App::DocumentObject* getMovingPartFromSel(
  
      bool assemblyPassed = false;
  
@@ -5360,7 +5753,7 @@ index 3e0b804b8f6..42afe0dc55a 100644
          }
  
          if (obj == assemblyObject) {
-@@ -718,12 +842,89 @@ App::DocumentObject* getMovingPartFromSel(
+@@ -718,12 +890,89 @@ App::DocumentObject* getMovingPartFromSel(
          if (obj->isDerivedFrom<Assembly::AssemblyLink>()) {
              const auto* pRigid = obj->getPropertyByName<App::PropertyBool>("Rigid");
              if (pRigid && !pRigid->getValue()) {
@@ -5423,9 +5816,9 @@ index 3e0b804b8f6..42afe0dc55a 100644
 +                    }
 +                    continue;
 +                }
-             }
-         }
- 
++            }
++        }
++
 +        // FCPROJECT-PATCH (Bug C, 2026-09-16): siehe resolveJointReference() fuer die
 +        // Begruendung - 'obj' liegt im geteilten, echten Dokument der zuletzt gekreuzten
 +        // duplizierten Instanz; ist es ein direktes Top-Level-Group-Kind dieser Instanz, liefert
@@ -5434,9 +5827,9 @@ index 3e0b804b8f6..42afe0dc55a 100644
 +            auto it = lastDuplicatedCrossing->objLinkMap.find(obj);
 +            if (it != lastDuplicatedCrossing->objLinkMap.end()) {
 +                obj = it->second;
-+            }
-+        }
-+
+             }
+         }
+ 
 +        if (verboseLog) {
 +            Base::Console().log(
 +                "FCPROJECT-DEBUG   -> RETURN '%s'\n",
@@ -5451,7 +5844,7 @@ index 3e0b804b8f6..42afe0dc55a 100644
      return nullptr;
  }
  
-@@ -746,6 +947,156 @@ App::DocumentObject* getMovingPartFromRef(App::DocumentObject* joint, const char
+@@ -746,6 +995,156 @@ App::DocumentObject* getMovingPartFromRef(App::DocumentObject* joint, const char
      return getMovingPartFromRef(prop);
  }
  
@@ -5609,7 +6002,7 @@ index 3e0b804b8f6..42afe0dc55a 100644
  {
      auto* plcPropSource = dynamic_cast<App::PropertyPlacement*>(src->getPropertyByName("Placement"));
 diff --git a/src/Mod/Assembly/App/AssemblyUtils.h b/src/Mod/Assembly/App/AssemblyUtils.h
-index 5296675ffa8..a99c60ba26f 100644
+index 5296675ffa8..2eb2bc68471 100644
 --- a/src/Mod/Assembly/App/AssemblyUtils.h
 +++ b/src/Mod/Assembly/App/AssemblyUtils.h
 @@ -132,6 +132,7 @@ enum class DistanceType
@@ -5620,7 +6013,7 @@ index 5296675ffa8..a99c60ba26f 100644
  class JointGroup;
  
  AssemblyExport void swapJCS(const App::DocumentObject* joint);
-@@ -178,13 +179,94 @@ AssemblyExport App::DocumentObject* getLinkedObjFromRef(
+@@ -178,13 +179,98 @@ AssemblyExport App::DocumentObject* getLinkedObjFromRef(
      const char* propName
  );
  // Get the moving part from a selection, which has the full path.
@@ -5687,9 +6080,13 @@ index 5296675ffa8..a99c60ba26f 100644
 +// eingefuegt, muss JEDE Ebene einzeln auf Duplikation geprueft werden, nicht nur die aeusserste).
 +// candidates sollte hierfuer 'parentLink->Group.getValues()' sein (die lokalen Spiegel-Kinder
 +// DIESER konkreten Instanz), analog zu getSubAssemblies() auf der obersten Ebene.
++// Nutzerauftrag 2026-09-27: 'obj' auf App::DocumentObject* verbreitert (war AssemblyLink*) -
++// erkennt jetzt zusaetzlich Geschwister-Duplikation bei einfachen Teilen (App::Link, z.B.
++// Scheibe/Schraube/Nutenstein), nicht nur bei Assembly::AssemblyLink. Bestehende Aufrufer, die
++// weiterhin AssemblyLink* uebergeben, sind unveraendert kompatibel (impliziter Upcast).
 +AssemblyExport bool hasSiblingInstances(
 +    const std::vector<App::DocumentObject*>& candidates,
-+    AssemblyLink* asmLink
++    App::DocumentObject* obj
 +);
 +
 +// Loest Reference1/Reference2 (die pName-Property, ein App::PropertyXLinkSub) des uebergebenen
@@ -5955,7 +6352,7 @@ index 00000000000..5149eeefb47
 +  <circle cx="49" cy="45" r="12.5" fill="none" stroke="#0b1521" stroke-width="1.5" />
 +</svg>
 diff --git a/src/Mod/Assembly/Gui/ViewProviderAssembly.cpp b/src/Mod/Assembly/Gui/ViewProviderAssembly.cpp
-index 82bd951b20c..28ec8221d14 100644
+index 82bd951b20c..d15c53d0fe6 100644
 --- a/src/Mod/Assembly/Gui/ViewProviderAssembly.cpp
 +++ b/src/Mod/Assembly/Gui/ViewProviderAssembly.cpp
 @@ -68,6 +68,7 @@
@@ -6014,7 +6411,7 @@ index 82bd951b20c..28ec8221d14 100644
              for (auto* joint : joints) {
                  Gui::ViewProvider* jointVp = Gui::Application::Instance->getViewProvider(joint);
                  if (jointVp) {
-@@ -312,6 +334,14 @@ bool ViewProviderAssembly::setEdit(int mode)
+@@ -312,6 +334,22 @@ bool ViewProviderAssembly::setEdit(int mode)
          updateTaskPanel(true);
  
          auto* assembly = getObject<AssemblyObject>();
@@ -6026,10 +6423,35 @@ index 82bd951b20c..28ec8221d14 100644
 +        if (!assembly) {
 +            return false;
 +        }
++
++        // FCPROJECT-PATCH (2026-09-25, siehe AssemblyObject::setActiveEditContext()): solange der
++        // Nutzer GENAU DIESE Instanz aktiv bearbeitet, soll sie eigenstaendig loesen, auch wenn
++        // eine aeussere Baugruppe sie ansonsten (per execute()) ohnehin mitloesen wuerde - eine
++        // scheiternde/singulaere aeussere Baugruppe blockiert sonst auch das Bearbeiten einer fuer
++        // sich genommen unproblematischen inneren Unterbaugruppe.
++        assembly->setActiveEditContext(true);
++
          connectSolverUpdate = assembly->signalSolverUpdate.connect([this] {
              UpdateSolverInformation();
          });
-@@ -649,7 +679,7 @@ bool ViewProviderAssembly::tryMouseMove(const SbVec2s& cursorPos, Gui::View3DInv
+@@ -345,6 +383,16 @@ void ViewProviderAssembly::unsetEdit(int mode)
+         partMoving = false;
+         docsToMove.clear();
+ 
++        // FCPROJECT-PATCH (2026-09-25, Gegenstueck zu setEdit(), siehe
++        // AssemblyObject::setActiveEditContext()): eigenstaendiges Solve-Verhalten nur waehrend
++        // der aktiven Bearbeitung - danach uebernimmt wieder die aeussere Baugruppe (execute()s
++        // normales isNestedUnderFlexibleParent()-Verhalten), ein abschliessender recomputeFeature()
++        // stellt sicher, dass die Placement wieder aus deren Sicht konsistent ist.
++        if (auto* assembly = getObject<AssemblyObject>()) {
++            assembly->setActiveEditContext(false);
++            assembly->recomputeFeature(true);
++        }
++
+         unsetDragger();
+         detachSelection();
+ 
+@@ -649,7 +697,7 @@ bool ViewProviderAssembly::tryMouseMove(const SbVec2s& cursorPos, Gui::View3DInv
              }
          }
          else {
@@ -6038,7 +6460,7 @@ index 82bd951b20c..28ec8221d14 100644
          }
      }
      return false;
-@@ -734,23 +764,38 @@ bool ViewProviderAssembly::canDragObjectIn3d(App::DocumentObject* obj) const
+@@ -734,23 +782,38 @@ bool ViewProviderAssembly::canDragObjectIn3d(App::DocumentObject* obj) const
          return false;
      }
  
@@ -6083,7 +6505,7 @@ index 82bd951b20c..28ec8221d14 100644
                  return true;
              }
          }
-@@ -881,8 +926,22 @@ void ViewProviderAssembly::collectMovableObjects(
+@@ -881,8 +944,22 @@ void ViewProviderAssembly::collectMovableObjects(
      auto* assemblyPart = getObject<AssemblyObject>();
  
      // Handling of special case: flexible AssemblyLink
@@ -6107,7 +6529,7 @@ index 82bd951b20c..28ec8221d14 100644
          std::vector<App::DocumentObject*> children = asmLink->Group.getValues();
          for (auto* child : children) {
              // Recurse on children, appending the child's name to the subName prefix
-@@ -1027,9 +1086,35 @@ ViewProviderAssembly::DragMode ViewProviderAssembly::findDragMode()
+@@ -1027,9 +1104,35 @@ ViewProviderAssembly::DragMode ViewProviderAssembly::findDragMode()
          if (!ref) {
              return DragMode::Translation;
          }
@@ -6146,7 +6568,7 @@ index 82bd951b20c..28ec8221d14 100644
  
          if (!ungroundedJointDrag) {
              // Add downstream parts so that they move together
-@@ -1081,7 +1166,7 @@ void ViewProviderAssembly::tryInitMove(const SbVec2s& cursorPos, Gui::View3DInve
+@@ -1081,7 +1184,7 @@ void ViewProviderAssembly::tryInitMove(const SbVec2s& cursorPos, Gui::View3DInve
      auto* assemblyPart = getObject<AssemblyObject>();
      // When the user drag parts, we switch off all joints visibility and only show the movingjoint
      jointVisibilitiesBackup.clear();
@@ -6155,7 +6577,7 @@ index 82bd951b20c..28ec8221d14 100644
      for (auto* joint : joints) {
          if (!joint) {
              continue;
-@@ -1166,7 +1251,7 @@ void ViewProviderAssembly::tryInitMove(const SbVec2s& cursorPos, Gui::View3DInve
+@@ -1166,7 +1269,7 @@ void ViewProviderAssembly::tryInitMove(const SbVec2s& cursorPos, Gui::View3DInve
          assemblyPart->preDrag(dragParts);
      }
      else {
@@ -6164,7 +6586,7 @@ index 82bd951b20c..28ec8221d14 100644
      }
  }
  
-@@ -1367,7 +1452,16 @@ bool ViewProviderAssembly::canDelete(App::DocumentObject* objBeingDeleted) const
+@@ -1367,7 +1470,16 @@ bool ViewProviderAssembly::canDelete(App::DocumentObject* objBeingDeleted) const
                  if (subAsmLink || link) {
                      if (std::ranges::find(objs, obj) == objs.end()) {
                          objs.push_back(obj);
@@ -6182,7 +6604,7 @@ index 82bd951b20c..28ec8221d14 100644
                              addSubComponents(subAsmLink, objs);
                          }
                      }
-@@ -1380,17 +1474,40 @@ bool ViewProviderAssembly::canDelete(App::DocumentObject* objBeingDeleted) const
+@@ -1380,17 +1492,40 @@ bool ViewProviderAssembly::canDelete(App::DocumentObject* objBeingDeleted) const
              addSubComponents(asmLink, objsBeingDeleted);
          }
  
@@ -6227,7 +6649,7 @@ index 82bd951b20c..28ec8221d14 100644
                      objToDel.push_back(joint);
                  }
              }
-@@ -1398,7 +1515,7 @@ bool ViewProviderAssembly::canDelete(App::DocumentObject* objBeingDeleted) const
+@@ -1398,7 +1533,7 @@ bool ViewProviderAssembly::canDelete(App::DocumentObject* objBeingDeleted) const
              // List its grounded joints
              std::vector<App::DocumentObject*> inList = obj->getInList();
              for (auto* parent : inList) {
@@ -6236,7 +6658,7 @@ index 82bd951b20c..28ec8221d14 100644
                      continue;
                  }
  
-@@ -1485,22 +1602,46 @@ void ViewProviderAssembly::applyIsolationRecursively(
+@@ -1485,22 +1620,46 @@ void ViewProviderAssembly::applyIsolationRecursively(
          }
          return;
      }
@@ -6291,7 +6713,7 @@ index 82bd951b20c..28ec8221d14 100644
  
      auto* vp = Gui::Application::Instance->getViewProvider(current);
      auto* vpl = dynamic_cast<Gui::ViewProviderLink*>(vp);
-@@ -1588,8 +1729,29 @@ void ViewProviderAssembly::isolateJointReferences(App::DocumentObject* joint, Is
+@@ -1588,8 +1747,29 @@ void ViewProviderAssembly::isolateJointReferences(App::DocumentObject* joint, Is
          return;
      }
  
@@ -6323,7 +6745,7 @@ index 82bd951b20c..28ec8221d14 100644
      if (!part1 || !part2) {
          return;
      }
-@@ -1889,6 +2051,17 @@ void ViewProviderAssembly::UpdateSolverInformation()
+@@ -1889,6 +2069,17 @@ void ViewProviderAssembly::UpdateSolverInformation()
      // Updates Solver Information with the Last solver execution at AssemblyObject level
      auto* assembly = getObject<AssemblyObject>();
  
@@ -6341,7 +6763,7 @@ index 82bd951b20c..28ec8221d14 100644
      int dofs = assembly->getLastDoF();
      bool hasRedundancies = assembly->getLastHasRedundancies();
      bool hasMalformed = assembly->getLastHasMalformedConstraints();
-@@ -1969,13 +2142,25 @@ void ViewProviderAssembly::updateTaskPanel(bool show)
+@@ -1969,13 +2160,25 @@ void ViewProviderAssembly::updateTaskPanel(bool show)
          return;
      }
  

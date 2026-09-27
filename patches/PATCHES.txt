@@ -32,7 +32,7 @@
 # Patch eingepflegt werden (durch Neu-Export von "git diff <letzter-Vanilla-Sync> HEAD -- ..."),
 # statt wieder Monate lang auseinanderlaufen zu lassen.
 
-2026.09.23-freecad-assembly-full-resync.patch
+2026.09.27-freecad-assembly-full-resync.patch
 
 # NICHT in obiger Liste, weil nicht auf DIESE Sandbox anwendbar (betrifft src/App/*, hier
 # per Sparse-Checkout gar nicht ausgecheckt - nur src/Mod/Assembly + src/3rdParty/
