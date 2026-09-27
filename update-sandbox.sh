@@ -158,6 +158,29 @@ log "Schritt 4/8: src/Mod/Assembly + src/3rdParty/OndselSolver auf ${TARGET_COMM
 # nichts sonst wird angefasst.
 run git checkout "$TARGET_COMMIT" -- src/Mod/Assembly src/3rdParty/OndselSolver
 
+# Nutzerbefund 2026-09-27 (live zweimal reproduziert: "existiert bereits im Arbeitsverzeichnis"
+# bei AssemblyIdentityGraph.cpp/h, CommandShowIdentityGraph.py, Assembly_ShowIdentityGraph.svg):
+# der obige pfad-beschraenkte Checkout AKTUALISIERT nur Dateien, die im TARGET_COMMIT existieren -
+# er LOESCHT NIE eine Datei, die bei uns (vorher committeter Stand) existiert, aber im
+# TARGET_COMMIT fehlt (z.B. eine komplett neue Datei, die einer unserer Patches erst einfuehrt).
+# Ohne diesen Schritt bleibt so eine Datei mit ihrem ALTEN (bereits gepatchten) Inhalt liegen und
+# git apply schlaegt in Schritt 6/8 fehl, weil der Patch sie als "neue Datei" anlegen will, obwohl
+# sie (aus reiner Checkout-Sicht) schon "existiert". Deshalb: jede Datei unter den beiden Pfaden,
+# die im ALTEN committeten Stand (BEFORE) vorhanden war, aber im TARGET_COMMIT NICHT, explizit
+# loeschen - NUR echtes 'rm', 'git checkout' kann das strukturell nicht.
+mapfile -t OBSOLETE_FILES < <(
+  comm -23 \
+    <(git ls-tree -r --name-only "$BEFORE" -- src/Mod/Assembly src/3rdParty/OndselSolver | sort) \
+    <(git ls-tree -r --name-only "$TARGET_COMMIT" -- src/Mod/Assembly src/3rdParty/OndselSolver | sort)
+)
+if [[ ${#OBSOLETE_FILES[@]} -gt 0 ]]; then
+  log "Schritt 4b/8: ${#OBSOLETE_FILES[@]} Datei(en) loeschen, die im Ziel-Commit nicht mehr existieren"
+  for f in "${OBSOLETE_FILES[@]}"; do
+    echo "  loesche ${f}"
+    [[ $DRY_RUN -eq 0 ]] && rm -f "$f"
+  done
+fi
+
 log "Schritt 5/8: Submodule synchronisieren (OndselSolver)"
 run git submodule update --init -- src/3rdParty/OndselSolver
 
