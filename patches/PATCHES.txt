@@ -56,3 +56,13 @@
 # hinzu, das die Dateiliste per setNameFilter() waehrend des Tippens filtert. Falls gewuenscht,
 # direkt gegen freecad-source pruefen/anwenden, nicht ueber update-sandbox.sh/check-patches.sh:
 #   2026.09.13-freecad-filedialog-search-filter.patch
+#
+# NICHT in obiger Liste, ebenfalls nicht auf DIESE Sandbox anwendbar (betrifft src/Gui/*,
+# ausserhalb des Assembly-Sparse-Checkouts). Nutzerfund 2026-09-27 beim Vorbereiten eines
+# Vollsyncs des Build-Baums (/home/maxx/freecad-sandbox/freecad-source) auf den aktuellen
+# Vanilla-Stand: zwei unkommittierte lokale Fixes lagen dort seit einer frueheren Session
+# (QByteArray/QString-Konstruktor-Anpassungen, vermutlich fuer unsere Neon-Qt6-Umgebung
+# noetig) - waeren bei einem naiven "git checkout <neuer-commit>" stillschweigend
+# ueberschrieben worden. Gesichert, BEVOR der Vollsync lief - direkt gegen freecad-source
+# pruefen/anwenden, nicht ueber update-sandbox.sh/check-patches.sh:
+#   2026.09.27-freecad-gui-qt6-qbytearray-qstring-fixes.patch

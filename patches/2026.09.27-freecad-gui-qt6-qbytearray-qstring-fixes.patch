@@ -1,0 +1,52 @@
+diff --git a/src/Gui/PreferencePages/DlgSettingsNavigation.cpp b/src/Gui/PreferencePages/DlgSettingsNavigation.cpp
+index ed4bb8ceee..7e9eb1bcc6 100644
+--- a/src/Gui/PreferencePages/DlgSettingsNavigation.cpp
++++ b/src/Gui/PreferencePages/DlgSettingsNavigation.cpp
+@@ -368,7 +368,7 @@ void DlgSettingsNavigation::retranslate()
+     // add submenu at the end to select navigation style
+     std::map<Base::Type, std::string> styles = UserNavigationStyle::getUserFriendlyNames();
+     for (const auto& style : styles) {
+-        QByteArray data(style.first.getName());
++        QByteArray data(style.first.getName().data(), style.first.getName().size());
+         QString name = QApplication::translate(
+             std::string {style.first.getName()}.c_str(),
+             style.second.c_str()
+diff --git a/src/Gui/propertyeditor/PropertyEditor.cpp b/src/Gui/propertyeditor/PropertyEditor.cpp
+index 86008f75ec..36dc691e4c 100644
+--- a/src/Gui/propertyeditor/PropertyEditor.cpp
++++ b/src/Gui/propertyeditor/PropertyEditor.cpp
+@@ -1035,14 +1035,14 @@ void PropertyEditor::getPropUsesObj(
+     QString& content
+ ) const
+ {
+-    content += indent(level);
++    content += QString::fromStdString(indent(level));
+     content += tr("object %1 (%2):\n")
+                    .arg(QString::fromUtf8(obj->getNameInDocument()))
+                    .arg(QString::fromUtf8(obj->Label.getValue()));
+ 
+ 
+     for (const auto& id : ids) {
+-        content += indent(level + 1);
++        content += QString::fromStdString(indent(level + 1));
+         content += tr("property %1\n").arg(QString::fromStdString(id.toString()));
+     }
+ }
+@@ -1054,7 +1054,7 @@ void PropertyEditor::getPropUsesDoc(
+     QString& content
+ ) const
+ {
+-    content += indent(level);
++    content += QString::fromStdString(indent(level));
+     content += tr("document %1:\n").arg(QString::fromUtf8(doc->getName()));
+ 
+     std::map<App::DocumentObject*, std::set<App::ObjectIdentifier>> objToIds;
+@@ -1095,7 +1095,7 @@ QString PropertyEditor::getPropUses(App::Property* prop) const
+     }
+ 
+     if (docToIds.empty()) {
+-        content += indent(1);
++        content += QString::fromStdString(indent(1));
+         content += tr("(No references found.)");
+         return content;
+     }
