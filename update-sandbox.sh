@@ -59,6 +59,16 @@ set -euo pipefail
 
 SANDBOX_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FREECAD_SOURCE_DIR="/home/maxx/freecad/freecad-source"
+# Nutzerauftrag 2026-09-27 ("wo sind die 940 Commits?" / "wir loesen uns vom Vanilla-Stand"):
+# NICHT zu verwechseln mit FREECAD_SOURCE_DIR oben (das ist FCProjects eigener Checkout, dient
+# hier nur als Referenz fuer den TARGET_COMMIT-Default) - SANDBOX_BUILD_DIR ist UNSER EIGENER
+# Build-Baum (CMake Tools baut gegen dieses Verzeichnis, siehe Memory
+# "standalone-check-cmake-compile-verify"). src/Mod/Assembly + src/3rdParty/OndselSolver sind
+# dort als Symlinks auf SANDBOX_DIR eingerichtet (automatisch synchron, kein eigener Sync-Schritt
+# noetig) - der REST von FreeCAD dort (App-Kern, Sketcher, Gui usw.) wird sonst NIE aktualisiert
+# und drohte unbemerkt vom eigentlichen Vanilla-Ziel wegzudriften (live gefunden: 943 Commits
+# Rueckstand).
+SANDBOX_BUILD_DIR="/home/maxx/freecad-sandbox/freecad-source"
 PATCHES_DIR="${SANDBOX_DIR}/patches"
 PATCHES_LIST="${PATCHES_DIR}/PATCHES.txt"
 
@@ -107,7 +117,7 @@ if [[ -z "$TARGET_COMMIT" ]]; then
   echo "Kein Zielcommit angegeben - nehme aktuellen HEAD von freecad-source: ${TARGET_COMMIT}"
 fi
 
-log "Schritt 1/8: von PATCHES.txt betroffene Dateien zuruecksetzen (damit sie den Sync nicht blockieren)"
+log "Schritt 1/9: von PATCHES.txt betroffene Dateien zuruecksetzen (damit sie den Sync nicht blockieren)"
 # Dateiliste dynamisch aus den Patches selbst ableiten (jede "+++ b/<pfad>"-Zeile) statt
 # manuell gepflegt - bleibt automatisch aktuell, wenn PATCHES.txt sich aendert.
 PATCHED_FILES=()
@@ -124,7 +134,7 @@ for f in "${PATCHED_FILES[@]}"; do
   [[ -f "$f" ]] && run git checkout -- "$f"
 done
 
-log "Schritt 2/8: pruefe auf unerwartete lokale Aenderungen an getrackten Dateien"
+log "Schritt 2/9: pruefe auf unerwartete lokale Aenderungen an getrackten Dateien"
 KNOWN_DIRTY=("src/3rdParty/OndselSolver")
 UNEXPECTED=""
 while IFS= read -r line; do
@@ -142,11 +152,11 @@ if [[ -n "$UNEXPECTED" && $DRY_RUN -eq 0 ]]; then
   exit 1
 fi
 
-log "Schritt 3/8: git fetch origin"
+log "Schritt 3/9: git fetch origin"
 run git fetch origin
 
 BEFORE="$(git rev-parse HEAD)"
-log "Schritt 4/8: src/Mod/Assembly + src/3rdParty/OndselSolver auf ${TARGET_COMMIT} bringen"
+log "Schritt 4/9: src/Mod/Assembly + src/3rdParty/OndselSolver auf ${TARGET_COMMIT} bringen"
 # WICHTIG (live als echter Vorfall aufgetreten, 2026-09-07): NIEMALS ein volles
 # "git checkout <upstream-commit>" hier - das ersetzt den KOMPLETTEN Arbeitsbaum durch den
 # Tree dieses reinen Upstream-Commits, der patches/, docs/, standalone-check/, resources/,
@@ -164,7 +174,7 @@ run git checkout "$TARGET_COMMIT" -- src/Mod/Assembly src/3rdParty/OndselSolver
 # er LOESCHT NIE eine Datei, die bei uns (vorher committeter Stand) existiert, aber im
 # TARGET_COMMIT fehlt (z.B. eine komplett neue Datei, die einer unserer Patches erst einfuehrt).
 # Ohne diesen Schritt bleibt so eine Datei mit ihrem ALTEN (bereits gepatchten) Inhalt liegen und
-# git apply schlaegt in Schritt 6/8 fehl, weil der Patch sie als "neue Datei" anlegen will, obwohl
+# git apply schlaegt in Schritt 6/9 fehl, weil der Patch sie als "neue Datei" anlegen will, obwohl
 # sie (aus reiner Checkout-Sicht) schon "existiert". Deshalb: jede Datei unter den beiden Pfaden,
 # die im ALTEN committeten Stand (BEFORE) vorhanden war, aber im TARGET_COMMIT NICHT, explizit
 # loeschen - NUR echtes 'rm', 'git checkout' kann das strukturell nicht.
@@ -181,28 +191,104 @@ if [[ ${#OBSOLETE_FILES[@]} -gt 0 ]]; then
   done
 fi
 
-log "Schritt 5/8: Submodule synchronisieren (OndselSolver)"
+log "Schritt 5/9: Submodule synchronisieren (OndselSolver)"
 run git submodule update --init -- src/3rdParty/OndselSolver
 
 if [[ $APPLY_PATCHES -eq 1 ]]; then
-  log "Schritt 6/8: Patches aus PATCHES.txt neu anwenden (${#PATCHES[@]} Stueck)"
+  log "Schritt 6/9: Patches aus PATCHES.txt neu anwenden (${#PATCHES[@]} Stueck)"
   for p in "${PATCHES[@]}"; do
     echo "--- ${p} ---"
     run git apply "${PATCHES_DIR}/${p}"
   done
 else
-  log "Schritt 6/8: uebersprungen (--no-patches)"
+  log "Schritt 6/9: uebersprungen (--no-patches)"
 fi
 
 if [[ $DRY_RUN -eq 0 ]]; then
-  log "Schritt 7/8: Zusammenfassung src/Mod/Assembly (${BEFORE:0:10}..${TARGET_COMMIT:0:10})"
+  log "Schritt 7/9: Zusammenfassung src/Mod/Assembly (${BEFORE:0:10}..${TARGET_COMMIT:0:10})"
   git diff --stat "$BEFORE" "$TARGET_COMMIT" -- src/Mod/Assembly | tail -5
   echo
   echo "Naechste Schritte:"
   echo "  - Build+Deploy: cmake --build standalone-check/build --target build-and-deploy  (oder Strg+Shift+B)"
   echo "  - Kinematik-Test: cmake --build standalone-check/build --target kinematic-test-patched"
 
-  log "Schritt 8/8: pruefe Neon-Qt6/PySide6/Shiboken6-Umgebung auf Versionsdrift (rein lesend)"
+  log "Schritt 8/9: Build-Baum (${SANDBOX_BUILD_DIR}) komplett auf ${TARGET_COMMIT} bringen"
+  if [[ ! -d "${SANDBOX_BUILD_DIR}/.git" ]]; then
+    echo "Hinweis: ${SANDBOX_BUILD_DIR} nicht gefunden/kein Git-Repo - Schritt uebersprungen."
+  else
+    # Nutzerbefund 2026-09-27 ("wo sind die 940 Commits?"): src/Mod/Assembly und
+    # src/3rdParty/OndselSolver sind in SANDBOX_BUILD_DIR als Symlinks auf DIESES Sandbox-Repo
+    # eingerichtet (bleiben dadurch automatisch synchron) - der REST von FreeCAD dort wurde
+    # bisher NIE aktualisiert. GEFAHR (ebenfalls live gefunden): ein normaler
+    # "git checkout <commit>" wuerde versuchen, die getrackten Dateien UNTER genau diesen zwei
+    # Pfaden wiederherzustellen - da dort aktuell Symlinks liegen (keine echten Verzeichnisse),
+    # koennte das im schlimmsten Fall durch den Symlink hindurch in DIESES Sandbox-Repo
+    # schreiben. Deshalb: Symlinks vor dem Checkout aushaengen (nur der Link, Zieldaten in
+    # SANDBOX_DIR bleiben unberuehrt), danach die frisch wiederhergestellten (ungebrauchten)
+    # echten Vanilla-Ordner an genau diesen Stellen wieder loeschen und die Symlinks neu anlegen.
+    #
+    # Nutzerauftrag "mit Abbruch-Absicherung": ALLES zwischen Aushaengen und Wiederherstellen
+    # laeuft unter set -euo pipefail - jeder Fehler (Netzwerk, Konflikt) wuerde das Skript sonst
+    # mit ausgehaengten Symlinks (kaputter Build-Baum) verlassen. Ein 'trap' auf EXIT stellt die
+    # Symlinks deshalb UNBEDINGT wieder her, auch bei Abbruch/Ctrl-C/Fehler - idempotent, falls
+    # sie schon korrekt stehen.
+    SYMLINK_TARGETS=(
+      "src/Mod/Assembly:${SANDBOX_DIR}/src/Mod/Assembly"
+      "src/3rdParty/OndselSolver:${SANDBOX_DIR}/src/3rdParty/OndselSolver"
+    )
+    restore_build_symlinks() {
+      cd "$SANDBOX_BUILD_DIR" || return
+      for entry in "${SYMLINK_TARGETS[@]}"; do
+        link_path="${entry%%:*}"
+        link_target="${entry#*:}"
+        if [[ -L "$link_path" ]]; then
+          continue
+        fi
+        rm -rf "$link_path"
+        ln -s "$link_target" "$link_path"
+      done
+    }
+    trap restore_build_symlinks EXIT
+
+    cd "$SANDBOX_BUILD_DIR"
+
+    # Sicherheitscheck analog Schritt 2/9: unerwartete lokale Aenderungen AUSSERHALB der
+    # Symlink-Pfade muessen vorher gesichert/committet sein (siehe
+    # patches/2026.09.27-freecad-gui-qt6-qbytearray-qstring-fixes.patch als Beispiel, wie das
+    # aussieht) - kein stillschweigendes Ueberschreiben.
+    UNEXPECTED_BUILD_CHANGES="$(git status --porcelain --untracked-files=no -- . ':!src/Mod/Assembly' ':!src/3rdParty/OndselSolver' 2>/dev/null || true)"
+    if [[ -n "$UNEXPECTED_BUILD_CHANGES" ]]; then
+      echo "FEHLER: unerwartete lokale Aenderungen in ${SANDBOX_BUILD_DIR} (ausserhalb der" >&2
+      echo "Symlink-Pfade) - erst sichern (z.B. als eigener Patch, siehe PATCHES.txt-Beispiele)" >&2
+      echo "oder committen, dann erneut starten:" >&2
+      echo "$UNEXPECTED_BUILD_CHANGES" >&2
+      cd "$SANDBOX_DIR"
+      exit 1
+    fi
+
+    for entry in "${SYMLINK_TARGETS[@]}"; do
+      link_path="${entry%%:*}"
+      [[ -L "$link_path" ]] && rm "$link_path"
+    done
+
+    git fetch origin
+    git checkout "$TARGET_COMMIT"
+    # Alle Submodule inkl. OndselSolver initialisieren - harmlos, auch fuer OndselSolver: an
+    # dieser Stelle liegt dort noch der frisch ausgecheckte, ungebrauchte echte Vanilla-Ordner
+    # (Symlink noch nicht wiederhergestellt), der gleich sowieso durch restore_build_symlinks()
+    # geloescht und ersetzt wird.
+    git submodule update --init --recursive
+
+    # restore_build_symlinks() (per trap) laeuft gleich sowieso, hier zusaetzlich explizit VOR
+    # der Rueckkehr nach SANDBOX_DIR, damit der Build-Baum sofort in konsistentem Zustand ist.
+    restore_build_symlinks
+    trap - EXIT
+
+    cd "$SANDBOX_DIR"
+    echo "Build-Baum jetzt bei $(git -C "$SANDBOX_BUILD_DIR" rev-parse --short HEAD) - Symlinks wiederhergestellt."
+  fi
+
+  log "Schritt 9/9: pruefe Neon-Qt6/PySide6/Shiboken6-Umgebung auf Versionsdrift (rein lesend)"
   "${SANDBOX_DIR}/standalone-check/check-neon-sync.sh" || true
 else
   log "Dry-Run Ende - keine Aenderung vorgenommen."

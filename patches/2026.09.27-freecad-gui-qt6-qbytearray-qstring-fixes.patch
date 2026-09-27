@@ -50,3 +50,16 @@ index 86008f75ec..36dc691e4c 100644
          content += tr("(No references found.)");
          return content;
      }
+diff --git a/src/Mod/Start/Gui/GeneralSettingsWidget.cpp b/src/Mod/Start/Gui/GeneralSettingsWidget.cpp
+index f87375b778..3dec7ef2a8 100644
+--- a/src/Mod/Start/Gui/GeneralSettingsWidget.cpp
++++ b/src/Mod/Start/Gui/GeneralSettingsWidget.cpp
+@@ -248,7 +248,7 @@ void GeneralSettingsWidget::retranslateUi()
+     );
+     std::map<Base::Type, std::string> styles = Gui::UserNavigationStyle::getUserFriendlyNames();
+     for (const auto& style : styles) {
+-        QByteArray data(style.first.getName());
++        QByteArray data(style.first.getName().data(), style.first.getName().size());
+         QString name = QApplication::translate(
+             std::string {style.first.getName()}.c_str(),
+             style.second.c_str()
