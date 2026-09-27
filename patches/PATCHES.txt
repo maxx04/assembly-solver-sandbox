@@ -6,7 +6,7 @@
 #     gegen ein ECHTES Vanilla-Checkout des Ziel-Commits, nicht mehr gegen HEAD - siehe dortige
 #     Kommentare)
 #
-# VANILLA_BASE: dfbb99298d
+# VANILLA_BASE: 454a4b82ce
 # ^ Nutzerauftrag 2026-09-27 ("wer prueft, dass alle Commits im Patch landen?"): der Commit,
 # gegen den die Patches oben den Diff bilden (git diff VANILLA_BASE HEAD -- src/Mod/Assembly
 # src/3rdParty/OndselSolver). check-patches.sh liest diese Zeile automatisch und prueft nach dem
