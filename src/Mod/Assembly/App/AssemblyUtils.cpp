@@ -811,8 +811,8 @@ App::DocumentObject* getMovingPartFromSel(
     // bei jedem Selektions-/Zieh-Ereignis aufgerufen wird.
     if (verboseLog) {
         Base::Console().log(
-            "FCPROJECT-DEBUG getMovingPartFromSel: assemblyObject='%s', selRoot='%s', sub='%s', "
-            "names=[%s]\n",
+            "FCPROJECT-DEBUG getMovingPartFromSel: assemblyObject='{}', selRoot='{}', sub='{}', "
+            "names=[{}]\n",
             assemblyObject ? assemblyObject->getFullName().c_str() : "<null>",
             obj->getFullName().c_str(),
             sub.c_str(),
@@ -848,7 +848,7 @@ App::DocumentObject* getMovingPartFromSel(
         }
         if (verboseLog) {
             Base::Console().log(
-                "FCPROJECT-DEBUG   step name='%s' in doc='%s' -> obj='%s'\n",
+                "FCPROJECT-DEBUG   step name='{}' in doc='{}' -> obj='{}'\n",
                 objName.c_str(),
                 doc->getName(),
                 obj ? obj->getFullName().c_str() : "<not found>"
@@ -863,7 +863,7 @@ App::DocumentObject* getMovingPartFromSel(
             doc = obj->getLinkedObject()->getDocument();
             if (verboseLog) {
                 Base::Console().log(
-                    "FCPROJECT-DEBUG     isLink() -> doc switched to '%s'\n",
+                    "FCPROJECT-DEBUG     isLink() -> doc switched to '{}'\n",
                     doc->getName()
                 );
             }
@@ -907,7 +907,7 @@ App::DocumentObject* getMovingPartFromSel(
                            ->isSubAssemblyFullyUnconnected(asmLink)) {
                     if (verboseLog) {
                         Base::Console().log(
-                            "FCPROJECT-DEBUG     flexible AssemblyLink '%s' unverbunden -> als "
+                            "FCPROJECT-DEBUG     flexible AssemblyLink '{}' unverbunden -> als "
                             "Ganzes behandelt (nicht durchlaufen)\n",
                             asmLink->getNameInDocument()
                         );
@@ -935,7 +935,7 @@ App::DocumentObject* getMovingPartFromSel(
                             if (verboseLog) {
                                 Base::Console().log(
                                     "FCPROJECT-DEBUG     flexible AssemblyLink -> doc switched to "
-                                    "'%s'\n",
+                                    "'{}'\n",
                                     doc->getName()
                                 );
                             }
@@ -964,7 +964,7 @@ App::DocumentObject* getMovingPartFromSel(
 
         if (verboseLog) {
             Base::Console().log(
-                "FCPROJECT-DEBUG   -> RETURN '%s'\n",
+                "FCPROJECT-DEBUG   -> RETURN '{}'\n",
                 obj->getFullName().c_str()
             );
         }

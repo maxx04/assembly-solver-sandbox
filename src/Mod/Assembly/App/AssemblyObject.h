@@ -498,6 +498,18 @@ public:
     }
     fastsignals::signal<void()> signalSolverUpdate;
 
+    // FCPROJECT-PATCH (2026-09-27, siehe solveHiddenFlexibleUnderRigid()-Kommentar in
+    // AssemblyObject.cpp): nach einem erzwungenen solve() einer flexiblen, hinter einer rigiden
+    // Ebene versteckten Unterbaugruppe muss deren frisch geloestes Placement noch in das
+    // tatsaechlich gerenderte lokale Spiegel-Objekt uebertragen werden. IdentityGraph kann hier
+    // NICHT helfen (bewusst so designed: eine rigide AssemblyLink ist fuer den gesamten Graphen
+    // ein opakes Blatt, der Graph steigt nie in ihr Inneres ab) - stattdessen direkt ueber
+    // 'mirrorLink->objLinkMap' (von AssemblyLink::synchronizeComponents() gepflegt, bildet echtes
+    // Quellobjekt -> lokale Spiegel-Kopie ab), das GENAU fuer diesen Zweck existiert. Public, weil
+    // solveHiddenFlexibleUnderRigid() dies auf einer FREMDEN AssemblyObject-Instanz (nicht 'this')
+    // aufruft.
+    void propagateSolvedPlacementsTo(AssemblyLink* mirrorLink);
+
 private:
     void rebuildRigidClusters();
     App::DocumentObject* getRigidRepresentative(App::DocumentObject* part) const;

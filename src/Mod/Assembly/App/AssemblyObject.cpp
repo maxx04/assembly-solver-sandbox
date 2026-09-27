@@ -312,7 +312,7 @@ App::DocumentObjectExecReturn* AssemblyObject::execute()
         // Baugruppe sie ohnehin (schlecht oder gut) mitloest.
         if (isNestedUnderFlexibleParent() && !activeEditContext) {
             Base::Console().message(
-                "Assembly: '%s' skipped its own solve() - nested under a flexible parent "
+                "Assembly: '{}' skipped its own solve() - nested under a flexible parent "
                 "assembly, which solves it as part of its own recompute.\n",
                 getFullName()
             );
@@ -404,6 +404,117 @@ std::string jointInstanceName(App::DocumentObject* joint, const std::string& nes
 {
     return nestingPrefix.empty() ? joint->getFullName() : nestingPrefix + joint->getFullName();
 }
+
+// FCPROJECT-PATCH (2026-09-27, live am echten BG37->BG43->BG67-Projekt gefunden, "Motor
+// kollabiert"-Bug): syncGroundedJoints() verglich bisher gegen getGroundedJoints() - das durchsucht
+// NUR die JointGroup DIESER Ebene, NICHT rekursiv wie getGroundedParts() (siehe dessen Kommentar
+// "Nutzerkorrektur 2026-09-04"). Fuer ein Teil, das BEREITS ueber einen zwei (oder mehr) Ebenen
+// tiefer liegenden, eigenen GroundedJoint fixiert ist (z.B. ein Motor-Getriebeteil in einer
+// verschachtelten flexiblen Unterbaugruppe), meldete syncGroundedJoints() faelschlich "isReadOnly,
+// aber kein Joint gefunden" und legte HIER, auf der AEUSSEREN Ebene, einen ZWEITEN, redundanten
+// GroundedJoint fuer dasselbe physische Teil an. Zwei unabhaengige Erdungen fuer dasselbe Teil
+// zwingen den Solver, andere (echte, noetige) Joints als redundant zu verwerfen, um nicht zu
+// crashen - beobachtet als kompletter Verlust ALLER internen Motor-Gelenke (elf Getriebeteile
+// fielen komplett auseinander, jedes landete auf (0,0,0)). Fix: rekursiv (identisches
+// Abstiegsmuster wie getGroundedParts(): getSubAssemblies(), rigide ueberspringen,
+// getLinkedAssembly() rekursiv) sammeln, WELCHE Teile ANYWHERE (nicht nur lokal) bereits einen
+// GroundedJoint haben - nur das entscheidet, ob eine NEUE Erdung noetig ist. Fuer die bestehende
+// "Loesche verwaiste lokale Erdung"-Logik bleibt weiterhin ausschliesslich die LOKALE Map
+// massgeblich (nie ein Objekt in einem FREMDEN Dokument loeschen).
+void collectGroundedPartsRecursive(
+    AssemblyObject* assembly,
+    std::unordered_set<App::DocumentObject*>& groundedParts
+)
+{
+    if (!assembly) {
+        return;
+    }
+    for (auto* gJoint : assembly->getGroundedJoints()) {
+        auto* propObj = dynamic_cast<App::PropertyLink*>(gJoint->getPropertyByName("ObjectToGround"));
+        if (propObj && propObj->getValue()) {
+            groundedParts.insert(propObj->getValue());
+        }
+    }
+    for (auto* subAssembly : assembly->getSubAssemblies()) {
+        if (!subAssembly || subAssembly->isRigid()) {
+            continue;
+        }
+        AssemblyObject* nested = subAssembly->getLinkedAssembly();
+        if (!nested || nested == assembly) {
+            continue;
+        }
+        collectGroundedPartsRecursive(nested, groundedParts);
+    }
+}
+
+// FCPROJECT-PATCH (2026-09-27, live am echten BG37->BG43(Rigid)->BG67(Flexibel, eigener
+// Drehgelenk-Rotor)-Projekt gefunden, "Motor kollabiert"-Bug, Nutzerentscheidung "067 bleibt
+// trotz starrer Elternbaugruppe eigenstaendig loesbar"): getJoints()/getGroundedParts() ueberspringen
+// eine RIGIDE AssemblyLink bewusst und korrekt (fuer den Solver ist eine starre Unterbaugruppe EIN
+// Koerper) - das bedeutet aber auch, dass eine FLEXIBLE Unterbaugruppe, die INNERHALB einer solchen
+// starren Baugruppe verschachtelt ist (z.B. ein drehbarer Motor, starr ans Gestell geschraubt),
+// von KEINER der bestehenden Abstiegs-Funktionen mehr erreicht wird - nichts loest mehr ihren
+// eigenen solve() aus, sobald ihr direkter (oder ein weiter aussen liegender) Container starr ist.
+// Live bestaetigt: eine solche "versteckte" flexible Baugruppe bleibt fuer immer auf dem Zustand
+// eingefroren, den sie beim letzten (oft fehlgeschlagenen, siehe isRestoring()-bedingtes
+// "no grounded part found" beim allerersten Laden) solve()-Versuch hatte - keine automatische
+// FreeCAD-Touched-Propagation erreicht ein cross-document verlinktes, rigide eingebundenes Objekt.
+// Fix: nach dem eigentlichen solve() dieser Ebene rekursiv (durch ALLE Sub-Assemblies, auch
+// rigide, um dahinter versteckte Ebenen zu erreichen) jede flexible Unterbaugruppe explizit
+// erneut loesen, sobald IRGENDEIN Vorfahre in der Kette rigide ist - genau der Fall, in dem sie
+// von der normalen Joint-Graph-Traversierung sonst nie wieder besucht wird. Eine flexible
+// Unterbaugruppe, die NICHT hinter einer rigiden Ebene versteckt ist, bleibt unveraendert vom
+// bestehenden Mechanismus (isNestedUnderFlexibleParent() + gemeinsamer Joint-Graph) abgedeckt -
+// hier wird sie NICHT zusaetzlich (doppelt) geloest.
+// 'mirrorOfAssembly': die AssemblyLink-Instanz, deren objLinkMap 'assembly's DIREKTE Kinder auf
+// die tatsaechlich im AEUSSERSTEN (Nutzer-sichtbaren) Dokument gerenderten Spiegel abbildet -
+// nullptr bedeutet "wir sind noch nicht ueber eine Verschachtelungsebene gelaufen, 'assembly'
+// selbst ist bereits die direkt sichtbare Instanz". Bei JEDEM Sprung in eine tiefere Ebene muss
+// dieser Bezug durch EXAKT EINEN Schritt durch 'mirrorOfAssembly's eigene objLinkMap uebersetzt
+// werden - der lokale Spiegel eines lokalen Spiegels lebt NICHT im selben Dokument wie das echte
+// verschachtelte Objekt, sondern im Dokument der jeweils AEUSSEREN Instanz (jede AssemblyLink
+// spiegelt nur ihre EIGENEN direkten Kinder, siehe AssemblyLink::synchronizeComponents()).
+void solveHiddenFlexibleUnderRigid(
+    AssemblyObject* assembly,
+    AssemblyLink* mirrorOfAssembly,
+    bool underRigidAncestor
+)
+{
+    if (!assembly) {
+        return;
+    }
+    for (auto* subAssembly : assembly->getSubAssemblies()) {
+        if (!subAssembly) {
+            continue;
+        }
+        AssemblyObject* nested = subAssembly->getLinkedAssembly();
+        if (!nested || nested == assembly) {
+            continue;
+        }
+        bool subIsRigid = subAssembly->isRigid();
+
+        AssemblyLink* mirrorOfSub = subAssembly;
+        if (mirrorOfAssembly) {
+            auto it = mirrorOfAssembly->objLinkMap.find(subAssembly);
+            mirrorOfSub = (it != mirrorOfAssembly->objLinkMap.end())
+                ? freecad_cast<AssemblyLink*>(it->second)
+                : nullptr;
+        }
+
+        if (!subIsRigid && underRigidAncestor) {
+            // Diese flexible Unterbaugruppe ist hinter mindestens einer rigiden Ebene versteckt -
+            // niemand sonst ruft ihren solve() je wieder auf. propagateSolvedPlacementsTo()
+            // braucht 'mirrorOfSub' (nicht 'subAssembly' selbst!), um das frisch geloeste
+            // Placement bis ins tatsaechlich gerenderte Dokument durchzureichen (IdentityGraph
+            // kann das nicht, siehe dessen Kommentar in AssemblyObject.h).
+            nested->solve(false);
+            if (mirrorOfSub) {
+                nested->propagateSolvedPlacementsTo(mirrorOfSub);
+            }
+        }
+        solveHiddenFlexibleUnderRigid(nested, mirrorOfSub, underRigidAncestor || subIsRigid);
+    }
+}
 }  // namespace
 
 int AssemblyObject::solve(bool enableRedo)
@@ -418,7 +529,7 @@ int AssemblyObject::solve(bool enableRedo)
     // Baugruppen ist dadurch oft unklar, ob/wann der Solver ueberhaupt gelaufen ist und was er
     // dabei festgestellt hat (z.B. redundante Joints, siehe Fix 10) - die drei Meldungen unten
     // decken die Fragen "1. gestartet? 2. berechnet? 3. mit welchem Ergebnis?" ab.
-    Base::Console().message("Assembly: Solving '%s'...\n", getFullName());
+    Base::Console().message("Assembly: Solving '{}'...\n", getFullName());
 
     ensureIdentityPlacements();
 
@@ -434,7 +545,7 @@ int AssemblyObject::solve(bool enableRedo)
     if (groundedObjs.empty()) {
         // If no part fixed we can't solve.
         Base::Console().warning(
-            "Assembly: Solve of '%s' skipped - no grounded part found.\n",
+            "Assembly: Solve of '{}' skipped - no grounded part found.\n",
             getFullName()
         );
         return -6;
@@ -479,7 +590,7 @@ int AssemblyObject::solve(bool enableRedo)
     // komma-getrennt in einer Zeile, damit lange Listen im Report View nicht mehr horizontal
     // gescrollt werden muessen.
     Base::Console().message(
-        "Assembly: '%s' computed (%zu joint(s), %zu grounded part(s)):\n",
+        "Assembly: '{}' computed ({} joint(s), {} grounded part(s)):\n",
         getFullName(),
         joints.size(),
         groundedObjs.size()
@@ -488,12 +599,12 @@ int AssemblyObject::solve(bool enableRedo)
         if (!obj) {
             continue;
         }
-        Base::Console().message("Assembly:   grounded part: %s\n", getJointContextName(obj));
+        Base::Console().message("Assembly:   grounded part: {}\n", getJointContextName(obj));
     }
 
     for (const auto& [rep, members] : rigidMembersByRep) {
         Base::Console().message(
-            "Assembly: rigid group '%s' (%zu Teil(e)): %s.\n",
+            "Assembly: rigid group '{}' ({} Teil(e)): {}.\n",
             getJointContextName(rep),
             members.size(),
             joinContextNames(members)
@@ -516,15 +627,21 @@ int AssemblyObject::solve(bool enableRedo)
             names += n;
         }
         Base::Console().warning(
-            "Assembly: Solve of '%s' finished with %zu redundant joint(s): %s.\n",
+            "Assembly: Solve of '{}' finished with {} redundant joint(s): {}.\n",
             getFullName(),
             lastRedundantJoints.size(),
             names
         );
     }
     else {
-        Base::Console().message("Assembly: Solve of '%s' finished successfully.\n", getFullName());
+        Base::Console().message("Assembly: Solve of '{}' finished successfully.\n", getFullName());
     }
+
+    // FCPROJECT-PATCH (2026-09-27, siehe solveHiddenFlexibleUnderRigid()-Kommentar): flexible
+    // Unterbaugruppen hinter einer rigiden Ebene bekommen sonst nie wieder die Chance, sich selbst
+    // zu loesen (z.B. ein drehbarer Motor-Rotor, starr ans Gestell geschraubt) - unabhaengig von
+    // DIESER Ebenes eigenem Erfolg/Misserfolg explizit nachziehen.
+    solveHiddenFlexibleUnderRigid(this, nullptr, false);
 
     return 0;
 }
@@ -1486,6 +1603,35 @@ void AssemblyObject::syncLocalMirrorPlacement(App::DocumentObject* realObj, cons
     }
 }
 
+// FCPROJECT-PATCH (2026-09-27, siehe Deklaration in AssemblyObject.h): siehe dortigen Kommentar
+// fuer die volle Begruendung - schliesst die Spiegel-Sync-Luecke fuer solveHiddenFlexibleUnderRigid().
+void AssemblyObject::propagateSolvedPlacementsTo(AssemblyLink* mirrorLink)
+{
+    if (!mirrorLink) {
+        return;
+    }
+    for (auto& [realObj, data] : objectPartMap) {
+        (void)data;
+        if (!realObj) {
+            continue;
+        }
+        auto it = mirrorLink->objLinkMap.find(realObj);
+        if (it == mirrorLink->objLinkMap.end() || !it->second) {
+            continue;
+        }
+        auto* propPlc = realObj->getPlacementProperty();
+        auto* mirrorPropPlc = it->second->getPlacementProperty();
+        if (!propPlc || !mirrorPropPlc) {
+            continue;
+        }
+        Base::Placement plc = propPlc->getValue();
+        if (!mirrorPropPlc->getValue().isSame(plc)) {
+            mirrorPropPlc->setValue(plc);
+            it->second->purgeTouched();
+        }
+    }
+}
+
 // FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix, 2026-09-03):
 // siehe ausfuehrliche Begruendung am Deklarationsort in AssemblyObject.h.
 bool AssemblyObject::hasRealObject(App::DocumentObject* obj)
@@ -1749,7 +1895,7 @@ std::vector<JointRef> AssemblyObject::getJoints(
         // laufen. Hinter verboseLog, aus demselben CPU-Grund wie oben (preDrag()-Heisspfad).
         if (verboseLog) {
             Base::Console().log(
-                "FCPROJECT-DEBUG getJoints: joint='%s' isError=%d Suppressed=%d\n",
+                "FCPROJECT-DEBUG getJoints: joint='{}' isError={} Suppressed={}\n",
                 joint->getNameInDocument(),
                 joint->isError() ? 1 : 0,
                 (prop && prop->getValue()) ? 1 : 0
@@ -1759,8 +1905,8 @@ std::vector<JointRef> AssemblyObject::getJoints(
             // Filter grounded joints and deactivated joints.
             if (verboseLog) {
                 Base::Console().message(
-                    "Assembly: getJoints('%s') - Joint '%s' uebersprungen (isError=%d, "
-                    "Suppressed=%d).\n",
+                    "Assembly: getJoints('{}') - Joint '{}' uebersprungen (isError={}, "
+                    "Suppressed={}).\n",
                     getFullName(),
                     joint->getNameInDocument(),
                     joint->isError() ? 1 : 0,
@@ -1774,7 +1920,7 @@ std::vector<JointRef> AssemblyObject::getJoints(
         auto* part2 = getMovingPartFromRef(joint, "Reference2");
         if (verboseLog) {
             Base::Console().log(
-                "FCPROJECT-DEBUG getJoints: joint='%s' part1='%s' part2='%s'\n",
+                "FCPROJECT-DEBUG getJoints: joint='{}' part1='{}' part2='{}'\n",
                 joint->getNameInDocument(),
                 part1 ? part1->getFullName().c_str() : "<null>",
                 part2 ? part2->getFullName().c_str() : "<null>"
@@ -1785,8 +1931,8 @@ std::vector<JointRef> AssemblyObject::getJoints(
             // Remove incoherent joints (self-pointing joints)
             if (verboseLog) {
                 Base::Console().message(
-                    "Assembly: getJoints('%s') - Joint '%s' uebersprungen: part1='%s', "
-                    "part2='%s' (unvollstaendig oder BEIDE Referenzen zeigen auf dasselbe "
+                    "Assembly: getJoints('{}') - Joint '{}' uebersprungen: part1='{}', "
+                    "part2='{}' (unvollstaendig oder BEIDE Referenzen zeigen auf dasselbe "
                     "aeussere Bauteil - z.B. weil beide innerhalb derselben Rigid-Unterbaugruppe "
                     "liegen).\n",
                     getFullName(),
@@ -1806,8 +1952,8 @@ std::vector<JointRef> AssemblyObject::getJoints(
             if (proxy->getValue().hasAttr("setJointConnectors")) {
                 if (verboseLog) {
                     Base::Console().message(
-                        "Assembly: getJoints('%s') - Joint '%s' UEBERNOMMEN: part1='%s', "
-                        "part2='%s'.\n",
+                        "Assembly: getJoints('{}') - Joint '{}' UEBERNOMMEN: part1='{}', "
+                        "part2='{}'.\n",
                         getFullName(),
                         joint->getNameInDocument(),
                         part1->getFullName().c_str(),
@@ -1823,7 +1969,7 @@ std::vector<JointRef> AssemblyObject::getJoints(
             }
             else if (verboseLog) {
                 Base::Console().message(
-                    "Assembly: getJoints('%s') - Joint '%s' uebersprungen: Proxy hat keine "
+                    "Assembly: getJoints('{}') - Joint '{}' uebersprungen: Proxy hat keine "
                     "setJointConnectors-Methode (kein normaler beweglicher Joint, z.B. Grounded/"
                     "RigidGroup).\n",
                     getFullName(),
@@ -2333,8 +2479,8 @@ void AssemblyObject::removeUnconnectedJoints(
     // Hier faellt ein Joint raus, wenn eine seiner beiden Seiten NICHT ueber eine Kette von
     // Joints von einem geerdeten Teil aus erreichbar ist (traverseAndMarkConnectedParts()).
     Base::Console().message(
-        "Assembly: removeUnconnectedJoints('%s') - %zu geerdete(s) Teil(e), %zu erreichbare(s) "
-        "Teil(e), pruefe %zu Joint(s).\n",
+        "Assembly: removeUnconnectedJoints('{}') - {} geerdete(s) Teil(e), {} erreichbare(s) "
+        "Teil(e), pruefe {} Joint(s).\n",
         getFullName(),
         canonicalGroundedObjs.size(),
         connectedParts.size(),
@@ -2367,8 +2513,8 @@ void AssemblyObject::removeUnconnectedJoints(
                 bool obj2Connected = isObjInSetOfObjRefs(obj2, connectedParts);
                 if (!obj1Connected || !obj2Connected) {
                     Base::Console().message(
-                        "Assembly: removeUnconnectedJoints('%s') - Joint '%s' entfernt: "
-                        "part1='%s' (erreichbar=%d), part2='%s' (erreichbar=%d).\n",
+                        "Assembly: removeUnconnectedJoints('{}') - Joint '{}' entfernt: "
+                        "part1='{}' (erreichbar={}), part2='{}' (erreichbar={}).\n",
                         getFullName(),
                         joint->getNameInDocument(),
                         obj1 ? obj1->getFullName().c_str() : "<null>",
@@ -2540,7 +2686,7 @@ bool AssemblyObject::isPartConnected(App::DocumentObject* obj, bool verboseLog)
             names += objRef.obj->getFullName();
         }
         Base::Console().log(
-            "FCPROJECT-DEBUG isPartConnected: obj='%s' canonicalObj='%s' -> connectedParts=[%s]\n",
+            "FCPROJECT-DEBUG isPartConnected: obj='{}' canonicalObj='{}' -> connectedParts=[{}]\n",
             obj->getFullName().c_str(),
             canonicalObj ? canonicalObj->getFullName().c_str() : "<null>",
             names.c_str()
@@ -3162,7 +3308,7 @@ std::string AssemblyObject::handleOneSideOfJoint(
 
     if (!part || !obj) {
         Base::Console()
-            .warning("The property %s of Joint %s is bad.\n", propRefName, joint->getFullName());
+            .warning("The property {} of Joint {} is bad.\n", propRefName, joint->getFullName());
         return "";
     }
 
@@ -3502,8 +3648,8 @@ App::DocumentObject* AssemblyObject::canonicalizeForMbDLegacy(App::DocumentObjec
             levelReal = previousLink->getSourceForMirror(mirrorLink);
             if (!levelReal) {
                 Base::Console().warning(
-                    "Assembly: canonicalizeForMbD() - kein Quellobjekt fuer Spiegel '%s' in "
-                    "objLinkMap von '%s' gefunden.\n",
+                    "Assembly: canonicalizeForMbD() - kein Quellobjekt fuer Spiegel '{}' in "
+                    "objLinkMap von '{}' gefunden.\n",
                     mirrorLink->getNameInDocument(),
                     previousLink->getNameInDocument()
                 );
@@ -3680,10 +3826,10 @@ bool AssemblyObject::isMbDJointValid(App::DocumentObject* joint, const std::stri
         std::string sub1 = (prop1 && !prop1->getSubValues().empty()) ? prop1->getSubValues()[0] : std::string("<leer>");
         std::string sub2 = (prop2 && !prop2->getSubValues().empty()) ? prop2->getSubValues()[0] : std::string("<leer>");
         Base::Console().warning(
-            "Assembly: Ignoring joint (%s) because its parts are connected by a fixed "
+            "Assembly: Ignoring joint ({}) because its parts are connected by a fixed "
             "joint bundle. This joint is a conflicting or redundant constraint. "
-            "[FCProject-Diagnose: Reference1 zeigt auf '%s' (Sub-Pfad '%s'), Reference2 auf "
-            "'%s' (Sub-Pfad '%s') - falls die Sub-Pfade unterschiedlich sind, ist das "
+            "[FCProject-Diagnose: Reference1 zeigt auf '{}' (Sub-Pfad '{}'), Reference2 auf "
+            "'{}' (Sub-Pfad '{}') - falls die Sub-Pfade unterschiedlich sind, ist das "
             "vermutlich KEIN echter Konflikt, sondern eine bekannte Solver-Einschraenkung bei "
             "verschachtelten Baugruppen, siehe patches/bugreport-nested-flex-joint-detach/]\n",
             getJointContextName(joint),
@@ -3788,7 +3934,7 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
     MbDPartData data = {mbdPart, Base::Placement(), containerChainPlc};
     objectPartMap[part] = data;  // Store the association
     Base::Console().log(
-        "FCPROJECT-DEBUG getMbDData: NEW mbdPart '%s' for key '%s'\n",
+        "FCPROJECT-DEBUG getMbDData: NEW mbdPart '{}' for key '{}'\n",
         str.c_str(),
         part->getFullName().c_str()
     );
@@ -3903,7 +4049,7 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
                         = {mbdPart, plc.inverse() * plci, partToAddContainerChainPlc};
                     objectPartMap[partToAdd] = partData;  // Store the association
                     Base::Console().log(
-                        "FCPROJECT-DEBUG getMbDData: BUNDLE-FIXED key '%s' -> mbdPart '%s' (via joint '%s')\n",
+                        "FCPROJECT-DEBUG getMbDData: BUNDLE-FIXED key '{}' -> mbdPart '{}' (via joint '{}')\n",
                         partToAdd->getFullName().c_str(),
                         mbdPart->name.c_str(),
                         joint->getFullName().c_str()
@@ -4245,6 +4391,22 @@ void AssemblyObject::syncGroundedJoints()
         }
     }
 
+    // FCPROJECT-PATCH (2026-09-27, siehe collectGroundedPartsRecursive()-Kommentar): NUR fuer die
+    // Entscheidung "braucht dieses Teil einen NEUEN GroundedJoint" massgeblich - erfasst auch
+    // Erdungen, die zwei oder mehr Ebenen tiefer in einer nicht-rigiden Unterbaugruppe bereits
+    // existieren, damit hier keine redundante Zweit-Erdung fuer dasselbe physische Teil entsteht.
+    std::unordered_set<App::DocumentObject*> groundedAnywhere;
+    for (auto* subAssembly : getSubAssemblies()) {
+        if (!subAssembly || subAssembly->isRigid()) {
+            continue;
+        }
+        AssemblyObject* nested = subAssembly->getLinkedAssembly();
+        if (!nested || nested == this) {
+            continue;
+        }
+        collectGroundedPartsRecursive(nested, groundedAnywhere);
+    }
+
     std::vector<App::DocumentObject*> allParts = getAssemblyComponents(this);
 
     for (auto part : allParts) {
@@ -4258,13 +4420,19 @@ void AssemblyObject::syncGroundedJoints()
 
         bool isReadOnly = propPlc->isReadOnly();
         auto it = groundedMap.find(part);
-        bool hasJoint = (it != groundedMap.end());
+        bool hasLocalJoint = (it != groundedMap.end());
+        // FCPROJECT-PATCH (2026-09-27): fuer die Erzeugungs-Entscheidung zaehlt eine Erdung
+        // AN JEDER TIEFE (lokal ODER zwei+ Ebenen tiefer in einer nicht-rigiden Unterbaugruppe) -
+        // siehe collectGroundedPartsRecursive()-Kommentar. Die Loesch-Logik weiter unten bleibt
+        // bewusst bei der rein LOKALEN 'hasLocalJoint'.
+        bool hasJoint = hasLocalJoint || groundedAnywhere.count(part) > 0;
 
-        // Create grounding joint if placement is locked but no joint exists
+        // Create grounding joint if placement is locked but no joint exists (anywhere in the
+        // nesting chain).
         if (isReadOnly && !hasJoint) {
             Base::Console().log(
-                "FCPROJECT-DEBUG: syncGroundedJoints('%s') legt NEUEN GroundedJoint an fuer "
-                "part='%s' (Dokument '%s').\n",
+                "FCPROJECT-DEBUG: syncGroundedJoints('{}') legt NEUEN GroundedJoint an fuer "
+                "part='{}' (Dokument '{}').\n",
                 getFullName(),
                 part->getNameInDocument(),
                 part->getDocument() ? part->getDocument()->getName() : "<null>"
@@ -4340,10 +4508,10 @@ void AssemblyObject::syncGroundedJoints()
         // BEVOR es zu dieser zweiten Bestaetigung kommt. Beim echten Anwendungsfall (Nutzer hebt
         // die Sperre manuell per Rechtsklick auf) bleibt der inkonsistente Zustand dagegen ueber
         // mehrere solve()-Aufrufe hinweg bestehen - dort loescht der zweite Treffer wie bisher.
-        else if (!isReadOnly && hasJoint) {
+        else if (!isReadOnly && hasLocalJoint) {
             if (pendingGroundedJointRemoval.count(part)) {
                 Base::Console().message(
-                    "Assembly: GroundedJoint '%s' fuer Teil '%s' entfernt (Sperre wurde "
+                    "Assembly: GroundedJoint '{}' fuer Teil '{}' entfernt (Sperre wurde "
                     "ueber mehrere Solve-Zyklen hinweg aufgehoben).\n",
                     it->second->getNameInDocument(), part->getNameInDocument()
                 );
