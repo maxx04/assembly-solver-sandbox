@@ -675,17 +675,41 @@ App::DocumentObject* getLinkedObjFromRef(const App::DocumentObject* joint, const
 // Begruendung. Generische Fassung - dies ist seit 2026-09-17 die einzige Implementierung, die
 // AssemblyObject-Fassung darunter ist nur noch ein duenner Wrapper (candidates =
 // solvingAssembly->getSubAssemblies() als oberste Ebene).
-bool hasSiblingInstances(const std::vector<App::DocumentObject*>& candidates, AssemblyLink* asmLink)
+bool hasSiblingInstances(const std::vector<App::DocumentObject*>& candidates, App::DocumentObject* obj)
 {
-    if (!asmLink) {
+    if (!obj) {
         return false;
     }
 
-    if (auto* linkedAssembly = asmLink->getLinkedAssembly()) {
+    if (auto* asmLink = freecad_cast<AssemblyLink*>(obj)) {
+        if (auto* linkedAssembly = asmLink->getLinkedAssembly()) {
+            int matches = 0;
+            for (auto* candidate : candidates) {
+                auto* sibling = freecad_cast<AssemblyLink*>(candidate);
+                if (sibling && sibling->getLinkedAssembly() == linkedAssembly) {
+                    ++matches;
+                    if (matches >= 2) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // FCPROJECT-PATCH (2026-09-26, Nutzerauftrag "Parts haben auch Links" - live an
+        // CNC3018_023_A_Halterbaugruppe gefunden): 'asmLink' hat KEIN eigenes Assembly-Objekt
+        // (getLinkedAssembly() == nullptr) - das trifft auf ein einfaches verlinktes TEIL zu (z.B.
+        // eine Schraube/Scheibe/Mutter), das trotzdem als Assembly::AssemblyLink eingebunden
+        // wurde, nicht nur auf eine Unterbaugruppe. Analoger Geschwister-Check ueber das
+        // gemeinsame LinkedObject statt getLinkedAssembly().
+        auto* linkedObj = asmLink->getLinkedObject(false);
+        if (!linkedObj) {
+            return false;
+        }
         int matches = 0;
         for (auto* candidate : candidates) {
             auto* sibling = freecad_cast<AssemblyLink*>(candidate);
-            if (sibling && sibling->getLinkedAssembly() == linkedAssembly) {
+            if (sibling && sibling->getLinkedObject(false) == linkedObj) {
                 ++matches;
                 if (matches >= 2) {
                     return true;
@@ -695,23 +719,25 @@ bool hasSiblingInstances(const std::vector<App::DocumentObject*>& candidates, As
         return false;
     }
 
-    // FCPROJECT-PATCH (2026-09-26, Nutzerauftrag "Parts haben auch Links" - live an
-    // CNC3018_023_A_Halterbaugruppe gefunden): 'asmLink' hat KEIN eigenes Assembly-Objekt
-    // (getLinkedAssembly() == nullptr) - das trifft auf ein einfaches verlinktes TEIL zu (z.B.
-    // eine Schraube/Scheibe/Mutter), nicht nur auf eine Unterbaugruppe. Bis hierhin lieferte diese
-    // Funktion fuer so ein Teil IMMER false, unabhaengig davon, ob tatsaechlich mehrere Instanzen
-    // desselben Teils nebeneinander liegen (z.B. zwei "M5_Scheibe") - die Duplikations-Erkennung
-    // war unbeabsichtigt auf Unterbaugruppen beschraenkt, obwohl ein einfaches Teil genau
-    // denselben Mechanismus (App::Link -> LinkedObject) fuer Mehrfachverwendung nutzt. Analoger
-    // Geschwister-Check ueber das gemeinsame LinkedObject statt getLinkedAssembly().
-    auto* linkedObj = asmLink->getLinkedObject(false);
-    if (!linkedObj) {
+    // FCPROJECT-PATCH (2026-09-27, Nutzerauftrag "Parts werden genauso an den Solver
+    // weitergegeben wie Assemblies - muessen also genauso auffindbar sein"): 'obj' ist KEIN
+    // Assembly::AssemblyLink - kann ein echtes App::Link sein (Scheibe/Schraube/Nutenstein).
+    // Anders als AssemblyLink hat App::Link ein KORREKT ueberschriebenes getLinkedObject() (siehe
+    // Kommentar in AssemblyLink.h: "Overriding DocumentObject::getLinkedObject is giving bugs" -
+    // das gilt nur fuer AssemblyLink, nicht fuer die echte App::Link-Basisklasse), deshalb reicht
+    // hier der direkte Aufruf ohne Sonderbehandlung.
+    auto* linkedObj = obj->getLinkedObject(false);
+    if (!linkedObj || linkedObj == obj) {
         return false;
     }
     int matches = 0;
     for (auto* candidate : candidates) {
-        auto* sibling = freecad_cast<AssemblyLink*>(candidate);
-        if (sibling && sibling->getLinkedObject(false) == linkedObj) {
+        if (!candidate || freecad_cast<AssemblyLink*>(candidate)) {
+            // AssemblyLink-Kandidaten werden bereits vom Zweig oben abgedeckt - hier nur
+            // echte Nicht-AssemblyLink-Geschwister (z.B. andere Scheiben) zaehlen.
+            continue;
+        }
+        if (candidate->getLinkedObject(false) == linkedObj) {
             ++matches;
             if (matches >= 2) {
                 return true;

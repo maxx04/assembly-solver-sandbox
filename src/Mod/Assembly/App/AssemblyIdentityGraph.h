@@ -79,6 +79,19 @@ struct AssemblyExport IdentityHandle
     App::DocumentObject* templateObj = nullptr;
     std::vector<AssemblyLink*> duplicateInstancePath;
 
+    // Nutzerauftrag 2026-09-27 ("Parts werden genauso an den Solver weitergegeben wie
+    // Assemblies, muessen also genauso auffindbar/unterscheidbar sein"): ein dupliziertes
+    // EINFACHES Teil (App::Link, z.B. Scheibe/Schraube/Nutenstein - KEIN Assembly::AssemblyLink)
+    // kann laut findLocalGroupPath() NIE als durchquerbarer Zwischen-Container auftreten - nur
+    // AssemblyLink wird dort als Container behandelt. Ein Part-Link ist also immer nur das ENDE
+    // eines Pfads, nie eine Zwischenstation. Statt duplicateInstancePath auf App::DocumentObject*
+    // aufzuweiten (was resolve()/resolveJointRef()/refineNestedMirrorTarget() unnoetig mit
+    // anfassen wuerde, obwohl deren eigene Logik die neue Faehigkeit gar nicht braucht), ein
+    // eigenes, einfaches Feld NUR fuer diesen Blatt-Fall: gesetzt, wenn 'obj' selbst ein
+    // dupliziertes einfaches Teil ist. duplicateInstancePath und duplicateLeaf schliessen sich
+    // gegenseitig aus (siehe resolveObjectIn()).
+    App::DocumentObject* duplicateLeaf = nullptr;
+
     bool operator==(const IdentityHandle& other) const;
     bool operator!=(const IdentityHandle& other) const
     {

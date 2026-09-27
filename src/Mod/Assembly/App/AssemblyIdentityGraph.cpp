@@ -219,7 +219,8 @@ App::DocumentObject* refineNestedMirrorTarget(
 
 bool IdentityHandle::operator==(const IdentityHandle& other) const
 {
-    return templateObj == other.templateObj && duplicateInstancePath == other.duplicateInstancePath;
+    return templateObj == other.templateObj && duplicateInstancePath == other.duplicateInstancePath
+        && duplicateLeaf == other.duplicateLeaf;
 }
 
 std::size_t IdentityHandleHash::operator()(const IdentityHandle& h) const
@@ -229,6 +230,7 @@ std::size_t IdentityHandleHash::operator()(const IdentityHandle& h) const
         // Boost-style hash_combine, ohne die Boost-Abhaengigkeit hier zu brauchen.
         seed ^= std::hash<const void*> {}(link) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
     }
+    seed ^= std::hash<const void*> {}(h.duplicateLeaf) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
     return seed;
 }
 
@@ -335,6 +337,10 @@ IdentityHandle IdentityGraph::resolve(App::DocumentObject* obj, const std::strin
             IdentityHandle canonical = resolveObject(obj);
             result.templateObj = canonical.templateObj ? canonical.templateObj : obj;
             duplicatePath = canonical.duplicateInstancePath;
+            // Nutzerauftrag 2026-09-27: resolveObject() kann jetzt auch ein dupliziertes
+            // einfaches Teil (App::Link) melden - siehe IdentityHandle::duplicateLeaf. Das ging
+            // hier bisher verloren, weil nur duplicateInstancePath uebernommen wurde.
+            result.duplicateLeaf = canonical.duplicateLeaf;
         }
         result.duplicateInstancePath = duplicatePath;
         return result;
@@ -408,6 +414,22 @@ bool resolveObjectIn(AssemblyObject* scope, App::DocumentObject* obj, IdentityHa
                     if (auto* linked = objAsLink->getLinkedObject2(false)) {
                         resolved = linked;
                     }
+                }
+            }
+            // Nutzerauftrag 2026-09-27: candidatesFor(scope, nullptr) liefert bei
+            // currentContainer==nullptr NUR scope->getSubAssemblies() (per Definition
+            // AssemblyLink-only, siehe dortiger Kommentar) - ein einfaches Teil wie Scheibe/
+            // Schraube taucht darin NIE auf, auch nicht als Kandidat fuer sich selbst. Fuer den
+            // Part-Zweig deshalb scope->Group.getValues() (ALLE direkten Kinder) verwenden.
+            else if (hasSiblingInstances(scope->Group.getValues(), obj)) {
+                // 'obj' ist ein echtes, dupliziertes einfaches Teil (App::Link, z.B. Scheibe/
+                // Schraube/Nutenstein) - kein AssemblyLink, kann also nie als Zwischen-Container in
+                // duplicateInstancePath auftreten (siehe IdentityHandle::duplicateLeaf-Kommentar
+                // fuer die volle Begruendung). getLinkedObject() ist bei echtem App::Link korrekt
+                // ueberschrieben (anders als bei AssemblyLink).
+                outHandle.duplicateLeaf = obj;
+                if (auto* linked = obj->getLinkedObject(false)) {
+                    resolved = linked;
                 }
             }
             outHandle.templateObj = resolved;
@@ -707,6 +729,10 @@ IdentityHandle IdentityGraph::resolveJointRef(
             IdentityHandle canonical = resolveObject(obj);
             result.templateObj = canonical.templateObj ? canonical.templateObj : obj;
             duplicatePath = canonical.duplicateInstancePath;
+            // Nutzerauftrag 2026-09-27: resolveObject() kann jetzt auch ein dupliziertes
+            // einfaches Teil (App::Link) melden - siehe IdentityHandle::duplicateLeaf. Das ging
+            // hier bisher verloren, weil nur duplicateInstancePath uebernommen wurde.
+            result.duplicateLeaf = canonical.duplicateLeaf;
         }
         result.duplicateInstancePath = duplicatePath;
         return result;
@@ -746,7 +772,7 @@ App::DocumentObject* IdentityGraph::materializeForObjectPartMap(const IdentityHa
     if (!handle.templateObj) {
         return nullptr;
     }
-    if (handle.duplicateInstancePath.empty()) {
+    if (handle.duplicateInstancePath.empty() && !handle.duplicateLeaf) {
         return handle.templateObj;
     }
     auto mirrors = mirrorsOf(handle);
@@ -806,6 +832,13 @@ std::vector<App::DocumentObject*> IdentityGraph::mirrorsOf(const IdentityHandle&
     std::vector<App::DocumentObject*> result;
     if (!h.templateObj) {
         return result;
+    }
+
+    // Nutzerauftrag 2026-09-27: 'duplicateLeaf' ist bei einem duplizierten einfachen Teil (App::Link,
+    // z.B. Scheibe002) gesetzt - dieses Teil selbst IST bereits sein eigener lokaler Spiegel (kein
+    // Container, keine Kinder zum Durchsuchen), analog zum Rigid-Grenz-Sonderfall direkt darunter.
+    if (h.duplicateLeaf) {
+        return {h.duplicateLeaf};
     }
 
     // FCPROJECT-PATCH (2026-09-20, live am echten BG22-Projekt gefunden: verschachtelte
@@ -1343,7 +1376,7 @@ std::string IdentityGraph::exportDot()
         // (duplicateInstancePath nicht leer) zusaetzlich zeigen, von welcher geteilten Vorlage sie
         // abstammt - der "Solver:"-Wert oben ist jetzt bewusst der INSTANZEIGENE Spiegel, diese
         // Zeile macht die gemeinsame Herkunft trotzdem sichtbar.
-        if (!handle.duplicateInstancePath.empty()) {
+        if (!handle.duplicateInstancePath.empty() || handle.duplicateLeaf) {
             text += "<TR><TD ALIGN=\"LEFT\"><FONT POINT-SIZE=\"9\">Template of: "
                 + hexPointer(handle.templateObj) + "</FONT></TD></TR>";
             // Nutzerauftrag 2026-09-27: die reine Adresse allein beantwortet nicht "wovon bin ich
@@ -1405,7 +1438,7 @@ std::string IdentityGraph::exportDot()
             + "</FONT></TD></TR>";
         text += "<TR><TD ALIGN=\"LEFT\"><FONT POINT-SIZE=\"9\">Solver: "
             + hexPointer(solverObj) + "</FONT></TD></TR>";
-        if (!handle.duplicateInstancePath.empty()) {
+        if (!handle.duplicateInstancePath.empty() || handle.duplicateLeaf) {
             text += "<TR><TD ALIGN=\"LEFT\"><FONT POINT-SIZE=\"9\">Template of: "
                 + hexPointer(handle.templateObj) + "</FONT></TD></TR>";
             // Nutzerauftrag 2026-09-27: siehe emitNodeLine() fuer die volle Begruendung - Name UND

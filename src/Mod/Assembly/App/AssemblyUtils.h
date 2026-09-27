@@ -241,9 +241,13 @@ AssemblyExport bool hasSiblingInstances(const AssemblyObject* solvingAssembly, A
 // eingefuegt, muss JEDE Ebene einzeln auf Duplikation geprueft werden, nicht nur die aeusserste).
 // candidates sollte hierfuer 'parentLink->Group.getValues()' sein (die lokalen Spiegel-Kinder
 // DIESER konkreten Instanz), analog zu getSubAssemblies() auf der obersten Ebene.
+// Nutzerauftrag 2026-09-27: 'obj' auf App::DocumentObject* verbreitert (war AssemblyLink*) -
+// erkennt jetzt zusaetzlich Geschwister-Duplikation bei einfachen Teilen (App::Link, z.B.
+// Scheibe/Schraube/Nutenstein), nicht nur bei Assembly::AssemblyLink. Bestehende Aufrufer, die
+// weiterhin AssemblyLink* uebergeben, sind unveraendert kompatibel (impliziter Upcast).
 AssemblyExport bool hasSiblingInstances(
     const std::vector<App::DocumentObject*>& candidates,
-    AssemblyLink* asmLink
+    App::DocumentObject* obj
 );
 
 // Loest Reference1/Reference2 (die pName-Property, ein App::PropertyXLinkSub) des uebergebenen
