@@ -1346,6 +1346,25 @@ std::string IdentityGraph::exportDot()
         if (!handle.duplicateInstancePath.empty()) {
             text += "<TR><TD ALIGN=\"LEFT\"><FONT POINT-SIZE=\"9\">Template of: "
                 + hexPointer(handle.templateObj) + "</FONT></TD></TR>";
+            // Nutzerauftrag 2026-09-27: die reine Adresse allein beantwortet nicht "wovon bin ich
+            // eine Vorlage" - der Name macht sichtbar, ob das Template die tiefste externe Datei
+            // ist oder (wie bei Slot1/Slot2 innerhalb einer Fuerungsbaugruppe) ein Objekt EINE
+            // Ebene hoeher, innerhalb der naechsten gemeinsamen Vorlage.
+            // Nutzerbefund 2026-09-27 (Live-Screenshot BG22/Halterbaugruppe001): der bloße Name
+            // allein ist irrefuehrend - eine lokale Spiegel-Kopie traegt per FreeCAD-Konvention
+            // denselben Namen wie ihr kanonisches Vorbild, obwohl beide in VERSCHIEDENEN
+            // Dokumenten leben (bewiesen: zwei verschiedene reale Instanzen zeigen dieselbe
+            // Template-Adresse, siehe Diskussion) - sieht aber wie "Template von sich selbst" aus.
+            // Dokumentname mit anzeigen loest die Mehrdeutigkeit auf.
+            std::string templateDocName = handle.templateObj->getDocument()
+                ? handle.templateObj->getDocument()->getName()
+                : "?";
+            // Nutzerauftrag 2026-09-27: Zeilenbruch nach "#" fuer Lesbarkeit - Dokumentname und
+            // Objektname koennen beide lang sein, in einer Zeile schwer auseinanderzuhalten.
+            text += "<TR><TD ALIGN=\"RIGHT\"><FONT POINT-SIZE=\"9\">"
+                + htmlEscape(templateDocName) + "#</FONT></TD></TR>";
+            text += "<TR><TD ALIGN=\"RIGHT\"><FONT POINT-SIZE=\"9\">"
+                + htmlEscape(handle.templateObj->getNameInDocument()) + "</FONT></TD></TR>";
         }
         text += "</TABLE>>";
         if (isAssembly) {
@@ -1389,6 +1408,19 @@ std::string IdentityGraph::exportDot()
         if (!handle.duplicateInstancePath.empty()) {
             text += "<TR><TD ALIGN=\"LEFT\"><FONT POINT-SIZE=\"9\">Template of: "
                 + hexPointer(handle.templateObj) + "</FONT></TD></TR>";
+            // Nutzerauftrag 2026-09-27: siehe emitNodeLine() fuer die volle Begruendung - Name UND
+            // Dokument zeigen, da ein Spiegel und sein Vorbild per FreeCAD-Konvention denselben
+            // Namen tragen, aber IMMER in verschiedenen Dokumenten leben (Namenseindeutigkeit gilt
+            // nur pro Dokument) - ohne Dokumentnamen sieht das faelschlich wie Selbstreferenz aus.
+            std::string templateDocName = handle.templateObj->getDocument()
+                ? handle.templateObj->getDocument()->getName()
+                : "?";
+            // Nutzerauftrag 2026-09-27: Zeilenbruch nach "#" fuer Lesbarkeit - Dokumentname und
+            // Objektname koennen beide lang sein, in einer Zeile schwer auseinanderzuhalten.
+            text += "<TR><TD ALIGN=\"RIGHT\"><FONT POINT-SIZE=\"9\">"
+                + htmlEscape(templateDocName) + "#</FONT></TD></TR>";
+            text += "<TR><TD ALIGN=\"RIGHT\"><FONT POINT-SIZE=\"9\">"
+                + htmlEscape(handle.templateObj->getNameInDocument()) + "</FONT></TD></TR>";
         }
         text += "<TR><TD HEIGHT=\"2\"></TD></TR>";
         text += "</TABLE>>;\n";
