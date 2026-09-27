@@ -6,6 +6,15 @@
 #     gegen ein ECHTES Vanilla-Checkout des Ziel-Commits, nicht mehr gegen HEAD - siehe dortige
 #     Kommentare)
 #
+# VANILLA_BASE: dfbb99298d
+# ^ Nutzerauftrag 2026-09-27 ("wer prueft, dass alle Commits im Patch landen?"): der Commit,
+# gegen den die Patches oben den Diff bilden (git diff VANILLA_BASE HEAD -- src/Mod/Assembly
+# src/3rdParty/OndselSolver). check-patches.sh liest diese Zeile automatisch und prueft nach dem
+# sequenziellen Anwenden aller Patches im Wegwerf-Worktree, ob das Ergebnis BYTE-GENAU dem
+# aktuellen committeten Sandbox-Stand entspricht - schlaegt fehl, wenn ein Commit seit
+# VANILLA_BASE nicht (mehr) im Patch erfasst ist. Bei jedem echten Vanilla-Resync (neuer
+# VANILLA_BASE-Commit) diese Zeile mit aktualisieren.
+#
 # Format: eine Zeile = ein Patch-Dateiname (relativ zu patches/), in dieser Reihenfolge
 # anzuwenden. Leerzeilen und Zeilen, die mit # beginnen, werden ignoriert.
 #

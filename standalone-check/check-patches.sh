@@ -62,6 +62,12 @@ fi
 # Liest PATCHES.txt: Leerzeilen und #-Kommentare (auch am Zeilenende) ignorieren.
 mapfile -t PATCHES < <(sed -e 's/#.*$//' -e 's/[[:space:]]*$//' "$PATCHES_LIST" | grep -v '^[[:space:]]*$')
 
+# Nutzerauftrag 2026-09-27 ("wer prueft, dass alle Commits im Patch landen?"): VANILLA_BASE aus
+# PATCHES.txt lesen - der Commit, gegen den die Patches ihren Diff bilden. Ohne diese Zeile
+# (aeltere PATCHES.txt-Version) wird die Vollstaendigkeitspruefung weiter unten uebersprungen,
+# alles andere bleibt unveraendert funktionsfaehig.
+VANILLA_BASE="$(grep -oP '^#\s*VANILLA_BASE:\s*\K\S+' "$PATCHES_LIST" || true)"
+
 echo "== Patches aus PATCHES.txt (sequenziell, im Wegwerf-Worktree gegen Vanilla) =="
 WORKTREE_DIR="$(mktemp -d)"
 cleanup() {
@@ -100,4 +106,40 @@ if [[ $FAIL -ne 0 ]]; then
     echo
     echo "Mindestens ein Patch aus PATCHES.txt passt nicht mehr - siehe FEHLER oben."
     exit 1
+fi
+
+# Nutzerauftrag 2026-09-27: reines "git apply klappt syntaktisch" (oben) beweist NICHT, dass
+# PATCHES.txt auch inhaltlich alle Commits seit VANILLA_BASE erfasst - ein Commit, der schlicht
+# vergessen wurde, in den Patch nachzutragen, waere hier unsichtbar geblieben. Deshalb zusaetzlich
+# das TATSAECHLICHE Ergebnis (Worktree nach allen Patches) byte-genau gegen den aktuellen
+# committeten Sandbox-Stand vergleichen - das ist der eigentliche Beweis.
+echo
+if [[ -z "$VANILLA_BASE" ]]; then
+    echo "== Vollstaendigkeitspruefung uebersprungen (kein 'VANILLA_BASE:'-Eintrag in PATCHES.txt) =="
+else
+    echo "== Vollstaendigkeitspruefung: Ergebnis vs. aktueller committeter Sandbox-Stand =="
+    DIRTY="$(git -C "$SANDBOX_ROOT" status --porcelain -- src/Mod/Assembly src/3rdParty/OndselSolver)"
+    if [[ -n "$DIRTY" ]]; then
+        echo "UEBERSPRUNGEN: uncommittete Aenderungen an src/Mod/Assembly oder" >&2
+        echo "src/3rdParty/OndselSolver - erst committen, dann erneut pruefen:" >&2
+        echo "$DIRTY" >&2
+    else
+        # -x .git/__pycache__: git-fremde Laufzeitartefakte (kompilierter Python-Bytecode-Cache
+        # aus Testlaeufen, nie getrackt) - existieren nur im echten Sandbox-Baum, nie im frischen
+        # Worktree, waeren sonst ein Fehlalarm ohne jeden Bezug zu fehlenden Commits.
+        COMPLETENESS_DIFF="$(diff -rq -x .git -x __pycache__ \
+            "${WORKTREE_DIR}/src/Mod/Assembly" "${SANDBOX_ROOT}/src/Mod/Assembly" 2>&1 || true)"
+        COMPLETENESS_DIFF+=$'\n'"$(diff -rq -x .git -x __pycache__ \
+            "${WORKTREE_DIR}/src/3rdParty/OndselSolver" "${SANDBOX_ROOT}/src/3rdParty/OndselSolver" 2>&1 || true)"
+        COMPLETENESS_DIFF="$(echo "$COMPLETENESS_DIFF" | grep -v '^[[:space:]]*$' || true)"
+        if [[ -n "$COMPLETENESS_DIFF" ]]; then
+            echo "FEHLER: Patches ergeben NICHT denselben Stand wie der aktuelle Commit -" >&2
+            echo "PATCHES.txt ist unvollstaendig/veraltet (ein Commit fehlt vermutlich):" >&2
+            echo "$COMPLETENESS_DIFF" >&2
+            echo >&2
+            echo "Neu generieren mit: git diff ${VANILLA_BASE} -- src/Mod/Assembly src/3rdParty/OndselSolver > patches/<datei>.patch" >&2
+            exit 1
+        fi
+        echo "OK - Patches ergeben exakt den aktuellen committeten Stand (VANILLA_BASE=${VANILLA_BASE})."
+    fi
 fi
