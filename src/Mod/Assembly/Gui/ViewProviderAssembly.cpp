@@ -94,7 +94,8 @@ void printPlacement(Base::Placement plc, const char* name)
     Base::Rotation rot = plc.getRotation();
     rot.getRawValue(axis, angle);
     Base::Console().warning(
-        "placement %s : position (%.1f, %.1f, %.1f) - axis (%.1f, %.1f, %.1f) angle %.1f\n",
+        "placement {} : position ({:.1f}, {:.1f}, {:.1f}) - axis ({:.1f}, {:.1f}, {:.1f}) angle "
+        "{:.1f}\n",
         name,
         pos.x,
         pos.y,
@@ -520,7 +521,7 @@ bool ViewProviderAssembly::mouseMove(const SbVec2s& cursorPos, Gui::View3DInvent
         return tryMouseMove(cursorPos, viewer);
     }
     catch (const Base::Exception& e) {
-        Base::Console().warning("%s\n", e.what());
+        Base::Console().warning("{}\n", e.what());
         return false;
     }
 }
@@ -1170,7 +1171,7 @@ void ViewProviderAssembly::initMove(const SbVec2s& cursorPos, Gui::View3DInvento
         tryInitMove(cursorPos, viewer);
     }
     catch (const Base::Exception& e) {
-        Base::Console().warning("%s\n", e.what());
+        Base::Console().warning("{}\n", e.what());
     }
 }
 
