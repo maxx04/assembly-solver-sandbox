@@ -2315,7 +2315,21 @@ std::unordered_set<App::DocumentObject*> AssemblyObject::fixGroundedParts()
             continue;
         }
 
+        // FCPROJECT-PATCH (2026-09-28, siehe ausfuehrliche Begruendung an
+        // fixGroundedPart()s getMbDPart(obj, alreadyResolved=true)-Aufruf): 'obj' kommt aus der
+        // rekursiven getGroundedParts() - fuer ein Teil, das mehrere echte Dokumentgrenzen tiefer
+        // liegt (z.B. ein Motor-Getriebeteil in einer verschachtelten flexiblen Unterbaugruppe),
+        // ist seine rohe 'Placement'-Property nur LOKAL (relativ zu seinem eigenen Container),
+        // nicht die tatsaechliche Weltposition. Ohne diese Umrechnung bekommt der Ground-Marker
+        // (das Fixierungsziel des Solvers) das FALSCHE Ziel - Newton-Raphson versucht dann, das
+        // (korrekt Welt-positionierte) MbD-Teil auf diese falsche, nur lokale Zielposition
+        // zurueckzuzwingen, was bei ausreichendem Abstand nicht mehr konvergiert.
         Base::Placement plc = getPlacementFromProp(obj, "Placement");
+        IdentityGraph groundChainGraph(this);
+        Base::Placement groundContainerChainPlc = groundChainGraph.containerChainPlacement(obj);
+        if (!groundContainerChainPlc.isIdentity()) {
+            plc = groundContainerChainPlc * plc;
+        }
         if (!groundedTargetObj && explicitlyGroundedTargets.count(obj)) {
             groundedTargetObj = obj;
             groundedTargetPlc = plc;
@@ -2336,7 +2350,21 @@ void AssemblyObject::fixGroundedPart(App::DocumentObject* obj, Base::Placement& 
     auto mbdMarker1 = makeMbdMarker(markerName1, plc);
     mbdAssembly->addMarker(mbdMarker1);
 
-    std::shared_ptr<ASMTPart> mbdPart = getMbDPart(obj);
+    // FCPROJECT-PATCH (2026-09-28, live am echten BG37->BG43(Flexibel)->BG67-Projekt gefunden,
+    // "Solve failed: iterNo > iterMax" bei verschachtelter, nicht-rigider Unterbaugruppe ohne
+    // eigenes verbindendes Gelenk): 'obj' kommt hier bereits als tief aufgeloestes, echtes Objekt
+    // aus der rekursiven getGroundedParts() (siehe deren Kommentar) - ohne alreadyResolved=true
+    // ueberspringt getMbDData() die containerChainPlacement()-Berechnung komplett (bleibt
+    // Identity), das erzeugte MbD-Teil bekommt also die ROHE LOKALE Placement statt der
+    // Welt-Position als Startwert. Da die Erdung VOR der Gelenkverarbeitung laeuft, wird dieser
+    // falsche Eintrag in objectPartMap gecacht - JEDE spaetere Gelenkreferenz auf dasselbe Teil
+    // (z.B. das geerdete Teil ist gleichzeitig auch an einem echten Gelenk beteiligt) findet den
+    // bereits falsch platzierten Eintrag wieder, statt selbst korrekt neu aufzuloesen. Genau
+    // dieser Startwert-Sprung (typischerweise um die volle Container-Kette daneben) reicht aus,
+    // um Newton-Raphson im kombinierten Solve nicht mehr konvergieren zu lassen - waehrend ein
+    // eigenstaendiger Solve DERSELBEN Unterbaugruppe (keine Container-Kette noetig) unveraendert
+    // funktioniert.
+    std::shared_ptr<ASMTPart> mbdPart = getMbDPart(obj, /*alreadyResolved=*/true);
 
     std::string markerName2 = "FixingMarker";
     Base::Placement basePlc = Base::Placement();
@@ -4405,6 +4433,48 @@ void AssemblyObject::syncGroundedJoints()
             continue;
         }
         collectGroundedPartsRecursive(nested, groundedAnywhere);
+    }
+
+    // FCPROJECT-PATCH (2026-09-28, live an BG43/BG67 gefunden, Nutzerauftrag "grounding"): eine
+    // BEREITS bestehende lokale Erdung kann redundant mit der Erdung einer verschachtelten
+    // Unterbaugruppe sein, wenn beide auf dasselbe physische Teil zeigen (z.B. aus der
+    // urspruenglichen "ground first part"-Logik beim ersten Einfuegen einer flexiblen
+    // Unterbaugruppe, siehe CommandInsertLink.py::handleFirstInsertion() - legt bewusst eine
+    // lokale Erdung auf dem lokalen SPIEGEL des internen Erdungsziels an, zusaetzlich zur
+    // ohnehin schon vorhandenen internen Erdung der Unterbaugruppe selbst). Zwei unabhaengige
+    // Erdungen fuer dasselbe physische Teil ueberbestimmen den Solver - live bestaetigt: das
+    // Ergebnis konvergiert dann erst nach einem ZWEITEN Solve-Durchlauf auf den korrekten Wert,
+    // ein einfaches "Datei oeffnen" (nur EIN Durchlauf) bleibt sichtbar falsch stehen (Symptom:
+    // Motorteile/"Frontplatte" bleiben auseinander). Im Unterschied zur Pruefung oben (verhindert
+    // nur die NEUANLAGE einer neuen redundanten Erdung) entfernt dieser Block eine BEREITS
+    // bestehende, historisch angelegte redundante lokale Erdung aktiv - erkannt daran, dass ihr
+    // Ziel via canonicalizeForMbD() auf ein Teil aufloest, das schon anderswo (verschachtelt)
+    // geerdet ist.
+    std::vector<App::DocumentObject*> redundantLocalTargets;
+    for (auto& [target, joint] : groundedMap) {
+        if (!target) {
+            continue;
+        }
+        App::DocumentObject* canonical = canonicalizeForMbD(target);
+        if (canonical && canonical != target && groundedAnywhere.count(canonical)) {
+            redundantLocalTargets.push_back(target);
+        }
+    }
+    for (auto* target : redundantLocalTargets) {
+        auto it = groundedMap.find(target);
+        if (it == groundedMap.end()) {
+            continue;
+        }
+        App::DocumentObject* joint = it->second;
+        Base::Console().warning(
+            "Assembly: '{}' entfernt redundante lokale Erdung '{}' fuer '{}' - dieses Teil ist "
+            "bereits ueber eine verschachtelte Unterbaugruppe geerdet.\n",
+            getFullName(),
+            joint->getNameInDocument(),
+            target->getFullName()
+        );
+        groundedMap.erase(it);
+        getDocument()->removeObject(joint->getNameInDocument());
     }
 
     std::vector<App::DocumentObject*> allParts = getAssemblyComponents(this);
