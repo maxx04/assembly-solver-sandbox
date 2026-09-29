@@ -447,6 +447,48 @@ void collectGroundedPartsRecursive(
     }
 }
 
+// FCPROJECT-PATCH (2026-09-29, live an BG37->BG43->BG67 gefunden, Nutzerauftrag "mit System,
+// nicht nur fuer diese Baugruppe"): Datensammlung fuer die generelle "mehrere unabhaengige
+// Erdungswurzeln im selben Zusammenhangskomponenten"-Erkennung in syncGroundedJoints() (siehe
+// dortiger Kommentar fuer die volle Herleitung). Anders als collectGroundedPartsRecursive() oben
+// (liefert nur die ZIEL-Objekte, fuer die "braucht dieses Teil eine NEUE Erdung"-Entscheidung)
+// liefert diese Funktion zusaetzlich das GroundedJoint-Objekt selbst (zum Abschalten) UND die
+// Verschachtelungstiefe (fuer die Tie-Break-Entscheidung, welche von mehreren kollidierenden
+// Erdungen die massgebliche bleibt).
+struct GroundedRootInfo
+{
+    App::DocumentObject* target;
+    App::DocumentObject* joint;
+    int depth;
+};
+
+void collectGroundedJointsRecursive(
+    AssemblyObject* assembly,
+    std::vector<GroundedRootInfo>& roots,
+    int depth
+)
+{
+    if (!assembly) {
+        return;
+    }
+    for (auto* gJoint : assembly->getGroundedJoints()) {
+        auto* propObj = dynamic_cast<App::PropertyLink*>(gJoint->getPropertyByName("ObjectToGround"));
+        if (propObj && propObj->getValue()) {
+            roots.push_back({propObj->getValue(), gJoint, depth});
+        }
+    }
+    for (auto* subAssembly : assembly->getSubAssemblies()) {
+        if (!subAssembly || subAssembly->isRigid()) {
+            continue;
+        }
+        AssemblyObject* nested = subAssembly->getLinkedAssembly();
+        if (!nested || nested == assembly) {
+            continue;
+        }
+        collectGroundedJointsRecursive(nested, roots, depth + 1);
+    }
+}
+
 // FCPROJECT-PATCH (2026-09-27, live am echten BG37->BG43(Rigid)->BG67(Flexibel, eigener
 // Drehgelenk-Rotor)-Projekt gefunden, "Motor kollabiert"-Bug, Nutzerentscheidung "067 bleibt
 // trotz starrer Elternbaugruppe eigenstaendig loesbar"): getJoints()/getGroundedParts() ueberspringen
@@ -1032,6 +1074,23 @@ bool AssemblyObject::validateNewPlacements()
                 Base::Placement newPlacement = getMbdPlacement(mbdPart);
                 if (!it->second.offsetPlc.isIdentity()) {
                     newPlacement = newPlacement * it->second.offsetPlc;
+                }
+
+                // FCPROJECT-PATCH (2026-09-29, siehe fix-grounded-part-container-chain-
+                // convergence.md - dieselbe Bug-Klasse, hier im Drag-Validierungspfad): 'oldPlc'
+                // ist 'obj's ROHE LOKALE Placement-Property (z.B. der Motor-Stator 048 an seinem
+                // eigenen Ursprung INNERHALB der verschachtelten BG67), waehrend 'newPlacement'
+                // aus dem MbD-Koerper kommt, der bei der Erdung bereits MIT Container-Kette
+                // (alreadyResolved=true, siehe fixGroundedPart()) in WELT-Koordinaten geseedet
+                // wurde. Ohne dieselbe Komposition hier weicht 'oldPlc' IMMER um genau die
+                // Container-Kette (z.B. BG67s eigene Platzierung innerhalb BG43) von
+                // 'newPlacement' ab - jeder einzelne Drag-Schritt eines geerdeten Teils in einer
+                // verschachtelten, nicht-rigiden Unterbaugruppe wird dadurch bedingungslos als
+                // "bewegt" erkannt und verworfen, selbst wenn das Teil sich in Wahrheit ueberhaupt
+                // nicht bewegt hat (live an BG43/BG67 gefunden: 048 blieb rechnerisch fest, wurde
+                // aber bei JEDEM Rotor-Drag-Schritt als "moved" abgelehnt).
+                if (!it->second.containerChainPlc.isIdentity()) {
+                    oldPlc = it->second.containerChainPlc * oldPlc;
                 }
 
                 if (!oldPlc.isSame(newPlacement, Precision::Confusion())) {
@@ -1726,6 +1785,23 @@ App::DocumentObject* AssemblyObject::getJointOfPartConnectingToGround(
         return nullptr;
     }
 
+    // FCPROJECT-PATCH (2026-09-29, BG47-Drag "wird weggezogen" beim direkten Anklicken):
+    // getJointsOfPart(part) kanonisiert 'part' bereits INTERN (siehe dortiger Kommentar), der
+    // Kommentar unten ("'part' ist bereits die instanzeigene, kanonische Identitaet") war daher
+    // nur eine Annahme ueber den Aufrufer, nicht durch diese Funktion selbst sichergestellt - der
+    // Vergleich `part == part1/part2` weiter unten nutzte weiterhin den ROHEN, nicht kanonisierten
+    // Parameter. Bei einem UI-/klick-aufgeloesten 'part', dessen Identitaet von der ueber
+    // resolvePartForMbD() aufgeloesten Kanonischen abweicht (dieselbe Bug-Klasse wie in
+    // getDownstreamParts(), siehe fix-getdownstreamparts-canonicalize-identity.md), schlaegt der
+    // Vergleich fehl und die Funktion liefert faelschlich nullptr - findDragMode() faellt dann auf
+    // den "ungeerdet frei ziehen"-Zweig zurueck, obwohl ein Fixed-Joint zu einem geerdeten
+    // Nachbarn existiert (live beobachtet: BG47 direkt anklicken+ziehen loeste sich vom Rotor,
+    // obwohl derselbe Fixed-Joint beim Ziehen ueber den Rotor korrekt gefunden wird).
+    App::DocumentObject* canonicalPart = canonicalizeForMbD(part);
+    if (!canonicalPart) {
+        canonicalPart = part;
+    }
+
     std::vector<JointRef> joints = getJointsOfPart(part);
 
     for (auto& jr : joints) {
@@ -1739,20 +1815,20 @@ App::DocumentObject* AssemblyObject::getJointOfPartConnectingToGround(
         }
 
         // FCPROJECT-PATCH (2026-09-20, siehe getJointsOfPart()-Deklaration): resolvePartForMbD()
-        // mit demselben nestingPrefix statt der adressierungsblinden getMovingPartFromRef() -
-        // 'part' ist bereits die instanzeigene, kanonische Identitaet (siehe getJointsOfPart()),
-        // der Vergleich muss also denselben Aufloesungsweg fuer part1/part2 nutzen.
+        // mit demselben nestingPrefix statt der adressierungsblinden getMovingPartFromRef().
         App::DocumentObject* part1 = resolvePartForMbD(joint, "Reference1", jr.nestingPrefix);
         App::DocumentObject* part2 = resolvePartForMbD(joint, "Reference2", jr.nestingPrefix);
         if (!part1 || !part2) {
             continue;
         }
 
-        if (part == part1 && isJointConnectingPartToGround(joint, "Reference1", jr.nestingPrefix)) {
+        if (canonicalPart == part1
+            && isJointConnectingPartToGround(joint, "Reference1", jr.nestingPrefix)) {
             name = "Reference1";
             return joint;
         }
-        if (part == part2 && isJointConnectingPartToGround(joint, "Reference2", jr.nestingPrefix)) {
+        if (canonicalPart == part2
+            && isJointConnectingPartToGround(joint, "Reference2", jr.nestingPrefix)) {
             name = "Reference2";
             return joint;
         }
@@ -4157,6 +4233,24 @@ std::vector<ObjRef> AssemblyObject::getDownstreamParts(
         return {};
     }
 
+    // FCPROJECT-PATCH (2026-09-29, BG43/BG47 "Buchse loest sich vom Rotor" beim Drag): 'part'
+    // kommt von Aufrufern wie getUpstreamMovingPart() bewusst als UI-/gerendertes Objekt herein
+    // (siehe dortiger Kommentar - resolveForUi() statt resolveForSolver()), waehrend
+    // getConnectedParts() seine Kanten ueber resolvePartForMbD() bildet (kanonische Identitaet,
+    // z.B. bei einem direkt referenzierten Rotor der lokale Spiegel in BG43 vs. das kanonische
+    // Original in der verschachtelten BG67). Ohne Kanonisierung des Startpunkts hier stimmt
+    // 'part' (Vergleichswert in getConnectedParts()' `obj1 == part`) mit KEINEM Joint-Endpunkt
+    // ueberein, sobald der Startteil bereits im ALLERERSTEN Joint direkt (nicht erst tiefer in
+    // der Traversal) referenziert wird - die Traversal liefert dann faelschlich eine leere
+    // Downstream-Liste, obwohl echte, erreichbare Nachbarn existieren (live an BG47s "StarrerVerbund"-
+    // Fixed-Joint zum Rotor gefunden: getDownstreamParts(rotor, rotorsEigenesRevolute) lieferte []
+    // statt [BG47]). isPartConnected() (dieselbe Traversal-Familie) kanonisiert seinen Eingabewert
+    // bereits genauso - hier fehlte die analoge Behandlung.
+    App::DocumentObject* canonicalPart = canonicalizeForMbD(part);
+    if (!canonicalPart) {
+        canonicalPart = part;
+    }
+
     // First we deactivate the joint
     bool state = false;
     if (joint) {
@@ -4168,12 +4262,12 @@ std::vector<ObjRef> AssemblyObject::getDownstreamParts(
     // JointRef-Vektor statt extractJointObjects() - siehe isPartConnected() fuer die Begruendung.
     std::vector<JointRef> joints = getJoints();
 
-    std::vector<ObjRef> connectedParts = {{part, nullptr}};
-    traverseAndMarkConnectedParts(part, connectedParts, joints);
+    std::vector<ObjRef> connectedParts = {{canonicalPart, nullptr}};
+    traverseAndMarkConnectedParts(canonicalPart, connectedParts, joints);
 
     std::vector<ObjRef> downstreamParts;
     for (auto& parti : connectedParts) {
-        if (!isPartConnected(parti.obj) && (parti.obj != part)) {
+        if (!isPartConnected(parti.obj) && (parti.obj != canonicalPart)) {
             downstreamParts.push_back(parti);
         }
     }
@@ -4435,46 +4529,169 @@ void AssemblyObject::syncGroundedJoints()
         collectGroundedPartsRecursive(nested, groundedAnywhere);
     }
 
-    // FCPROJECT-PATCH (2026-09-28, live an BG43/BG67 gefunden, Nutzerauftrag "grounding"): eine
-    // BEREITS bestehende lokale Erdung kann redundant mit der Erdung einer verschachtelten
-    // Unterbaugruppe sein, wenn beide auf dasselbe physische Teil zeigen (z.B. aus der
-    // urspruenglichen "ground first part"-Logik beim ersten Einfuegen einer flexiblen
-    // Unterbaugruppe, siehe CommandInsertLink.py::handleFirstInsertion() - legt bewusst eine
-    // lokale Erdung auf dem lokalen SPIEGEL des internen Erdungsziels an, zusaetzlich zur
-    // ohnehin schon vorhandenen internen Erdung der Unterbaugruppe selbst). Zwei unabhaengige
-    // Erdungen fuer dasselbe physische Teil ueberbestimmen den Solver - live bestaetigt: das
-    // Ergebnis konvergiert dann erst nach einem ZWEITEN Solve-Durchlauf auf den korrekten Wert,
-    // ein einfaches "Datei oeffnen" (nur EIN Durchlauf) bleibt sichtbar falsch stehen (Symptom:
-    // Motorteile/"Frontplatte" bleiben auseinander). Im Unterschied zur Pruefung oben (verhindert
-    // nur die NEUANLAGE einer neuen redundanten Erdung) entfernt dieser Block eine BEREITS
-    // bestehende, historisch angelegte redundante lokale Erdung aktiv - erkannt daran, dass ihr
-    // Ziel via canonicalizeForMbD() auf ein Teil aufloest, das schon anderswo (verschachtelt)
-    // geerdet ist.
-    std::vector<App::DocumentObject*> redundantLocalTargets;
+    // FCPROJECT-PATCH (2026-09-29, live an BG37->BG43->BG67 gefunden, Nutzerauftrag "mit System,
+    // nicht nur fuer diese Baugruppe"): generelle Erkennung "mehrere unabhaengige Erdungswurzeln
+    // landen im selben Zusammenhangskomponenten" - ersetzt den bisherigen, auf den Sonderfall
+    // "identisches physisches Ziel doppelt geerdet" beschraenkten Block (2026-09-28-Fund).
+    //
+    // Zwei strukturell verschiedene Ausloeser, EINE gemeinsame Erkennung:
+    // (a) Dasselbe physische Teil ist sowohl LOKAL (an dieser Ebene) als auch VERSCHACHTELT
+    //     geerdet - typischerweise ein Nebenprodukt von CommandInsertLink.py::
+    //     handleFirstInsertion()s "ground first part"-Komfortlogik beim ersten Einfuegen einer
+    //     flexiblen Unterbaugruppe (legt eine lokale Erdung auf dem Spiegel des ohnehin schon
+    //     intern geerdeten Ziels an). Hier ist die INNERE (tiefer verschachtelte, urspruenglich
+    //     vom Nutzer/Insert-Mechanismus gesetzte) Erdung die massgebliche - die AEUSSERE, spaeter
+    //     hinzugekommene lokale Kopie ist die ueberzaehlige.
+    // (b) ZWEI VERSCHIEDENE physische Teile sind je EIGENSTAENDIG geerdet (z.B. ein Motorgehaeuse
+    //     innerhalb einer eigens testbaren Unterbaugruppe UND der Maschinenrahmen einer
+    //     uebergeordneten Baugruppe), werden aber durch einen ECHTEN Joint (z.B. eine
+    //     Motor-Rahmen-Verschraubung) nachtraeglich zu EINEM zusammenhaengenden Mechanismus
+    //     verbunden. Live gefunden: BG67s eigene interne Erdung von 048 (Motor-Stator) UND BG37s
+    //     eigene Erdung von 036 (Rahmen), verbunden ueber einen neu hinzugefuegten Fixed-Joint -
+    //     exakt die Topologie aus reference-closed-loop-rotation-ambiguity-32477-addendum.md
+    //     (zwei unabhaengig verankerte Strukturen + Kreuz-Fixed-Joint = nachweislich instabile
+    //     Solver-Wurzelwahl, dort bereits als Bugreport-Addendum eingereicht). Hier ist die
+    //     AEUSSERE (der eigentlichen "Welt" naeherstehende, z.B. der reale Maschinenrahmen)
+    //     Erdung die massgebliche - die TIEFER verschachtelte, urspruenglich nur fuer isolierte
+    //     Tests der Unterbaugruppe gedachte Erdung wird durch die echte externe Befestigung
+    //     ueberfluessig.
+    //
+    // Die Tie-Break-Regel ist deshalb BEWUSST gegensaetzlich zu (a) und (b): bei identischem Ziel
+    // gewinnt die TIEFERE Erdung, bei verschiedenen ueber einen echten Joint verbundenen Zielen
+    // gewinnt die FLACHERE (aeussere) Erdung. Unterscheidbar rein an der Graphtopologie (gleiches
+    // Ziel vs. verschiedene, ueber echte Joints verbundene Ziele) - kein Spezialfall fuer
+    // bestimmte Objektnamen oder Baugruppen.
+    //
+    // WICHTIG (Nutzerauftrag): nie loeschen, nur ueber die vorhandene Suppressed-Eigenschaft
+    // abschalten - der Nutzer moechte eine ueberzaehlige Erdung jederzeit wieder aktivieren
+    // koennen, z.B. wenn eine Unterbaugruppe spaeter wieder eigenstaendig getestet wird.
+    std::vector<GroundedRootInfo> allRoots;
     for (auto& [target, joint] : groundedMap) {
-        if (!target) {
-            continue;
-        }
-        App::DocumentObject* canonical = canonicalizeForMbD(target);
-        if (canonical && canonical != target && groundedAnywhere.count(canonical)) {
-            redundantLocalTargets.push_back(target);
+        if (target) {
+            allRoots.push_back({target, joint, 0});
         }
     }
-    for (auto* target : redundantLocalTargets) {
-        auto it = groundedMap.find(target);
-        if (it == groundedMap.end()) {
+    for (auto* subAssembly : getSubAssemblies()) {
+        if (!subAssembly || subAssembly->isRigid()) {
             continue;
         }
-        App::DocumentObject* joint = it->second;
-        Base::Console().warning(
-            "Assembly: '{}' entfernt redundante lokale Erdung '{}' fuer '{}' - dieses Teil ist "
-            "bereits ueber eine verschachtelte Unterbaugruppe geerdet.\n",
-            getFullName(),
-            joint->getNameInDocument(),
-            target->getFullName()
-        );
-        groundedMap.erase(it);
-        getDocument()->removeObject(joint->getNameInDocument());
+        AssemblyObject* nested = subAssembly->getLinkedAssembly();
+        if (!nested || nested == this) {
+            continue;
+        }
+        collectGroundedJointsRecursive(nested, allRoots, 1);
+    }
+
+    if (allRoots.size() > 1) {
+        std::vector<JointRef> allJoints = getJoints();
+        std::vector<bool> visited(allRoots.size(), false);
+        for (std::size_t i = 0; i < allRoots.size(); ++i) {
+            if (visited[i] || !allRoots[i].target) {
+                continue;
+            }
+            App::DocumentObject* canonicalI = canonicalizeForMbD(allRoots[i].target);
+            if (!canonicalI) {
+                canonicalI = allRoots[i].target;
+            }
+            std::vector<ObjRef> reachable = {{canonicalI, nullptr}};
+            traverseAndMarkConnectedParts(canonicalI, reachable, allJoints);
+
+            std::vector<std::size_t> cluster;
+            bool sameTargetOnly = true;
+            for (std::size_t j = 0; j < allRoots.size(); ++j) {
+                if (visited[j] || !allRoots[j].target) {
+                    continue;
+                }
+                App::DocumentObject* canonicalJ = canonicalizeForMbD(allRoots[j].target);
+                if (!canonicalJ) {
+                    canonicalJ = allRoots[j].target;
+                }
+                if (canonicalJ == canonicalI || isObjInSetOfObjRefs(canonicalJ, reachable)) {
+                    cluster.push_back(j);
+                    visited[j] = true;
+                    if (canonicalJ != canonicalI) {
+                        sameTargetOnly = false;
+                    }
+                }
+            }
+            if (cluster.size() <= 1) {
+                continue;
+            }
+
+            // Tie-break: identisches Ziel -> tiefste Erdung gewinnt; verschiedene, ueber echte
+            // Joints verbundene Ziele -> flachste (aeusserste) Erdung gewinnt.
+            std::size_t keepIdx = cluster[0];
+            for (std::size_t idx : cluster) {
+                bool better = sameTargetOnly ? (allRoots[idx].depth > allRoots[keepIdx].depth)
+                                              : (allRoots[idx].depth < allRoots[keepIdx].depth);
+                if (better) {
+                    keepIdx = idx;
+                }
+            }
+            for (std::size_t idx : cluster) {
+                if (idx == keepIdx) {
+                    continue;
+                }
+                App::DocumentObject* redundantJoint = allRoots[idx].joint;
+                App::DocumentObject* redundantTarget = allRoots[idx].target;
+                if (!redundantJoint || !redundantTarget) {
+                    continue;
+                }
+                // FCPROJECT-PATCH (2026-09-29): GroundedJoint (JointObject.py) hat KEINE
+                // "Suppressed"-Eigenschaft (nur normale Joints) - getJointActivated()/
+                // setJointActivated() greifen hier ins Leere. Der tatsaechliche "Erdungs-Effekt"
+                // ist stattdessen die ReadOnly-Sperre auf ObjectToGround's Placement/LinkPlacement
+                // (siehe JointObject.py GroundedJoint.setReadOnly()) - "abschalten" heisst daher
+                // hier: ueber denselben Proxy-Code-Pfad die Sperre aufheben (Ziel wieder
+                // beschreibbar machen), OHNE das GroundedJoint-Objekt selbst zu loeschen oder eine
+                // neue persistente Eigenschaft anzulegen (Nutzerregel: keine neuen persistenten
+                // Eigenschaften ohne Ruecksprache, siehe feedback-fcstd-compatibility-mandatory).
+                // Da diese Entscheidung bei JEDEM solve() aus der aktuellen Joint-Topologie neu
+                // hergeleitet wird (nicht persistiert), ist sie automatisch reversibel: entfaellt
+                // die aeussere Verbindung wieder, faellt auch die Abschaltung beim naechsten
+                // solve() weg und die bestehende "braucht dieses Teil eine neue Erdung"-Logik
+                // weiter unten uebernimmt wieder.
+                auto* targetPlc = redundantTarget->getPlacementProperty();
+                if (!targetPlc || !targetPlc->isReadOnly()) {
+                    continue;  // bereits abgeschaltet (oder nie aktiv)
+                }
+                Base::Console().warning(
+                    "Assembly: '{}' schaltet redundante Erdung '{}' (Ziel '{}') ab - {} bereits "
+                    "mit der massgeblichen Erdung '{}' (Ziel '{}') verbunden.\n",
+                    getFullName(),
+                    redundantJoint->getFullName(),
+                    redundantTarget->getFullName(),
+                    sameTargetOnly ? "dasselbe physische Teil ist" : "dieses Teil ist ueber einen echten Joint",
+                    allRoots[keepIdx].joint ? allRoots[keepIdx].joint->getFullName() : "?",
+                    allRoots[keepIdx].target->getFullName()
+                );
+
+                Base::PyGILStateLocker lock;
+                try {
+                    App::Document* jointDoc = redundantJoint->getDocument();
+                    if (jointDoc) {
+                        std::string jointDocName = jointDoc->getName();
+                        std::string jointName = redundantJoint->getNameInDocument();
+                        std::string code = "import FreeCAD\n"
+                                           "try:\n"
+                                           "    doc = FreeCAD.getDocument('"
+                            + jointDocName
+                            + "')\n"
+                              "    j = doc.getObject('"
+                            + jointName
+                            + "')\n"
+                              "    if j and hasattr(j, 'Proxy') and hasattr(j.Proxy, 'setReadOnly'):\n"
+                              "        j.Proxy.setReadOnly(j, False)\n"
+                              "except Exception as e:\n"
+                              "    FreeCAD.Console.PrintError(str(e) + '\\n')\n";
+                        Base::Interpreter().runString(code.c_str());
+                    }
+                }
+                catch (...) {
+                }
+                groundedMap.erase(redundantTarget);
+            }
+        }
     }
 
     std::vector<App::DocumentObject*> allParts = getAssemblyComponents(this);
