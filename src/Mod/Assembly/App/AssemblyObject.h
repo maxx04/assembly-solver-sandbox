@@ -620,19 +620,6 @@ private:
 
     std::vector<std::pair<App::DocumentObject*, Base::Placement>> previousPositions;
 
-    // FCPROJECT-PATCH (Root-Cause-Fix, solver-root-cause-fix): syncGroundedJoints() loeschte
-    // bisher ein GroundedJoint-Objekt sofort beim ERSTEN solve()-Aufruf, der ein
-    // nicht-ReadOnly Placement bei gleichzeitig noch existierendem GroundedJoint sieht. Das
-    // triff faelschlich zu, wenn der ganz frueh (waehrend/kurz nach dem Dokument-Restore per
-    // onChanged(&Group) ausgeloeste) solve()-Aufruf schneller laeuft als
-    // GroundedJoint.onDocumentRestored() (Python), das das ReadOnly-Flag neu setzt - eine
-    // echte Race Condition, siehe patches/bugreport-groundedjoint-deletion-race/Questions.md.
-    // Dieses Set verlangt eine ZWEITE Bestaetigung in einem SPAETEREN solve()-Aufruf, bevor
-    // tatsaechlich geloescht wird - harmlos fuer den echten Anwendungsfall (Nutzer hebt die
-    // Sperre manuell auf: der inkonsistente Zustand bleibt ueber mehrere solve()-Aufrufe
-    // hinweg bestehen), verhindert aber den einmaligen Race-Treffer beim Laden.
-    std::unordered_set<App::DocumentObject*> pendingGroundedJointRemoval;
-
     bool bundleFixed;
 
     // Siehe setActiveEditContext()-Deklaration weiter oben.

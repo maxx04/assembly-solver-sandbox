@@ -4710,8 +4710,7 @@ void AssemblyObject::syncGroundedJoints()
         bool hasLocalJoint = (it != groundedMap.end());
         // FCPROJECT-PATCH (2026-09-27): fuer die Erzeugungs-Entscheidung zaehlt eine Erdung
         // AN JEDER TIEFE (lokal ODER zwei+ Ebenen tiefer in einer nicht-rigiden Unterbaugruppe) -
-        // siehe collectGroundedPartsRecursive()-Kommentar. Die Loesch-Logik weiter unten bleibt
-        // bewusst bei der rein LOKALEN 'hasLocalJoint'.
+        // siehe collectGroundedPartsRecursive()-Kommentar.
         bool hasJoint = hasLocalJoint || groundedAnywhere.count(part) > 0;
 
         // Create grounding joint if placement is locked but no joint exists (anywhere in the
@@ -4724,9 +4723,6 @@ void AssemblyObject::syncGroundedJoints()
                 part->getNameInDocument(),
                 part->getDocument() ? part->getDocument()->getName() : "<null>"
             );
-            // Konsistenter Zustand (oder Selbstheilung greift) - ein evtl. anhaengiger
-            // Loesch-Verdacht von einem frueheren Aufruf ist damit hinfaellig.
-            pendingGroundedJointRemoval.erase(part);
 
             Base::PyGILStateLocker lock;
             try {
@@ -4784,36 +4780,18 @@ void AssemblyObject::syncGroundedJoints()
             catch (...) {
             }
         }
-        // Delete grounding joint if placement lock was lifted - aber erst nach einer zweiten
-        // Bestaetigung in einem SPAETEREN solve()-Aufruf (siehe Kommentar bei
-        // pendingGroundedJointRemoval in AssemblyObject.h). Das faengt die Race Condition ab,
-        // bei der der ganz fruehe, durch onChanged(&Group) waehrend des Dokument-Restores
-        // ausgeloeste solve()-Aufruf schneller laeuft als GroundedJoint.onDocumentRestored()
-        // (Python), das das ReadOnly-Flag neu setzt: bei einem einmaligen Race-Treffer ist das
-        // Flag spaetestens beim naechsten solve() korrekt gesetzt, der Verdacht wird dann durch
-        // den ersten if-Zweig oben (isReadOnly && !hasJoint faellt weg) wieder ausgeraeumt,
-        // BEVOR es zu dieser zweiten Bestaetigung kommt. Beim echten Anwendungsfall (Nutzer hebt
-        // die Sperre manuell per Rechtsklick auf) bleibt der inkonsistente Zustand dagegen ueber
-        // mehrere solve()-Aufrufe hinweg bestehen - dort loescht der zweite Treffer wie bisher.
-        else if (!isReadOnly && hasLocalJoint) {
-            if (pendingGroundedJointRemoval.count(part)) {
-                Base::Console().message(
-                    "Assembly: GroundedJoint '{}' fuer Teil '{}' entfernt (Sperre wurde "
-                    "ueber mehrere Solve-Zyklen hinweg aufgehoben).\n",
-                    it->second->getNameInDocument(), part->getNameInDocument()
-                );
-                getDocument()->removeObject(it->second->getNameInDocument());
-                pendingGroundedJointRemoval.erase(part);
-            }
-            else {
-                pendingGroundedJointRemoval.insert(part);
-            }
-        }
-        else {
-            // Konsistenter Zustand (isReadOnly && hasJoint, oder !isReadOnly && !hasJoint) -
-            // ein evtl. anhaengiger Loesch-Verdacht ist hinfaellig.
-            pendingGroundedJointRemoval.erase(part);
-        }
+        // FCPROJECT-PATCH (2026-10-02, live an BG43->BG47 gefunden, Nutzerauftrag "nichts
+        // loeschen, deaktivieren"): frueher wurde ein GroundedJoint, dessen Ziel nicht (mehr)
+        // ReadOnly ist, hier nach zwei bestaetigenden solve()-Aufrufen geloescht. Das widersprach
+        // der Regel direkt oberhalb in dieser Funktion (Doppel-Anker-Erkennung: "nie loeschen,
+        // nur abschalten") - sobald die Doppel-Anker-Erkennung ein verschachteltes GroundedJoint
+        // deaktiviert (ReadOnly=false setzt), loeschte dieser Zweig es beim naechsten eigenen
+        // solve() der betroffenen Unterbaugruppe wieder permanent (live reproduziert: BG47s
+        // eigenes GroundedJoint verschwand nach zwei solve()-Aufrufen auf BG47 selbst). Ein
+        // GroundedJoint, dessen Ziel nicht ReadOnly ist, hat ohnehin keine Wirkung auf den Solve -
+        // es muss nicht zusaetzlich aus dem Dokument entfernt werden, weder wenn die Entsperrung
+        // von der Doppel-Anker-Erkennung noch wenn sie von einem manuellen Rechtsklick des
+        // Nutzers stammt. Kein Loesch-Zweig mehr noetig.
     }
 }
 

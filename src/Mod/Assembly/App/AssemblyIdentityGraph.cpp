@@ -837,8 +837,42 @@ std::vector<App::DocumentObject*> IdentityGraph::mirrorsOf(const IdentityHandle&
     // Nutzerauftrag 2026-09-27: 'duplicateLeaf' ist bei einem duplizierten einfachen Teil (App::Link,
     // z.B. Scheibe002) gesetzt - dieses Teil selbst IST bereits sein eigener lokaler Spiegel (kein
     // Container, keine Kinder zum Durchsuchen), analog zum Rigid-Grenz-Sonderfall direkt darunter.
+    //
+    // FCPROJECT-PATCH (2026-10-02, live an BG43->BG47->046/046001 gefunden, Nutzeranforderung
+    // "Original-Objekt darf in der Baugruppe nie als Identitaet auftauchen", siehe
+    // requirement-original-template-plc-never-changed-Memory): der obige Kurzschluss allein
+    // uebersieht einen Fall - 'h.duplicateLeaf' (hier: 046, direkt in BG47s eigener Group
+    // gefunden) kann SELBST innerhalb einer verschachtelten, NICHT duplizierten Unterbaugruppe
+    // (BG47) liegen, die ihrerseits noch eine EIGENE lokale Spiegelkopie in 'rootAssembly' (BG43)
+    // hat (z.B. weil BG43 BG47 als flexible AssemblyLink einbindet). Diese lokale Spiegelkopie
+    // (046-Mirror in BG43) loest beim normalen Aufloesen (ueber path.back()->getSourceForMirror(),
+    // NICHT ueber den Duplikat-Zweig oben, weil IHR Pfad durch den Container BG47 fuehrt statt
+    // direkt in dessen Group zu landen) korrekt auf 'h.duplicateLeaf' selbst auf (templateObj ==
+    // h.duplicateLeaf, kein eigenes duplicateLeaf gesetzt) - wird aber vom obigen Kurzschluss nie
+    // gefunden, weil der nur den bereits bekannten Eintrag selbst zurueckgibt. Ohne diese
+    // Ergaenzung bekommt die lokale Spiegelkopie nie ihre geloeste Placement (live bestaetigt:
+    // "schwebende" Madenschrauben trotz korrekter Werte im nativen Dokument). Zwei unabhaengig
+    // positionierte Teile, die zufaellig dieselbe Geometrie-Vorlage teilen (wie 046/046001), sind
+    // KEINE gemeinsame Identitaet - deshalb der Filter 'candidateHandle.duplicateLeaf == nullptr'
+    // (schliesst z.B. 046001s eigenen Spiegel sicher aus, auch ohne dass dessen templateObj -
+    // die geteilte Rohvorlage - je zufaellig mit h.duplicateLeaf uebereinstimmen koennte).
     if (h.duplicateLeaf) {
-        return {h.duplicateLeaf};
+        std::vector<App::DocumentObject*> dupResult = {h.duplicateLeaf};
+        std::vector<App::DocumentObject*> dupSearchRoots = rootAssembly->Group.getValues();
+        std::vector<App::DocumentObject*> dupCandidates;
+        for (auto* root : dupSearchRoots) {
+            collectCandidates(root, dupCandidates);
+        }
+        for (auto* candidate : dupCandidates) {
+            if (!candidate || candidate == h.duplicateLeaf) {
+                continue;
+            }
+            IdentityHandle candidateHandle = resolveObject(candidate);
+            if (!candidateHandle.duplicateLeaf && candidateHandle.templateObj == h.duplicateLeaf) {
+                dupResult.push_back(candidate);
+            }
+        }
+        return dupResult;
     }
 
     // FCPROJECT-PATCH (2026-09-20, live am echten BG22-Projekt gefunden: verschachtelte
