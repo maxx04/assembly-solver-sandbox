@@ -40,8 +40,14 @@
 # Commit, der src/Mod/Assembly oder src/3rdParty/OndselSolver aendert, sollte zeitnah in diesen
 # Patch eingepflegt werden (durch Neu-Export von "git diff <letzter-Vanilla-Sync> HEAD -- ..."),
 # statt wieder Monate lang auseinanderlaufen zu lassen.
+#
+# 2026-10-03: Patch neu generiert (umbenannt von 2026.09.27- auf 2026.10.03-), um 4 seit dem
+# letzten Export entstandene Commits nachzutragen (GroundedJoint-Loesch/Deaktivier-Konflikt,
+# BG47-Drag-Identitaetsluecken + Doppel-Anker-Erkennung, geerdetes Teil ohne Container-Kette,
+# flexible Unterbaugruppe hinter rigider Ebene/"Motor kollabiert"). VANILLA_BASE bleibt
+# 454a4b82ce (kein neuer Vanilla-Resync, nur Nachtrag).
 
-2026.09.27-freecad-assembly-full-resync.patch
+2026.10.03-freecad-assembly-full-resync.patch
 
 # NICHT in obiger Liste, weil nicht auf DIESE Sandbox anwendbar (betrifft src/App/*, hier
 # per Sparse-Checkout gar nicht ausgecheckt - nur src/Mod/Assembly + src/3rdParty/

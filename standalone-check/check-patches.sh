@@ -25,15 +25,15 @@
 # aus PATCHES.txt, danach der Worktree rueckstandslos wieder entfernt.
 #
 # Aufruf: ./check-patches.sh <SANDBOX_ROOT> [ZIEL_COMMIT]
-# ZIEL_COMMIT default: aktueller HEAD von /home/maxx/freecad/freecad-source (wie
-# update-sandbox.sh es per Default auch waehlt) - explizit ueberschreibbar als 2. Argument.
+# ZIEL_COMMIT default: aktueller HEAD von origin/main im SANDBOX_ROOT selbst (wie
+# update-sandbox.sh es per Default seit dem FCPROJECT-PATCH 2026-10-03 auch waehlt - KEIN
+# externes Verzeichnis mehr, siehe Kommentar dort) - explizit ueberschreibbar als 2. Argument.
 
 set -euo pipefail
 
 SANDBOX_ROOT="${1:?Aufruf: $0 <SANDBOX_ROOT> [ziel-commit]}"
 PATCHES_DIR="${SANDBOX_ROOT}/patches"
 PATCHES_LIST="${PATCHES_DIR}/PATCHES.txt"
-FREECAD_SOURCE_DIR="/home/maxx/freecad/freecad-source"
 
 if [[ ! -f "$PATCHES_LIST" ]]; then
     echo "FEHLER: ${PATCHES_LIST} nicht gefunden." >&2
@@ -42,12 +42,8 @@ fi
 
 TARGET_COMMIT="${2:-}"
 if [[ -z "$TARGET_COMMIT" ]]; then
-    if [[ ! -d "$FREECAD_SOURCE_DIR/.git" ]]; then
-        echo "FEHLER: kein Ziel-Commit angegeben und ${FREECAD_SOURCE_DIR} ist kein Git-Repo -" >&2
-        echo "entweder freecad-source pruefen oder Ziel-Commit explizit als 2. Argument angeben." >&2
-        exit 1
-    fi
-    TARGET_COMMIT="$(git -C "$FREECAD_SOURCE_DIR" rev-parse HEAD)"
+    git -C "$SANDBOX_ROOT" fetch origin
+    TARGET_COMMIT="$(git -C "$SANDBOX_ROOT" rev-parse origin/main)"
 fi
 echo "Vanilla-Ziel-Commit: ${TARGET_COMMIT}"
 

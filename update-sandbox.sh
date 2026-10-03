@@ -11,17 +11,31 @@
 # (sonst wuerde Schritt 1 sie als "unerwartete lokale Aenderungen" werten und
 # der Sync bricht ab), dann syncen, dann neu anwenden.
 #
+# FCPROJECT-PATCH (2026-10-03, Nutzerauftrag "sandbox soll eigene source benutzen" - live
+# aufgetreten: FCProjects VOELLIG SEPARATES update-and-rebuild-freecad.sh hat
+# /home/maxx/freecad/freecad-source weiterbewegt, wodurch ein DANACH ohne Zielcommit gestartetes
+# update-sandbox.sh hier automatisch auf diesen - fuer UNS nie geplanten - neuen Stand resyncte):
+# der Zielcommit-Default kommt jetzt AUSSCHLIESSLICH aus UNSEREM EIGENEN "origin"-Remote (frisch
+# gefetcht, siehe Schritt 1/9 unten) - KEIN externes Verzeichnis (weder FCProjects eigener
+# freecad-source-Checkout noch unser eigener, oft veralteter Build-Baum unter
+# /home/maxx/freecad-sandbox/freecad-source - LETZTERER scheidet ohnehin aus, weil dessen
+# src/Mod/Assembly + src/3rdParty/OndselSolver selbst nur Symlinks HIERHER sind, siehe
+# SANDBOX_BUILD_DIR weiter unten) wird dafuer noch gelesen. Dadurch kann ein Update in einem
+# komplett anderen, nur zufaellig aehnlich benannten Projekt unseren Sync-Zielpunkt nicht mehr
+# beeinflussen.
+#
 # Ablauf:
-#   1. Alle von patches/PATCHES.txt betroffenen Dateien auf den zuletzt
+#   1. git fetch origin - danach Zielcommit-Default (falls keiner als Argument angegeben wurde):
+#      HEAD von origin/main in UNSEREM EIGENEN Repo, kein externes Verzeichnis involviert.
+#   2. Alle von patches/PATCHES.txt betroffenen Dateien auf den zuletzt
 #      committeten Stand zuruecksetzen (git checkout --), damit sie den
 #      Sync nicht blockieren. Patches selbst bleiben unangetastet (liegen
 #      als eigene Dateien in patches/, nicht betroffen).
-#   2. Sicherstellen, dass danach keine UNERWARTETEN lokalen Aenderungen an
+#   3. Sicherstellen, dass danach keine UNERWARTETEN lokalen Aenderungen an
 #      getrackten Dateien mehr vorliegen - Abbruch statt stillschweigendem
 #      Ueberschreiben. Bekannte, harmlose Submodul-Dirty-Eintraege
 #      (OndselSolver, falls dort gerade experimentiert wird) werden
 #      ausgefiltert statt als Fehler behandelt.
-#   3. git fetch origin.
 #   4. src/Mod/Assembly + src/3rdParty/OndselSolver per PFAD-BESCHRAENKTEM
 #      "git checkout <Zielcommit> -- <pfade>" auf den Zielcommit bringen -
 #      NIEMALS ein volles "git checkout <Zielcommit>" (siehe Kommentar an
@@ -29,10 +43,7 @@
 #      standalone-check/ etc. aus dem Arbeitsverzeichnis verschwinden
 #      lassen, weil die nur auf unserem Branch existieren, nicht in
 #      FreeCADs eigener Historie). HEAD bleibt dabei auf solver-sandbox,
-#      kein detached HEAD. Zielcommit-Default: automatisch der aktuelle
-#      HEAD-Commit von /home/maxx/freecad/freecad-source (damit Diffs 1:1
-#      vergleichbar bleiben, siehe SANDBOX_NOTES.md), per Argument
-#      ueberschreibbar.
+#      kein detached HEAD.
 #   5. git submodule update --init -- src/3rdParty/OndselSolver.
 #   6. Alle Patches aus patches/PATCHES.txt in der dort angegebenen
 #      Reihenfolge neu anwenden. Bricht bei JEDEM Patch, der nicht mehr
@@ -41,7 +52,12 @@
 #      dann NICHT versucht (koennten vom fehlgeschlagenen abhaengen).
 #   7. Zusammenfassung: was sich in src/Mod/Assembly geaendert hat, plus
 #      Hinweis auf naechste Schritte (Build+Deploy, Kinematik-Tests).
-#   8. standalone-check/check-neon-sync.sh (rein lesend, siehe dortiger
+#   8. Eigenen Build-Baum (SANDBOX_BUILD_DIR, falls vorhanden) komplett auf
+#      denselben Zielcommit bringen - dort sind nur src/Mod/Assembly +
+#      src/3rdParty/OndselSolver Symlinks hierher, der Rest von FreeCAD ist
+#      ein eigener, sonst unbemerkt wegdriftender Checkout (siehe Kommentar
+#      an der Stelle im Skript).
+#   9. standalone-check/check-neon-sync.sh (rein lesend, siehe dortiger
 #      Kommentar): prueft nebenbei, ob die eigene Neon-Qt6/PySide6/Shiboken6-
 #      Umgebung noch dem aktuellen Stand des Neon-Repos entspricht - FreeCADs
 #      eigenes CI-Skript pinnt dort selbst keine Version, "synchron mit
@@ -49,7 +65,7 @@
 #      Update, nur ein Hinweis.
 #
 # Aufruf:
-#   ./update-sandbox.sh                     # Zielcommit = aktueller freecad-source-HEAD
+#   ./update-sandbox.sh                     # Zielcommit = aktueller HEAD von origin/main
 #   ./update-sandbox.sh <commit-hash>       # expliziter Zielcommit
 #   ./update-sandbox.sh --dry-run           # nur anzeigen, was passieren wuerde
 #   ./update-sandbox.sh --dry-run <commit>  # Kombination (Reihenfolge der Argumente egal)
@@ -58,16 +74,13 @@
 set -euo pipefail
 
 SANDBOX_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FREECAD_SOURCE_DIR="/home/maxx/freecad/freecad-source"
-# Nutzerauftrag 2026-09-27 ("wo sind die 940 Commits?" / "wir loesen uns vom Vanilla-Stand"):
-# NICHT zu verwechseln mit FREECAD_SOURCE_DIR oben (das ist FCProjects eigener Checkout, dient
-# hier nur als Referenz fuer den TARGET_COMMIT-Default) - SANDBOX_BUILD_DIR ist UNSER EIGENER
-# Build-Baum (CMake Tools baut gegen dieses Verzeichnis, siehe Memory
-# "standalone-check-cmake-compile-verify"). src/Mod/Assembly + src/3rdParty/OndselSolver sind
-# dort als Symlinks auf SANDBOX_DIR eingerichtet (automatisch synchron, kein eigener Sync-Schritt
-# noetig) - der REST von FreeCAD dort (App-Kern, Sketcher, Gui usw.) wird sonst NIE aktualisiert
-# und drohte unbemerkt vom eigentlichen Vanilla-Ziel wegzudriften (live gefunden: 943 Commits
-# Rueckstand).
+# Nur noch fuer Schritt 8/9 (Build-Baum-Mitsynchronisierung) gebraucht - NICHT mehr fuer den
+# Zielcommit-Default (siehe Kommentar oben am Dateianfang, Nutzerauftrag 2026-10-03).
+# src/Mod/Assembly + src/3rdParty/OndselSolver sind dort als Symlinks auf SANDBOX_DIR
+# eingerichtet (automatisch synchron, kein eigener Sync-Schritt dafuer noetig) - der REST von
+# FreeCAD dort (App-Kern, Sketcher, Gui usw.) ist ein EIGENER, nicht automatisch
+# aktualisierter Checkout, der sonst unbemerkt vom Vanilla-Ziel wegdriftet (live gefunden:
+# 943 Commits Rueckstand, 2026-09-27) - deshalb wird er hier explizit mitgezogen.
 SANDBOX_BUILD_DIR="/home/maxx/freecad-sandbox/freecad-source"
 PATCHES_DIR="${SANDBOX_DIR}/patches"
 PATCHES_LIST="${PATCHES_DIR}/PATCHES.txt"
@@ -107,17 +120,17 @@ if [[ ! -f "$PATCHES_LIST" ]]; then
 fi
 mapfile -t PATCHES < <(read_patch_list)
 
+log "Schritt 1/9: git fetch origin (+ Zielcommit-Default aus origin/main, falls keiner angegeben)"
+# FCPROJECT-PATCH 2026-10-03: kein externes Verzeichnis mehr als Referenz - stattdessen
+# immer frisch vom eigenen origin-Remote fetchen, dann ggf. daraus den Default ableiten.
+run git fetch origin
 if [[ -z "$TARGET_COMMIT" ]]; then
-  if [[ ! -d "$FREECAD_SOURCE_DIR/.git" ]]; then
-    echo "FEHLER: kein Zielcommit angegeben und FREECAD_SOURCE_DIR (${FREECAD_SOURCE_DIR})" >&2
-    echo "ist kein Git-Repo - entweder freecad-source pruefen oder Zielcommit explizit angeben." >&2
-    exit 1
-  fi
-  TARGET_COMMIT="$(git -C "$FREECAD_SOURCE_DIR" rev-parse HEAD)"
-  echo "Kein Zielcommit angegeben - nehme aktuellen HEAD von freecad-source: ${TARGET_COMMIT}"
+  # git rev-parse selbst ist rein lesend und laeuft deshalb auch im --dry-run echt mit.
+  TARGET_COMMIT="$(git rev-parse origin/main)"
+  echo "Kein Zielcommit angegeben - nehme aktuellen HEAD von origin/main: ${TARGET_COMMIT}"
 fi
 
-log "Schritt 1/9: von PATCHES.txt betroffene Dateien zuruecksetzen (damit sie den Sync nicht blockieren)"
+log "Schritt 2/9: von PATCHES.txt betroffene Dateien zuruecksetzen (damit sie den Sync nicht blockieren)"
 # Dateiliste dynamisch aus den Patches selbst ableiten (jede "+++ b/<pfad>"-Zeile) statt
 # manuell gepflegt - bleibt automatisch aktuell, wenn PATCHES.txt sich aendert.
 PATCHED_FILES=()
@@ -134,7 +147,7 @@ for f in "${PATCHED_FILES[@]}"; do
   [[ -f "$f" ]] && run git checkout -- "$f"
 done
 
-log "Schritt 2/9: pruefe auf unerwartete lokale Aenderungen an getrackten Dateien"
+log "Schritt 3/9: pruefe auf unerwartete lokale Aenderungen an getrackten Dateien"
 KNOWN_DIRTY=("src/3rdParty/OndselSolver")
 UNEXPECTED=""
 while IFS= read -r line; do
@@ -151,9 +164,6 @@ if [[ -n "$UNEXPECTED" && $DRY_RUN -eq 0 ]]; then
   echo "(Erst manuell klaeren/sichern - z.B. git stash oder git checkout -- <Datei> - dann erneut starten.)" >&2
   exit 1
 fi
-
-log "Schritt 3/9: git fetch origin"
-run git fetch origin
 
 BEFORE="$(git rev-parse HEAD)"
 log "Schritt 4/9: src/Mod/Assembly + src/3rdParty/OndselSolver auf ${TARGET_COMMIT} bringen"
@@ -184,7 +194,7 @@ mapfile -t OBSOLETE_FILES < <(
     <(git ls-tree -r --name-only "$TARGET_COMMIT" -- src/Mod/Assembly src/3rdParty/OndselSolver | sort)
 )
 if [[ ${#OBSOLETE_FILES[@]} -gt 0 ]]; then
-  log "Schritt 4b/8: ${#OBSOLETE_FILES[@]} Datei(en) loeschen, die im Ziel-Commit nicht mehr existieren"
+  log "Schritt 4b/9: ${#OBSOLETE_FILES[@]} Datei(en) loeschen, die im Ziel-Commit nicht mehr existieren"
   for f in "${OBSOLETE_FILES[@]}"; do
     echo "  loesche ${f}"
     [[ $DRY_RUN -eq 0 ]] && rm -f "$f"
@@ -252,7 +262,7 @@ if [[ $DRY_RUN -eq 0 ]]; then
 
     cd "$SANDBOX_BUILD_DIR"
 
-    # Sicherheitscheck analog Schritt 2/9: unerwartete lokale Aenderungen AUSSERHALB der
+    # Sicherheitscheck analog Schritt 3/9: unerwartete lokale Aenderungen AUSSERHALB der
     # Symlink-Pfade muessen vorher gesichert/committet sein (siehe
     # patches/2026.09.27-freecad-gui-qt6-qbytearray-qstring-fixes.patch als Beispiel, wie das
     # aussieht) - kein stillschweigendes Ueberschreiben.

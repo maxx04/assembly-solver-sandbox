@@ -1,9 +1,9 @@
 diff --git a/src/Mod/Assembly/App/AssemblyIdentityGraph.cpp b/src/Mod/Assembly/App/AssemblyIdentityGraph.cpp
 new file mode 100644
-index 00000000000..68673ea561d
+index 00000000000..4ea45bc8aa5
 --- /dev/null
 +++ b/src/Mod/Assembly/App/AssemblyIdentityGraph.cpp
-@@ -0,0 +1,1756 @@
+@@ -0,0 +1,1790 @@
 +// SPDX-License-Identifier: LGPL-2.1-or-later
 +/****************************************************************************
 + *                                                                          *
@@ -843,8 +843,42 @@ index 00000000000..68673ea561d
 +    // Nutzerauftrag 2026-09-27: 'duplicateLeaf' ist bei einem duplizierten einfachen Teil (App::Link,
 +    // z.B. Scheibe002) gesetzt - dieses Teil selbst IST bereits sein eigener lokaler Spiegel (kein
 +    // Container, keine Kinder zum Durchsuchen), analog zum Rigid-Grenz-Sonderfall direkt darunter.
++    //
++    // FCPROJECT-PATCH (2026-10-02, live an BG43->BG47->046/046001 gefunden, Nutzeranforderung
++    // "Original-Objekt darf in der Baugruppe nie als Identitaet auftauchen", siehe
++    // requirement-original-template-plc-never-changed-Memory): der obige Kurzschluss allein
++    // uebersieht einen Fall - 'h.duplicateLeaf' (hier: 046, direkt in BG47s eigener Group
++    // gefunden) kann SELBST innerhalb einer verschachtelten, NICHT duplizierten Unterbaugruppe
++    // (BG47) liegen, die ihrerseits noch eine EIGENE lokale Spiegelkopie in 'rootAssembly' (BG43)
++    // hat (z.B. weil BG43 BG47 als flexible AssemblyLink einbindet). Diese lokale Spiegelkopie
++    // (046-Mirror in BG43) loest beim normalen Aufloesen (ueber path.back()->getSourceForMirror(),
++    // NICHT ueber den Duplikat-Zweig oben, weil IHR Pfad durch den Container BG47 fuehrt statt
++    // direkt in dessen Group zu landen) korrekt auf 'h.duplicateLeaf' selbst auf (templateObj ==
++    // h.duplicateLeaf, kein eigenes duplicateLeaf gesetzt) - wird aber vom obigen Kurzschluss nie
++    // gefunden, weil der nur den bereits bekannten Eintrag selbst zurueckgibt. Ohne diese
++    // Ergaenzung bekommt die lokale Spiegelkopie nie ihre geloeste Placement (live bestaetigt:
++    // "schwebende" Madenschrauben trotz korrekter Werte im nativen Dokument). Zwei unabhaengig
++    // positionierte Teile, die zufaellig dieselbe Geometrie-Vorlage teilen (wie 046/046001), sind
++    // KEINE gemeinsame Identitaet - deshalb der Filter 'candidateHandle.duplicateLeaf == nullptr'
++    // (schliesst z.B. 046001s eigenen Spiegel sicher aus, auch ohne dass dessen templateObj -
++    // die geteilte Rohvorlage - je zufaellig mit h.duplicateLeaf uebereinstimmen koennte).
 +    if (h.duplicateLeaf) {
-+        return {h.duplicateLeaf};
++        std::vector<App::DocumentObject*> dupResult = {h.duplicateLeaf};
++        std::vector<App::DocumentObject*> dupSearchRoots = rootAssembly->Group.getValues();
++        std::vector<App::DocumentObject*> dupCandidates;
++        for (auto* root : dupSearchRoots) {
++            collectCandidates(root, dupCandidates);
++        }
++        for (auto* candidate : dupCandidates) {
++            if (!candidate || candidate == h.duplicateLeaf) {
++                continue;
++            }
++            IdentityHandle candidateHandle = resolveObject(candidate);
++            if (!candidateHandle.duplicateLeaf && candidateHandle.templateObj == h.duplicateLeaf) {
++                dupResult.push_back(candidate);
++            }
++        }
++        return dupResult;
 +    }
 +
 +    // FCPROJECT-PATCH (2026-09-20, live am echten BG22-Projekt gefunden: verschachtelte
@@ -2457,7 +2491,7 @@ index 7ca17b4e3be..6e38571c0c2 100644
  
      return ret;
 diff --git a/src/Mod/Assembly/App/AssemblyObject.cpp b/src/Mod/Assembly/App/AssemblyObject.cpp
-index c40e895b9ff..5da43544bed 100644
+index c40e895b9ff..257d36e549d 100644
 --- a/src/Mod/Assembly/App/AssemblyObject.cpp
 +++ b/src/Mod/Assembly/App/AssemblyObject.cpp
 @@ -81,6 +81,7 @@
@@ -2501,7 +2535,7 @@ index c40e895b9ff..5da43544bed 100644
 +        // Baugruppe sie ohnehin (schlecht oder gut) mitloest.
 +        if (isNestedUnderFlexibleParent() && !activeEditContext) {
 +            Base::Console().message(
-+                "Assembly: '%s' skipped its own solve() - nested under a flexible parent "
++                "Assembly: '{}' skipped its own solve() - nested under a flexible parent "
 +                "assembly, which solves it as part of its own recompute.\n",
 +                getFullName()
 +            );
@@ -2512,7 +2546,7 @@ index c40e895b9ff..5da43544bed 100644
      }
      return ret;
  }
-@@ -310,11 +337,89 @@ void AssemblyObject::onChanged(const App::Property* prop)
+@@ -310,11 +337,242 @@ void AssemblyObject::onChanged(const App::Property* prop)
      App::Part::onChanged(prop);
  }
  
@@ -2583,6 +2617,159 @@ index c40e895b9ff..5da43544bed 100644
 +{
 +    return nestingPrefix.empty() ? joint->getFullName() : nestingPrefix + joint->getFullName();
 +}
++
++// FCPROJECT-PATCH (2026-09-27, live am echten BG37->BG43->BG67-Projekt gefunden, "Motor
++// kollabiert"-Bug): syncGroundedJoints() verglich bisher gegen getGroundedJoints() - das durchsucht
++// NUR die JointGroup DIESER Ebene, NICHT rekursiv wie getGroundedParts() (siehe dessen Kommentar
++// "Nutzerkorrektur 2026-09-04"). Fuer ein Teil, das BEREITS ueber einen zwei (oder mehr) Ebenen
++// tiefer liegenden, eigenen GroundedJoint fixiert ist (z.B. ein Motor-Getriebeteil in einer
++// verschachtelten flexiblen Unterbaugruppe), meldete syncGroundedJoints() faelschlich "isReadOnly,
++// aber kein Joint gefunden" und legte HIER, auf der AEUSSEREN Ebene, einen ZWEITEN, redundanten
++// GroundedJoint fuer dasselbe physische Teil an. Zwei unabhaengige Erdungen fuer dasselbe Teil
++// zwingen den Solver, andere (echte, noetige) Joints als redundant zu verwerfen, um nicht zu
++// crashen - beobachtet als kompletter Verlust ALLER internen Motor-Gelenke (elf Getriebeteile
++// fielen komplett auseinander, jedes landete auf (0,0,0)). Fix: rekursiv (identisches
++// Abstiegsmuster wie getGroundedParts(): getSubAssemblies(), rigide ueberspringen,
++// getLinkedAssembly() rekursiv) sammeln, WELCHE Teile ANYWHERE (nicht nur lokal) bereits einen
++// GroundedJoint haben - nur das entscheidet, ob eine NEUE Erdung noetig ist. Fuer die bestehende
++// "Loesche verwaiste lokale Erdung"-Logik bleibt weiterhin ausschliesslich die LOKALE Map
++// massgeblich (nie ein Objekt in einem FREMDEN Dokument loeschen).
++void collectGroundedPartsRecursive(
++    AssemblyObject* assembly,
++    std::unordered_set<App::DocumentObject*>& groundedParts
++)
++{
++    if (!assembly) {
++        return;
++    }
++    for (auto* gJoint : assembly->getGroundedJoints()) {
++        auto* propObj = dynamic_cast<App::PropertyLink*>(gJoint->getPropertyByName("ObjectToGround"));
++        if (propObj && propObj->getValue()) {
++            groundedParts.insert(propObj->getValue());
++        }
++    }
++    for (auto* subAssembly : assembly->getSubAssemblies()) {
++        if (!subAssembly || subAssembly->isRigid()) {
++            continue;
++        }
++        AssemblyObject* nested = subAssembly->getLinkedAssembly();
++        if (!nested || nested == assembly) {
++            continue;
++        }
++        collectGroundedPartsRecursive(nested, groundedParts);
++    }
++}
++
++// FCPROJECT-PATCH (2026-09-29, live an BG37->BG43->BG67 gefunden, Nutzerauftrag "mit System,
++// nicht nur fuer diese Baugruppe"): Datensammlung fuer die generelle "mehrere unabhaengige
++// Erdungswurzeln im selben Zusammenhangskomponenten"-Erkennung in syncGroundedJoints() (siehe
++// dortiger Kommentar fuer die volle Herleitung). Anders als collectGroundedPartsRecursive() oben
++// (liefert nur die ZIEL-Objekte, fuer die "braucht dieses Teil eine NEUE Erdung"-Entscheidung)
++// liefert diese Funktion zusaetzlich das GroundedJoint-Objekt selbst (zum Abschalten) UND die
++// Verschachtelungstiefe (fuer die Tie-Break-Entscheidung, welche von mehreren kollidierenden
++// Erdungen die massgebliche bleibt).
++struct GroundedRootInfo
++{
++    App::DocumentObject* target;
++    App::DocumentObject* joint;
++    int depth;
++};
++
++void collectGroundedJointsRecursive(
++    AssemblyObject* assembly,
++    std::vector<GroundedRootInfo>& roots,
++    int depth
++)
++{
++    if (!assembly) {
++        return;
++    }
++    for (auto* gJoint : assembly->getGroundedJoints()) {
++        auto* propObj = dynamic_cast<App::PropertyLink*>(gJoint->getPropertyByName("ObjectToGround"));
++        if (propObj && propObj->getValue()) {
++            roots.push_back({propObj->getValue(), gJoint, depth});
++        }
++    }
++    for (auto* subAssembly : assembly->getSubAssemblies()) {
++        if (!subAssembly || subAssembly->isRigid()) {
++            continue;
++        }
++        AssemblyObject* nested = subAssembly->getLinkedAssembly();
++        if (!nested || nested == assembly) {
++            continue;
++        }
++        collectGroundedJointsRecursive(nested, roots, depth + 1);
++    }
++}
++
++// FCPROJECT-PATCH (2026-09-27, live am echten BG37->BG43(Rigid)->BG67(Flexibel, eigener
++// Drehgelenk-Rotor)-Projekt gefunden, "Motor kollabiert"-Bug, Nutzerentscheidung "067 bleibt
++// trotz starrer Elternbaugruppe eigenstaendig loesbar"): getJoints()/getGroundedParts() ueberspringen
++// eine RIGIDE AssemblyLink bewusst und korrekt (fuer den Solver ist eine starre Unterbaugruppe EIN
++// Koerper) - das bedeutet aber auch, dass eine FLEXIBLE Unterbaugruppe, die INNERHALB einer solchen
++// starren Baugruppe verschachtelt ist (z.B. ein drehbarer Motor, starr ans Gestell geschraubt),
++// von KEINER der bestehenden Abstiegs-Funktionen mehr erreicht wird - nichts loest mehr ihren
++// eigenen solve() aus, sobald ihr direkter (oder ein weiter aussen liegender) Container starr ist.
++// Live bestaetigt: eine solche "versteckte" flexible Baugruppe bleibt fuer immer auf dem Zustand
++// eingefroren, den sie beim letzten (oft fehlgeschlagenen, siehe isRestoring()-bedingtes
++// "no grounded part found" beim allerersten Laden) solve()-Versuch hatte - keine automatische
++// FreeCAD-Touched-Propagation erreicht ein cross-document verlinktes, rigide eingebundenes Objekt.
++// Fix: nach dem eigentlichen solve() dieser Ebene rekursiv (durch ALLE Sub-Assemblies, auch
++// rigide, um dahinter versteckte Ebenen zu erreichen) jede flexible Unterbaugruppe explizit
++// erneut loesen, sobald IRGENDEIN Vorfahre in der Kette rigide ist - genau der Fall, in dem sie
++// von der normalen Joint-Graph-Traversierung sonst nie wieder besucht wird. Eine flexible
++// Unterbaugruppe, die NICHT hinter einer rigiden Ebene versteckt ist, bleibt unveraendert vom
++// bestehenden Mechanismus (isNestedUnderFlexibleParent() + gemeinsamer Joint-Graph) abgedeckt -
++// hier wird sie NICHT zusaetzlich (doppelt) geloest.
++// 'mirrorOfAssembly': die AssemblyLink-Instanz, deren objLinkMap 'assembly's DIREKTE Kinder auf
++// die tatsaechlich im AEUSSERSTEN (Nutzer-sichtbaren) Dokument gerenderten Spiegel abbildet -
++// nullptr bedeutet "wir sind noch nicht ueber eine Verschachtelungsebene gelaufen, 'assembly'
++// selbst ist bereits die direkt sichtbare Instanz". Bei JEDEM Sprung in eine tiefere Ebene muss
++// dieser Bezug durch EXAKT EINEN Schritt durch 'mirrorOfAssembly's eigene objLinkMap uebersetzt
++// werden - der lokale Spiegel eines lokalen Spiegels lebt NICHT im selben Dokument wie das echte
++// verschachtelte Objekt, sondern im Dokument der jeweils AEUSSEREN Instanz (jede AssemblyLink
++// spiegelt nur ihre EIGENEN direkten Kinder, siehe AssemblyLink::synchronizeComponents()).
++void solveHiddenFlexibleUnderRigid(
++    AssemblyObject* assembly,
++    AssemblyLink* mirrorOfAssembly,
++    bool underRigidAncestor
++)
++{
++    if (!assembly) {
++        return;
++    }
++    for (auto* subAssembly : assembly->getSubAssemblies()) {
++        if (!subAssembly) {
++            continue;
++        }
++        AssemblyObject* nested = subAssembly->getLinkedAssembly();
++        if (!nested || nested == assembly) {
++            continue;
++        }
++        bool subIsRigid = subAssembly->isRigid();
++
++        AssemblyLink* mirrorOfSub = subAssembly;
++        if (mirrorOfAssembly) {
++            auto it = mirrorOfAssembly->objLinkMap.find(subAssembly);
++            mirrorOfSub = (it != mirrorOfAssembly->objLinkMap.end())
++                ? freecad_cast<AssemblyLink*>(it->second)
++                : nullptr;
++        }
++
++        if (!subIsRigid && underRigidAncestor) {
++            // Diese flexible Unterbaugruppe ist hinter mindestens einer rigiden Ebene versteckt -
++            // niemand sonst ruft ihren solve() je wieder auf. propagateSolvedPlacementsTo()
++            // braucht 'mirrorOfSub' (nicht 'subAssembly' selbst!), um das frisch geloeste
++            // Placement bis ins tatsaechlich gerenderte Dokument durchzureichen (IdentityGraph
++            // kann das nicht, siehe dessen Kommentar in AssemblyObject.h).
++            nested->solve(false);
++            if (mirrorOfSub) {
++                nested->propagateSolvedPlacementsTo(mirrorOfSub);
++            }
++        }
++        solveHiddenFlexibleUnderRigid(nested, mirrorOfSub, underRigidAncestor || subIsRigid);
++    }
++}
 +}  // namespace
 +
  int AssemblyObject::solve(bool enableRedo)
@@ -2597,17 +2784,17 @@ index c40e895b9ff..5da43544bed 100644
 +    // Baugruppen ist dadurch oft unklar, ob/wann der Solver ueberhaupt gelaufen ist und was er
 +    // dabei festgestellt hat (z.B. redundante Joints, siehe Fix 10) - die drei Meldungen unten
 +    // decken die Fragen "1. gestartet? 2. berechnet? 3. mit welchem Ergebnis?" ab.
-+    Base::Console().message("Assembly: Solving '%s'...\n", getFullName());
++    Base::Console().message("Assembly: Solving '{}'...\n", getFullName());
 +
      ensureIdentityPlacements();
  
      syncGroundedJoints();
-@@ -328,14 +433,22 @@ int AssemblyObject::solve(bool enableRedo)
+@@ -328,14 +586,22 @@ int AssemblyObject::solve(bool enableRedo)
      auto groundedObjs = fixGroundedParts();
      if (groundedObjs.empty()) {
          // If no part fixed we can't solve.
 +        Base::Console().warning(
-+            "Assembly: Solve of '%s' skipped - no grounded part found.\n",
++            "Assembly: Solve of '{}' skipped - no grounded part found.\n",
 +            getFullName()
 +        );
          return -6;
@@ -2628,7 +2815,7 @@ index c40e895b9ff..5da43544bed 100644
  
      if (enableRedo) {
          savePlacementsForUndo();
-@@ -358,6 +471,35 @@ int AssemblyObject::solve(bool enableRedo)
+@@ -358,6 +624,35 @@ int AssemblyObject::solve(bool enableRedo)
          return -1;
      }
  
@@ -2640,7 +2827,7 @@ index c40e895b9ff..5da43544bed 100644
 +    // komma-getrennt in einer Zeile, damit lange Listen im Report View nicht mehr horizontal
 +    // gescrollt werden muessen.
 +    Base::Console().message(
-+        "Assembly: '%s' computed (%zu joint(s), %zu grounded part(s)):\n",
++        "Assembly: '{}' computed ({} joint(s), {} grounded part(s)):\n",
 +        getFullName(),
 +        joints.size(),
 +        groundedObjs.size()
@@ -2649,12 +2836,12 @@ index c40e895b9ff..5da43544bed 100644
 +        if (!obj) {
 +            continue;
 +        }
-+        Base::Console().message("Assembly:   grounded part: %s\n", getJointContextName(obj));
++        Base::Console().message("Assembly:   grounded part: {}\n", getJointContextName(obj));
 +    }
 +
 +    for (const auto& [rep, members] : rigidMembersByRep) {
 +        Base::Console().message(
-+            "Assembly: rigid group '%s' (%zu Teil(e)): %s.\n",
++            "Assembly: rigid group '{}' ({} Teil(e)): {}.\n",
 +            getJointContextName(rep),
 +            members.size(),
 +            joinContextNames(members)
@@ -2664,7 +2851,7 @@ index c40e895b9ff..5da43544bed 100644
      setNewPlacements();
      updateRigidPlacementCache();
  
-@@ -365,6 +507,25 @@ int AssemblyObject::solve(bool enableRedo)
+@@ -365,6 +660,31 @@ int AssemblyObject::solve(bool enableRedo)
  
      updateSolveStatus();
  
@@ -2677,20 +2864,26 @@ index c40e895b9ff..5da43544bed 100644
 +            names += n;
 +        }
 +        Base::Console().warning(
-+            "Assembly: Solve of '%s' finished with %zu redundant joint(s): %s.\n",
++            "Assembly: Solve of '{}' finished with {} redundant joint(s): {}.\n",
 +            getFullName(),
 +            lastRedundantJoints.size(),
 +            names
 +        );
 +    }
 +    else {
-+        Base::Console().message("Assembly: Solve of '%s' finished successfully.\n", getFullName());
++        Base::Console().message("Assembly: Solve of '{}' finished successfully.\n", getFullName());
 +    }
++
++    // FCPROJECT-PATCH (2026-09-27, siehe solveHiddenFlexibleUnderRigid()-Kommentar): flexible
++    // Unterbaugruppen hinter einer rigiden Ebene bekommen sonst nie wieder die Chance, sich selbst
++    // zu loesen (z.B. ein drehbarer Motor-Rotor, starr ans Gestell geschraubt) - unabhaengig von
++    // DIESER Ebenes eigenem Erfolg/Misserfolg explizit nachziehen.
++    solveHiddenFlexibleUnderRigid(this, nullptr, false);
 +
      return 0;
  }
  
-@@ -473,11 +634,11 @@ int AssemblyObject::generateSimulation(App::DocumentObject* sim)
+@@ -473,11 +793,11 @@ int AssemblyObject::generateSimulation(App::DocumentObject* sim)
          return -6;
      }
  
@@ -2705,7 +2898,7 @@ index c40e895b9ff..5da43544bed 100644
  
      create_mbdSimulationParameters(sim);
  
-@@ -522,7 +683,7 @@ int Assembly::AssemblyObject::updateForFrame(size_t index)
+@@ -522,7 +842,7 @@ int Assembly::AssemblyObject::updateForFrame(size_t index)
  
      mbdAssembly->updateForFrame(index);
      setNewPlacements();
@@ -2714,7 +2907,7 @@ index c40e895b9ff..5da43544bed 100644
      redrawJointPlacements(jointDocs);
      return 0;
  }
-@@ -614,7 +775,7 @@ void AssemblyObject::prepareMbdForIslandDrag(std::vector<App::DocumentObject*> d
+@@ -614,7 +934,7 @@ void AssemblyObject::prepareMbdForIslandDrag(std::vector<App::DocumentObject*> d
          }
      }
  
@@ -2723,7 +2916,7 @@ index c40e895b9ff..5da43544bed 100644
      removeUnconnectedJoints(joints, seededParts);
      if (joints.empty()) {
          objectPartMap.clear();
-@@ -668,9 +829,22 @@ void AssemblyObject::doDragStep()
+@@ -668,9 +988,22 @@ void AssemblyObject::doDragStep()
              dragMbdParts.push_back(mbdPart);
  
              Base::Placement plc = getPlacementFromProp(part, "Placement");
@@ -2749,7 +2942,7 @@ index c40e895b9ff..5da43544bed 100644
              }
              Base::Vector3d pos = plc.getPosition();
              mbdPart->updateMbDFromPosition3D(
-@@ -695,7 +869,7 @@ void AssemblyObject::doDragStep()
+@@ -695,7 +1028,7 @@ void AssemblyObject::doDragStep()
              setNewPlacements();
              updateRigidPlacementCache();
  
@@ -2758,7 +2951,31 @@ index c40e895b9ff..5da43544bed 100644
              for (auto* joint : joints) {
                  if (joint->Visibility.getValue()) {
                      // redraw only the moving joint as its quite slow as its python code.
-@@ -831,9 +1005,9 @@ void AssemblyObject::exportAsASMT(std::string fileName)
+@@ -743,6 +1076,23 @@ bool AssemblyObject::validateNewPlacements()
+                     newPlacement = newPlacement * it->second.offsetPlc;
+                 }
+ 
++                // FCPROJECT-PATCH (2026-09-29, siehe fix-grounded-part-container-chain-
++                // convergence.md - dieselbe Bug-Klasse, hier im Drag-Validierungspfad): 'oldPlc'
++                // ist 'obj's ROHE LOKALE Placement-Property (z.B. der Motor-Stator 048 an seinem
++                // eigenen Ursprung INNERHALB der verschachtelten BG67), waehrend 'newPlacement'
++                // aus dem MbD-Koerper kommt, der bei der Erdung bereits MIT Container-Kette
++                // (alreadyResolved=true, siehe fixGroundedPart()) in WELT-Koordinaten geseedet
++                // wurde. Ohne dieselbe Komposition hier weicht 'oldPlc' IMMER um genau die
++                // Container-Kette (z.B. BG67s eigene Platzierung innerhalb BG43) von
++                // 'newPlacement' ab - jeder einzelne Drag-Schritt eines geerdeten Teils in einer
++                // verschachtelten, nicht-rigiden Unterbaugruppe wird dadurch bedingungslos als
++                // "bewegt" erkannt und verworfen, selbst wenn das Teil sich in Wahrheit ueberhaupt
++                // nicht bewegt hat (live an BG43/BG67 gefunden: 048 blieb rechnerisch fest, wurde
++                // aber bei JEDEM Rotor-Drag-Schritt als "moved" abgelehnt).
++                if (!it->second.containerChainPlc.isIdentity()) {
++                    oldPlc = it->second.containerChainPlc * oldPlc;
++                }
++
+                 if (!oldPlc.isSame(newPlacement, Precision::Confusion())) {
+                     Base::Console().warning(
+                         "Assembly : Ignoring bad solve, a grounded object ({}) moved.\n",
+@@ -831,9 +1181,9 @@ void AssemblyObject::exportAsASMT(std::string fileName)
      rebuildRigidClusters();
      fixGroundedParts();
  
@@ -2770,7 +2987,7 @@ index c40e895b9ff..5da43544bed 100644
  
      mbdAssembly->outputFile(fileName);
  }
-@@ -1058,8 +1232,49 @@ bool isFinitePlacement(const Base::Placement& plc)
+@@ -1058,8 +1408,49 @@ bool isFinitePlacement(const Base::Placement& plc)
  }
  }  // namespace
  
@@ -2820,7 +3037,7 @@ index c40e895b9ff..5da43544bed 100644
      for (auto& pair : objectPartMap) {
          App::DocumentObject* obj = pair.first;
          std::shared_ptr<ASMTPart> mbdPart = pair.second.part;
-@@ -1079,6 +1294,23 @@ void AssemblyObject::setNewPlacements()
+@@ -1079,6 +1470,23 @@ void AssemblyObject::setNewPlacements()
          if (!pair.second.offsetPlc.isIdentity()) {
              newPlacement = newPlacement * pair.second.offsetPlc;
          }
@@ -2844,7 +3061,7 @@ index c40e895b9ff..5da43544bed 100644
          if (!isFinitePlacement(newPlacement)) {
              Base::Console().warning(
                  "Assembly: solver returned a non-finite placement for '{}'; keeping its "
-@@ -1091,9 +1323,191 @@ void AssemblyObject::setNewPlacements()
+@@ -1091,7 +1499,218 @@ void AssemblyObject::setNewPlacements()
              propPlacement->setValue(newPlacement);
              obj->purgeTouched();
          }
@@ -2907,9 +3124,9 @@ index c40e895b9ff..5da43544bed 100644
 +                mirror->purgeTouched();
 +            }
 +        }
-     }
- }
- 
++    }
++}
++
 +namespace
 +{
 +// FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix, 2026-09-03):
@@ -3011,6 +3228,35 @@ index c40e895b9ff..5da43544bed 100644
 +    }
 +}
 +
++// FCPROJECT-PATCH (2026-09-27, siehe Deklaration in AssemblyObject.h): siehe dortigen Kommentar
++// fuer die volle Begruendung - schliesst die Spiegel-Sync-Luecke fuer solveHiddenFlexibleUnderRigid().
++void AssemblyObject::propagateSolvedPlacementsTo(AssemblyLink* mirrorLink)
++{
++    if (!mirrorLink) {
++        return;
++    }
++    for (auto& [realObj, data] : objectPartMap) {
++        (void)data;
++        if (!realObj) {
++            continue;
++        }
++        auto it = mirrorLink->objLinkMap.find(realObj);
++        if (it == mirrorLink->objLinkMap.end() || !it->second) {
++            continue;
++        }
++        auto* propPlc = realObj->getPlacementProperty();
++        auto* mirrorPropPlc = it->second->getPlacementProperty();
++        if (!propPlc || !mirrorPropPlc) {
++            continue;
++        }
++        Base::Placement plc = propPlc->getValue();
++        if (!mirrorPropPlc->getValue().isSame(plc)) {
++            mirrorPropPlc->setValue(plc);
++            it->second->purgeTouched();
++        }
++    }
++}
++
 +// FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix, 2026-09-03):
 +// siehe ausfuehrliche Begruendung am Deklarationsort in AssemblyObject.h.
 +bool AssemblyObject::hasRealObject(App::DocumentObject* obj)
@@ -3029,36 +3275,49 @@ index c40e895b9ff..5da43544bed 100644
 +        if (candidate && canonicalizeForMbD(candidate) == obj) {
 +            return true;
 +        }
-+    }
+     }
 +    return false;
-+}
-+
+ }
+ 
  void AssemblyObject::redrawJointPlacements(std::vector<App::DocumentObject*> joints)
- {
-     // Notify the joint objects that the transform of the coin object changed.
-@@ -1166,9 +1580,10 @@ App::DocumentObject* AssemblyObject::getJointOfPartConnectingToGround(
+@@ -1166,9 +1785,27 @@ App::DocumentObject* AssemblyObject::getJointOfPartConnectingToGround(
          return nullptr;
      }
  
 -    std::vector<App::DocumentObject*> joints = getJointsOfPart(part);
-+    std::vector<JointRef> joints = getJointsOfPart(part);
++    // FCPROJECT-PATCH (2026-09-29, BG47-Drag "wird weggezogen" beim direkten Anklicken):
++    // getJointsOfPart(part) kanonisiert 'part' bereits INTERN (siehe dortiger Kommentar), der
++    // Kommentar unten ("'part' ist bereits die instanzeigene, kanonische Identitaet") war daher
++    // nur eine Annahme ueber den Aufrufer, nicht durch diese Funktion selbst sichergestellt - der
++    // Vergleich `part == part1/part2` weiter unten nutzte weiterhin den ROHEN, nicht kanonisierten
++    // Parameter. Bei einem UI-/klick-aufgeloesten 'part', dessen Identitaet von der ueber
++    // resolvePartForMbD() aufgeloesten Kanonischen abweicht (dieselbe Bug-Klasse wie in
++    // getDownstreamParts(), siehe fix-getdownstreamparts-canonicalize-identity.md), schlaegt der
++    // Vergleich fehl und die Funktion liefert faelschlich nullptr - findDragMode() faellt dann auf
++    // den "ungeerdet frei ziehen"-Zweig zurueck, obwohl ein Fixed-Joint zu einem geerdeten
++    // Nachbarn existiert (live beobachtet: BG47 direkt anklicken+ziehen loeste sich vom Rotor,
++    // obwohl derselbe Fixed-Joint beim Ziehen ueber den Rotor korrekt gefunden wird).
++    App::DocumentObject* canonicalPart = canonicalizeForMbD(part);
++    if (!canonicalPart) {
++        canonicalPart = part;
++    }
  
 -    for (auto joint : joints) {
++    std::vector<JointRef> joints = getJointsOfPart(part);
++
 +    for (auto& jr : joints) {
 +        App::DocumentObject* joint = jr.joint;
          if (!joint) {
              continue;
          }
-@@ -1177,17 +1592,21 @@ App::DocumentObject* AssemblyObject::getJointOfPartConnectingToGround(
+@@ -1177,17 +1814,21 @@ App::DocumentObject* AssemblyObject::getJointOfPartConnectingToGround(
              continue;
          }
  
 -        App::DocumentObject* part1 = getMovingPartFromRef(joint, "Reference1");
 -        App::DocumentObject* part2 = getMovingPartFromRef(joint, "Reference2");
 +        // FCPROJECT-PATCH (2026-09-20, siehe getJointsOfPart()-Deklaration): resolvePartForMbD()
-+        // mit demselben nestingPrefix statt der adressierungsblinden getMovingPartFromRef() -
-+        // 'part' ist bereits die instanzeigene, kanonische Identitaet (siehe getJointsOfPart()),
-+        // der Vergleich muss also denselben Aufloesungsweg fuer part1/part2 nutzen.
++        // mit demselben nestingPrefix statt der adressierungsblinden getMovingPartFromRef().
 +        App::DocumentObject* part1 = resolvePartForMbD(joint, "Reference1", jr.nestingPrefix);
 +        App::DocumentObject* part2 = resolvePartForMbD(joint, "Reference2", jr.nestingPrefix);
          if (!part1 || !part2) {
@@ -3066,16 +3325,18 @@ index c40e895b9ff..5da43544bed 100644
          }
  
 -        if (part == part1 && isJointConnectingPartToGround(joint, "Reference1")) {
-+        if (part == part1 && isJointConnectingPartToGround(joint, "Reference1", jr.nestingPrefix)) {
++        if (canonicalPart == part1
++            && isJointConnectingPartToGround(joint, "Reference1", jr.nestingPrefix)) {
              name = "Reference1";
              return joint;
          }
 -        if (part == part2 && isJointConnectingPartToGround(joint, "Reference2")) {
-+        if (part == part2 && isJointConnectingPartToGround(joint, "Reference2", jr.nestingPrefix)) {
++        if (canonicalPart == part2
++            && isJointConnectingPartToGround(joint, "Reference2", jr.nestingPrefix)) {
              name = "Reference2";
              return joint;
          }
-@@ -1204,8 +1623,13 @@ App::DocumentObject* AssemblyObject::getJointOfPartForUngroundedDrag(
+@@ -1204,8 +1845,13 @@ App::DocumentObject* AssemblyObject::getJointOfPartForUngroundedDrag(
          return nullptr;
      }
  
@@ -3091,7 +3352,7 @@ index c40e895b9ff..5da43544bed 100644
          if (!joint || !isJointTypeConnecting(joint)) {
              continue;
          }
-@@ -1275,15 +1699,43 @@ ViewGroup* AssemblyObject::getExplodedViewGroup() const
+@@ -1275,15 +1921,43 @@ ViewGroup* AssemblyObject::getExplodedViewGroup() const
      return nullptr;
  }
  
@@ -3137,7 +3398,7 @@ index c40e895b9ff..5da43544bed 100644
      Base::PyGILStateLocker lock;
      for (auto joint : jointGroup->getObjects()) {
          if (!joint) {
-@@ -1291,16 +1743,58 @@ std::vector<App::DocumentObject*> AssemblyObject::getJoints(bool delBadJoints, b
+@@ -1291,16 +1965,58 @@ std::vector<App::DocumentObject*> AssemblyObject::getJoints(bool delBadJoints, b
          }
  
          auto* prop = dynamic_cast<App::PropertyBool*>(joint->getPropertyByName("Suppressed"));
@@ -3147,7 +3408,7 @@ index c40e895b9ff..5da43544bed 100644
 +        // laufen. Hinter verboseLog, aus demselben CPU-Grund wie oben (preDrag()-Heisspfad).
 +        if (verboseLog) {
 +            Base::Console().log(
-+                "FCPROJECT-DEBUG getJoints: joint='%s' isError=%d Suppressed=%d\n",
++                "FCPROJECT-DEBUG getJoints: joint='{}' isError={} Suppressed={}\n",
 +                joint->getNameInDocument(),
 +                joint->isError() ? 1 : 0,
 +                (prop && prop->getValue()) ? 1 : 0
@@ -3157,8 +3418,8 @@ index c40e895b9ff..5da43544bed 100644
              // Filter grounded joints and deactivated joints.
 +            if (verboseLog) {
 +                Base::Console().message(
-+                    "Assembly: getJoints('%s') - Joint '%s' uebersprungen (isError=%d, "
-+                    "Suppressed=%d).\n",
++                    "Assembly: getJoints('{}') - Joint '{}' uebersprungen (isError={}, "
++                    "Suppressed={}).\n",
 +                    getFullName(),
 +                    joint->getNameInDocument(),
 +                    joint->isError() ? 1 : 0,
@@ -3172,7 +3433,7 @@ index c40e895b9ff..5da43544bed 100644
          auto* part2 = getMovingPartFromRef(joint, "Reference2");
 +        if (verboseLog) {
 +            Base::Console().log(
-+                "FCPROJECT-DEBUG getJoints: joint='%s' part1='%s' part2='%s'\n",
++                "FCPROJECT-DEBUG getJoints: joint='{}' part1='{}' part2='{}'\n",
 +                joint->getNameInDocument(),
 +                part1 ? part1->getFullName().c_str() : "<null>",
 +                part2 ? part2->getFullName().c_str() : "<null>"
@@ -3183,8 +3444,8 @@ index c40e895b9ff..5da43544bed 100644
              // Remove incoherent joints (self-pointing joints)
 +            if (verboseLog) {
 +                Base::Console().message(
-+                    "Assembly: getJoints('%s') - Joint '%s' uebersprungen: part1='%s', "
-+                    "part2='%s' (unvollstaendig oder BEIDE Referenzen zeigen auf dasselbe "
++                    "Assembly: getJoints('{}') - Joint '{}' uebersprungen: part1='{}', "
++                    "part2='{}' (unvollstaendig oder BEIDE Referenzen zeigen auf dasselbe "
 +                    "aeussere Bauteil - z.B. weil beide innerhalb derselben Rigid-Unterbaugruppe "
 +                    "liegen).\n",
 +                    getFullName(),
@@ -3196,15 +3457,15 @@ index c40e895b9ff..5da43544bed 100644
              if (delBadJoints) {
                  getDocument()->removeObject(joint->getNameInDocument());
              }
-@@ -1310,16 +1804,71 @@ std::vector<App::DocumentObject*> AssemblyObject::getJoints(bool delBadJoints, b
+@@ -1310,16 +2026,71 @@ std::vector<App::DocumentObject*> AssemblyObject::getJoints(bool delBadJoints, b
          auto proxy = dynamic_cast<App::PropertyPythonObject*>(joint->getPropertyByName("Proxy"));
          if (proxy) {
              if (proxy->getValue().hasAttr("setJointConnectors")) {
 -                joints.push_back(joint);
 +                if (verboseLog) {
 +                    Base::Console().message(
-+                        "Assembly: getJoints('%s') - Joint '%s' UEBERNOMMEN: part1='%s', "
-+                        "part2='%s'.\n",
++                        "Assembly: getJoints('{}') - Joint '{}' UEBERNOMMEN: part1='{}', "
++                        "part2='{}'.\n",
 +                        getFullName(),
 +                        joint->getNameInDocument(),
 +                        part1->getFullName().c_str(),
@@ -3220,7 +3481,7 @@ index c40e895b9ff..5da43544bed 100644
 +            }
 +            else if (verboseLog) {
 +                Base::Console().message(
-+                    "Assembly: getJoints('%s') - Joint '%s' uebersprungen: Proxy hat keine "
++                    "Assembly: getJoints('{}') - Joint '{}' uebersprungen: Proxy hat keine "
 +                    "setJointConnectors-Methode (kein normaler beweglicher Joint, z.B. Grounded/"
 +                    "RigidGroup).\n",
 +                    getFullName(),
@@ -3272,7 +3533,7 @@ index c40e895b9ff..5da43544bed 100644
          }
      }
  
-@@ -1419,7 +1968,7 @@ std::vector<App::DocumentObject*> AssemblyObject::getJointsOfObj(App::DocumentOb
+@@ -1419,7 +2190,7 @@ std::vector<App::DocumentObject*> AssemblyObject::getJointsOfObj(App::DocumentOb
          return {};
      }
  
@@ -3281,7 +3542,7 @@ index c40e895b9ff..5da43544bed 100644
      std::vector<App::DocumentObject*> jointsOf;
  
      for (auto joint : joints) {
-@@ -1433,20 +1982,33 @@ std::vector<App::DocumentObject*> AssemblyObject::getJointsOfObj(App::DocumentOb
+@@ -1433,20 +2204,33 @@ std::vector<App::DocumentObject*> AssemblyObject::getJointsOfObj(App::DocumentOb
      return jointsOf;
  }
  
@@ -3323,7 +3584,7 @@ index c40e895b9ff..5da43544bed 100644
          }
      }
      return jointsOf;
-@@ -1482,8 +2044,76 @@ std::unordered_set<App::DocumentObject*> AssemblyObject::getGroundedParts()
+@@ -1482,8 +2266,76 @@ std::unordered_set<App::DocumentObject*> AssemblyObject::getGroundedParts()
          }
      }
  
@@ -3402,7 +3663,7 @@ index c40e895b9ff..5da43544bed 100644
  
      // Propagate grounding through active rigid clusters.
      std::vector<App::DocumentObject*> groundedSnapshot(groundedSet.begin(), groundedSet.end());
-@@ -1508,12 +2138,42 @@ std::unordered_set<App::DocumentObject*> AssemblyObject::fixGroundedParts()
+@@ -1508,12 +2360,56 @@ std::unordered_set<App::DocumentObject*> AssemblyObject::fixGroundedParts()
  {
      auto groundedParts = getGroundedParts();
  
@@ -3437,7 +3698,21 @@ index c40e895b9ff..5da43544bed 100644
              continue;
          }
  
++        // FCPROJECT-PATCH (2026-09-28, siehe ausfuehrliche Begruendung an
++        // fixGroundedPart()s getMbDPart(obj, alreadyResolved=true)-Aufruf): 'obj' kommt aus der
++        // rekursiven getGroundedParts() - fuer ein Teil, das mehrere echte Dokumentgrenzen tiefer
++        // liegt (z.B. ein Motor-Getriebeteil in einer verschachtelten flexiblen Unterbaugruppe),
++        // ist seine rohe 'Placement'-Property nur LOKAL (relativ zu seinem eigenen Container),
++        // nicht die tatsaechliche Weltposition. Ohne diese Umrechnung bekommt der Ground-Marker
++        // (das Fixierungsziel des Solvers) das FALSCHE Ziel - Newton-Raphson versucht dann, das
++        // (korrekt Welt-positionierte) MbD-Teil auf diese falsche, nur lokale Zielposition
++        // zurueckzuzwingen, was bei ausreichendem Abstand nicht mehr konvergiert.
          Base::Placement plc = getPlacementFromProp(obj, "Placement");
++        IdentityGraph groundChainGraph(this);
++        Base::Placement groundContainerChainPlc = groundChainGraph.containerChainPlacement(obj);
++        if (!groundContainerChainPlc.isIdentity()) {
++            plc = groundContainerChainPlc * plc;
++        }
 +        if (!groundedTargetObj && explicitlyGroundedTargets.count(obj)) {
 +            groundedTargetObj = obj;
 +            groundedTargetPlc = plc;
@@ -3445,7 +3720,30 @@ index c40e895b9ff..5da43544bed 100644
          std::string str = obj->getFullName();
          fixGroundedPart(obj, plc, str);
      }
-@@ -1548,13 +2208,23 @@ void AssemblyObject::fixGroundedPart(App::DocumentObject* obj, Base::Placement&
+@@ -1530,7 +2426,21 @@ void AssemblyObject::fixGroundedPart(App::DocumentObject* obj, Base::Placement&
+     auto mbdMarker1 = makeMbdMarker(markerName1, plc);
+     mbdAssembly->addMarker(mbdMarker1);
+ 
+-    std::shared_ptr<ASMTPart> mbdPart = getMbDPart(obj);
++    // FCPROJECT-PATCH (2026-09-28, live am echten BG37->BG43(Flexibel)->BG67-Projekt gefunden,
++    // "Solve failed: iterNo > iterMax" bei verschachtelter, nicht-rigider Unterbaugruppe ohne
++    // eigenes verbindendes Gelenk): 'obj' kommt hier bereits als tief aufgeloestes, echtes Objekt
++    // aus der rekursiven getGroundedParts() (siehe deren Kommentar) - ohne alreadyResolved=true
++    // ueberspringt getMbDData() die containerChainPlacement()-Berechnung komplett (bleibt
++    // Identity), das erzeugte MbD-Teil bekommt also die ROHE LOKALE Placement statt der
++    // Welt-Position als Startwert. Da die Erdung VOR der Gelenkverarbeitung laeuft, wird dieser
++    // falsche Eintrag in objectPartMap gecacht - JEDE spaetere Gelenkreferenz auf dasselbe Teil
++    // (z.B. das geerdete Teil ist gleichzeitig auch an einem echten Gelenk beteiligt) findet den
++    // bereits falsch platzierten Eintrag wieder, statt selbst korrekt neu aufzuloesen. Genau
++    // dieser Startwert-Sprung (typischerweise um die volle Container-Kette daneben) reicht aus,
++    // um Newton-Raphson im kombinierten Solve nicht mehr konvergieren zu lassen - waehrend ein
++    // eigenstaendiger Solve DERSELBEN Unterbaugruppe (keine Container-Kette noetig) unveraendert
++    // funktioniert.
++    std::shared_ptr<ASMTPart> mbdPart = getMbDPart(obj, /*alreadyResolved=*/true);
+ 
+     std::string markerName2 = "FixingMarker";
+     Base::Placement basePlc = Base::Placement();
+@@ -1548,13 +2458,23 @@ void AssemblyObject::fixGroundedPart(App::DocumentObject* obj, Base::Placement&
      mbdAssembly->addJoint(mbdJoint);
  }
  
@@ -3471,7 +3769,7 @@ index c40e895b9ff..5da43544bed 100644
      if (!part) {
          return false;
      }
-@@ -1572,10 +2242,11 @@ bool AssemblyObject::isJointConnectingPartToGround(App::DocumentObject* joint, c
+@@ -1572,10 +2492,11 @@ bool AssemblyObject::isJointConnectingPartToGround(App::DocumentObject* joint, c
      }
  
      // to know if a joint is connecting to ground we disable all the other joints
@@ -3485,7 +3783,7 @@ index c40e895b9ff..5da43544bed 100644
          if (jointi->getFullName() == joint->getFullName()) {
              continue;
          }
-@@ -1587,7 +2258,8 @@ bool AssemblyObject::isJointConnectingPartToGround(App::DocumentObject* joint, c
+@@ -1587,7 +2508,8 @@ bool AssemblyObject::isJointConnectingPartToGround(App::DocumentObject* joint, c
      isConnected = isPartConnected(part);
  
      // restore activation states
@@ -3495,7 +3793,7 @@ index c40e895b9ff..5da43544bed 100644
          if (jointi->getFullName() == joint->getFullName() || activatedStates.empty()) {
              continue;
          }
-@@ -1626,34 +2298,87 @@ bool AssemblyObject::isObjInSetOfObjRefs(App::DocumentObject* obj, const std::ve
+@@ -1626,34 +2548,87 @@ bool AssemblyObject::isObjInSetOfObjRefs(App::DocumentObject* obj, const std::ve
  }
  
  void AssemblyObject::removeUnconnectedJoints(
@@ -3537,8 +3835,8 @@ index c40e895b9ff..5da43544bed 100644
 +    // Hier faellt ein Joint raus, wenn eine seiner beiden Seiten NICHT ueber eine Kette von
 +    // Joints von einem geerdeten Teil aus erreichbar ist (traverseAndMarkConnectedParts()).
 +    Base::Console().message(
-+        "Assembly: removeUnconnectedJoints('%s') - %zu geerdete(s) Teil(e), %zu erreichbare(s) "
-+        "Teil(e), pruefe %zu Joint(s).\n",
++        "Assembly: removeUnconnectedJoints('{}') - {} geerdete(s) Teil(e), {} erreichbare(s) "
++        "Teil(e), pruefe {} Joint(s).\n",
 +        getFullName(),
 +        canonicalGroundedObjs.size(),
 +        connectedParts.size(),
@@ -3578,8 +3876,8 @@ index c40e895b9ff..5da43544bed 100644
 +                bool obj2Connected = isObjInSetOfObjRefs(obj2, connectedParts);
 +                if (!obj1Connected || !obj2Connected) {
 +                    Base::Console().message(
-+                        "Assembly: removeUnconnectedJoints('%s') - Joint '%s' entfernt: "
-+                        "part1='%s' (erreichbar=%d), part2='%s' (erreichbar=%d).\n",
++                        "Assembly: removeUnconnectedJoints('{}') - Joint '{}' entfernt: "
++                        "part1='{}' (erreichbar={}), part2='{}' (erreichbar={}).\n",
 +                        getFullName(),
 +                        joint->getNameInDocument(),
 +                        obj1 ? obj1->getFullName().c_str() : "<null>",
@@ -3593,7 +3891,7 @@ index c40e895b9ff..5da43544bed 100644
              }
          ),
          joints.end()
-@@ -1663,7 +2388,7 @@ void AssemblyObject::removeUnconnectedJoints(
+@@ -1663,7 +2638,7 @@ void AssemblyObject::removeUnconnectedJoints(
  void AssemblyObject::traverseAndMarkConnectedParts(
      App::DocumentObject* currentObj,
      std::vector<ObjRef>& connectedParts,
@@ -3602,7 +3900,7 @@ index c40e895b9ff..5da43544bed 100644
  )
  {
      // getConnectedParts returns the objs connected to the currentObj by any joint
-@@ -1679,7 +2404,7 @@ void AssemblyObject::traverseAndMarkConnectedParts(
+@@ -1679,7 +2654,7 @@ void AssemblyObject::traverseAndMarkConnectedParts(
  
  std::vector<ObjRef> AssemblyObject::getConnectedParts(
      App::DocumentObject* part,
@@ -3611,7 +3909,7 @@ index c40e895b9ff..5da43544bed 100644
  )
  {
      if (!part) {
-@@ -1688,13 +2413,21 @@ std::vector<ObjRef> AssemblyObject::getConnectedParts(
+@@ -1688,13 +2663,21 @@ std::vector<ObjRef> AssemblyObject::getConnectedParts(
  
      std::vector<ObjRef> connectedParts;
  
@@ -3636,7 +3934,7 @@ index c40e895b9ff..5da43544bed 100644
  
          if (!obj1 || !obj2) {
              continue;
-@@ -1746,44 +2479,149 @@ bool AssemblyObject::isPartGrounded(App::DocumentObject* obj)
+@@ -1746,44 +2729,149 @@ bool AssemblyObject::isPartGrounded(App::DocumentObject* obj)
      return false;
  }
  
@@ -3705,7 +4003,7 @@ index c40e895b9ff..5da43544bed 100644
 +            names += objRef.obj->getFullName();
 +        }
 +        Base::Console().log(
-+            "FCPROJECT-DEBUG isPartConnected: obj='%s' canonicalObj='%s' -> connectedParts=[%s]\n",
++            "FCPROJECT-DEBUG isPartConnected: obj='{}' canonicalObj='{}' -> connectedParts=[{}]\n",
 +            obj->getFullName().c_str(),
 +            canonicalObj ? canonicalObj->getFullName().c_str() : "<null>",
 +            names.c_str()
@@ -3795,7 +4093,7 @@ index c40e895b9ff..5da43544bed 100644
          for (auto& mbdJoint : mbdJoints) {
              mbdAssembly->addJoint(mbdJoint);
          }
-@@ -2050,7 +2888,10 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointDistance(App::DocumentObj
+@@ -2050,7 +3138,10 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointDistance(App::DocumentObj
      }
  }
  
@@ -3807,7 +4105,7 @@ index c40e895b9ff..5da43544bed 100644
  {
      if (!joint) {
          return {};
-@@ -2059,7 +2900,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2059,7 +3150,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
      JointType jointType = getJointType(joint);
  
      std::shared_ptr<ASMTJoint> mbdJoint = makeMbdJointOfType(joint, jointType);
@@ -3816,7 +4114,7 @@ index c40e895b9ff..5da43544bed 100644
          return {};
      }
      if ((jointType == JointType::Gears || jointType == JointType::Belt)
-@@ -2069,17 +2910,20 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2069,17 +3160,20 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
  
      std::string fullMarkerNameI, fullMarkerNameJ;
      if (jointType == JointType::RackPinion) {
@@ -3841,7 +4139,7 @@ index c40e895b9ff..5da43544bed 100644
      mbdJoint->setMarkerI(fullMarkerNameI);
      mbdJoint->setMarkerJ(fullMarkerNameJ);
  
-@@ -2116,7 +2960,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2116,7 +3210,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
  
                  if (minEnabled) {
                      auto limit = ASMTTranslationLimit::With();
@@ -3850,7 +4148,7 @@ index c40e895b9ff..5da43544bed 100644
                      limit->setMarkerI(fullMarkerNameI);
                      limit->setMarkerJ(fullMarkerNameJ);
                      limit->settype("=>");
-@@ -2127,7 +2971,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2127,7 +3221,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
  
                  if (maxEnabled) {
                      auto limit2 = ASMTTranslationLimit::With();
@@ -3859,7 +4157,7 @@ index c40e895b9ff..5da43544bed 100644
                      limit2->setMarkerI(fullMarkerNameI);
                      limit2->setMarkerJ(fullMarkerNameJ);
                      limit2->settype("=<");
-@@ -2167,7 +3011,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2167,7 +3261,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
  
                  if (minEnabled) {
                      auto limit = ASMTRotationLimit::With();
@@ -3868,7 +4166,7 @@ index c40e895b9ff..5da43544bed 100644
                      limit->setMarkerI(fullMarkerNameI);
                      limit->setMarkerJ(fullMarkerNameJ);
                      limit->settype("=>");
-@@ -2178,7 +3022,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2178,7 +3272,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
  
                  if (maxEnabled) {
                      auto limit2 = ASMTRotationLimit::With();
@@ -3877,7 +4175,7 @@ index c40e895b9ff..5da43544bed 100644
                      limit2->setMarkerI(fullMarkerNameI);
                      limit2->setMarkerJ(fullMarkerNameJ);
                      limit2->settype("=<");
-@@ -2267,7 +3111,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2267,7 +3361,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
              replaceInitialValue(formula2, joint, motionType2);
  
              auto ASMTmotion = CREATE<ASMTGeneralMotion>::With();
@@ -3886,7 +4184,7 @@ index c40e895b9ff..5da43544bed 100644
              ASMTmotion->setMarkerI(fullMarkerNameI);
              ASMTmotion->setMarkerJ(fullMarkerNameJ);
              ASMTmotion->rIJI->atiput(2, motionType == "Angular" ? formula2 : formula);
-@@ -2279,7 +3123,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2279,7 +3373,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
  
          if (motionType == "Angular") {
              auto ASMTmotion = CREATE<ASMTRotationalMotion>::With();
@@ -3895,7 +4193,7 @@ index c40e895b9ff..5da43544bed 100644
              ASMTmotion->setMarkerI(fullMarkerNameI);
              ASMTmotion->setMarkerJ(fullMarkerNameJ);
              ASMTmotion->setRotationZ(formula);
-@@ -2287,7 +3131,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2287,7 +3381,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
          }
          else if (motionType == "Linear") {
              auto ASMTmotion = CREATE<ASMTTranslationalMotion>::With();
@@ -3904,7 +4202,7 @@ index c40e895b9ff..5da43544bed 100644
              ASMTmotion->setMarkerI(fullMarkerNameI);
              ASMTmotion->setMarkerJ(fullMarkerNameJ);
              ASMTmotion->setTranslationZ(formula);
-@@ -2302,10 +3146,18 @@ std::string AssemblyObject::handleOneSideOfJoint(
+@@ -2302,19 +3396,29 @@ std::string AssemblyObject::handleOneSideOfJoint(
      App::DocumentObject* joint,
      const char* propRefName,
      const char* propPlcName,
@@ -3925,7 +4223,9 @@ index c40e895b9ff..5da43544bed 100644
      App::DocumentObject* obj = getObjFromJointRef(joint, propRefName);
  
      if (!part || !obj) {
-@@ -2314,7 +3166,9 @@ std::string AssemblyObject::handleOneSideOfJoint(
+         Base::Console()
+-            .warning("The property %s of Joint %s is bad.\n", propRefName, joint->getFullName());
++            .warning("The property {} of Joint {} is bad.\n", propRefName, joint->getFullName());
          return "";
      }
  
@@ -3936,7 +4236,7 @@ index c40e895b9ff..5da43544bed 100644
      std::shared_ptr<ASMTPart> mbdPart = data.part;
      Base::Placement plc = getPlacementFromProp(joint, propPlcName);
      // Now we have plc which is the JCS placement, but its relative to the Object, not to the
-@@ -2338,7 +3192,7 @@ std::string AssemblyObject::handleOneSideOfJoint(
+@@ -2338,7 +3442,7 @@ std::string AssemblyObject::handleOneSideOfJoint(
          plc = data.offsetPlc * plc;
      }
  
@@ -3945,7 +4245,7 @@ index c40e895b9ff..5da43544bed 100644
      auto mbdMarker = makeMbdMarker(markerNameCopy, plc);
      mbdPart->addMarker(mbdMarker);
  
-@@ -2348,7 +3202,8 @@ std::string AssemblyObject::handleOneSideOfJoint(
+@@ -2348,7 +3452,8 @@ std::string AssemblyObject::handleOneSideOfJoint(
  void AssemblyObject::getRackPinionMarkers(
      App::DocumentObject* joint,
      std::string& markerNameI,
@@ -3955,7 +4255,7 @@ index c40e895b9ff..5da43544bed 100644
  )
  {
      // ASMT rack pinion joint must get the rack as I and pinion as J.
-@@ -2366,7 +3221,12 @@ void AssemblyObject::getRackPinionMarkers(
+@@ -2366,7 +3471,12 @@ void AssemblyObject::getRackPinionMarkers(
          swapJCS(joint);  // make sure that rack is first.
      }
  
@@ -3969,7 +4269,7 @@ index c40e895b9ff..5da43544bed 100644
      App::DocumentObject* obj1 = getObjFromJointRef(joint, "Reference1");
      Base::Placement plc1 = getPlacementFromProp(joint, "Placement1");
  
-@@ -2379,7 +3239,7 @@ void AssemblyObject::getRackPinionMarkers(
+@@ -2379,7 +3489,7 @@ void AssemblyObject::getRackPinionMarkers(
      }
  
      // For the pinion nothing special needed :
@@ -3978,7 +4278,7 @@ index c40e895b9ff..5da43544bed 100644
  
      // For the rack we need to change the placement :
      // make the pinion plc relative to the rack placement.
-@@ -2418,7 +3278,9 @@ void AssemblyObject::getRackPinionMarkers(
+@@ -2418,7 +3528,9 @@ void AssemblyObject::getRackPinionMarkers(
      plc1.setRotation(adjustedRotation);
  
      // Then end of processing similar to handleOneSideOfJoint :
@@ -3989,7 +4289,7 @@ index c40e895b9ff..5da43544bed 100644
      std::shared_ptr<ASMTPart> mbdPart = data1.part;
      if (obj1->getNameInDocument() != part1->getNameInDocument()) {
          plc1 = rack_global_plc * plc1;
-@@ -2431,7 +3293,7 @@ void AssemblyObject::getRackPinionMarkers(
+@@ -2431,7 +3543,7 @@ void AssemblyObject::getRackPinionMarkers(
          plc1 = data1.offsetPlc * plc1;
      }
  
@@ -3998,7 +4298,7 @@ index c40e895b9ff..5da43544bed 100644
      auto mbdMarker = makeMbdMarker(markerName, plc1);
      mbdPart->addMarker(mbdMarker);
  
-@@ -2451,7 +3313,8 @@ int AssemblyObject::slidingPartIndex(App::DocumentObject* joint)
+@@ -2451,7 +3563,8 @@ int AssemblyObject::slidingPartIndex(App::DocumentObject* joint)
      Base::Placement plc2 = getPlacementFromProp(joint, "Placement2");
  
      int slidingFound = 0;
@@ -4008,7 +4308,7 @@ index c40e895b9ff..5da43544bed 100644
          if (getJointType(jt) == JointType::Slider) {
              App::DocumentObject* jpart1 = getMovingPartFromRef(jt, "Reference1");
              App::DocumentObject* jpart2 = getMovingPartFromRef(jt, "Reference2");
-@@ -2483,31 +3346,373 @@ int AssemblyObject::slidingPartIndex(App::DocumentObject* joint)
+@@ -2483,31 +3596,373 @@ int AssemblyObject::slidingPartIndex(App::DocumentObject* joint)
      return slidingFound;
  }
  
@@ -4169,8 +4469,8 @@ index c40e895b9ff..5da43544bed 100644
 +            levelReal = previousLink->getSourceForMirror(mirrorLink);
 +            if (!levelReal) {
 +                Base::Console().warning(
-+                    "Assembly: canonicalizeForMbD() - kein Quellobjekt fuer Spiegel '%s' in "
-+                    "objLinkMap von '%s' gefunden.\n",
++                    "Assembly: canonicalizeForMbD() - kein Quellobjekt fuer Spiegel '{}' in "
++                    "objLinkMap von '{}' gefunden.\n",
 +                    mirrorLink->getNameInDocument(),
 +                    previousLink->getNameInDocument()
 +                );
@@ -4350,13 +4650,12 @@ index c40e895b9ff..5da43544bed 100644
 +        std::string sub1 = (prop1 && !prop1->getSubValues().empty()) ? prop1->getSubValues()[0] : std::string("<leer>");
 +        std::string sub2 = (prop2 && !prop2->getSubValues().empty()) ? prop2->getSubValues()[0] : std::string("<leer>");
          Base::Console().warning(
--            "Assembly: Ignoring joint ({}) because its parts are connected by a fixed "
+             "Assembly: Ignoring joint ({}) because its parts are connected by a fixed "
 -            "joint bundle. This joint is a conflicting or redundant constraint.\n",
 -            joint->getFullLabel()
-+            "Assembly: Ignoring joint (%s) because its parts are connected by a fixed "
 +            "joint bundle. This joint is a conflicting or redundant constraint. "
-+            "[FCProject-Diagnose: Reference1 zeigt auf '%s' (Sub-Pfad '%s'), Reference2 auf "
-+            "'%s' (Sub-Pfad '%s') - falls die Sub-Pfade unterschiedlich sind, ist das "
++            "[FCProject-Diagnose: Reference1 zeigt auf '{}' (Sub-Pfad '{}'), Reference2 auf "
++            "'{}' (Sub-Pfad '{}') - falls die Sub-Pfade unterschiedlich sind, ist das "
 +            "vermutlich KEIN echter Konflikt, sondern eine bekannte Solver-Einschraenkung bei "
 +            "verschachtelten Baugruppen, siehe patches/bugreport-nested-flex-joint-detach/]\n",
 +            getJointContextName(joint),
@@ -4390,7 +4689,7 @@ index c40e895b9ff..5da43544bed 100644
      auto it = objectPartMap.find(part);
      if (it != objectPartMap.end()) {
          // part has been associated with an ASMTPart before
-@@ -2549,21 +3754,76 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
+@@ -2549,21 +4004,76 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
  
      // part has not been associated with an ASMTPart before
      std::string str = part->getFullName();
@@ -4430,7 +4729,7 @@ index c40e895b9ff..5da43544bed 100644
 +    MbDPartData data = {mbdPart, Base::Placement(), containerChainPlc};
      objectPartMap[part] = data;  // Store the association
 +    Base::Console().log(
-+        "FCPROJECT-DEBUG getMbDData: NEW mbdPart '%s' for key '%s'\n",
++        "FCPROJECT-DEBUG getMbDData: NEW mbdPart '{}' for key '{}'\n",
 +        str.c_str(),
 +        part->getFullName().c_str()
 +    );
@@ -4473,7 +4772,7 @@ index c40e895b9ff..5da43544bed 100644
                      App::DocumentObject* partToAdd = currentPart == part1 ? part2 : part1;
  
                      if (objectPartMap.find(partToAdd) != objectPartMap.end()) {
-@@ -2571,9 +3831,83 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
+@@ -2571,9 +4081,83 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
                          continue;
                      }
  
@@ -4551,7 +4850,7 @@ index c40e895b9ff..5da43544bed 100644
 +                        = {mbdPart, plc.inverse() * plci, partToAddContainerChainPlc};
                      objectPartMap[partToAdd] = partData;  // Store the association
 +                    Base::Console().log(
-+                        "FCPROJECT-DEBUG getMbDData: BUNDLE-FIXED key '%s' -> mbdPart '%s' (via joint '%s')\n",
++                        "FCPROJECT-DEBUG getMbDData: BUNDLE-FIXED key '{}' -> mbdPart '{}' (via joint '{}')\n",
 +                        partToAdd->getFullName().c_str(),
 +                        mbdPart->name.c_str(),
 +                        joint->getFullName().c_str()
@@ -4559,7 +4858,7 @@ index c40e895b9ff..5da43544bed 100644
  
                      // Recursively call for partToAdd
                      self(partToAdd, self);
-@@ -2586,12 +3920,12 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
+@@ -2586,12 +4170,12 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
      return data;
  }
  
@@ -4574,7 +4873,32 @@ index c40e895b9ff..5da43544bed 100644
  }
  
  std::shared_ptr<ASMTPart> AssemblyObject::makeMbdPart(std::string& name, Base::Placement plc, double mass)
-@@ -2656,7 +3990,9 @@ std::vector<ObjRef> AssemblyObject::getDownstreamParts(
+@@ -2649,6 +4233,24 @@ std::vector<ObjRef> AssemblyObject::getDownstreamParts(
+         return {};
+     }
+ 
++    // FCPROJECT-PATCH (2026-09-29, BG43/BG47 "Buchse loest sich vom Rotor" beim Drag): 'part'
++    // kommt von Aufrufern wie getUpstreamMovingPart() bewusst als UI-/gerendertes Objekt herein
++    // (siehe dortiger Kommentar - resolveForUi() statt resolveForSolver()), waehrend
++    // getConnectedParts() seine Kanten ueber resolvePartForMbD() bildet (kanonische Identitaet,
++    // z.B. bei einem direkt referenzierten Rotor der lokale Spiegel in BG43 vs. das kanonische
++    // Original in der verschachtelten BG67). Ohne Kanonisierung des Startpunkts hier stimmt
++    // 'part' (Vergleichswert in getConnectedParts()' `obj1 == part`) mit KEINEM Joint-Endpunkt
++    // ueberein, sobald der Startteil bereits im ALLERERSTEN Joint direkt (nicht erst tiefer in
++    // der Traversal) referenziert wird - die Traversal liefert dann faelschlich eine leere
++    // Downstream-Liste, obwohl echte, erreichbare Nachbarn existieren (live an BG47s "StarrerVerbund"-
++    // Fixed-Joint zum Rotor gefunden: getDownstreamParts(rotor, rotorsEigenesRevolute) lieferte []
++    // statt [BG47]). isPartConnected() (dieselbe Traversal-Familie) kanonisiert seinen Eingabewert
++    // bereits genauso - hier fehlte die analoge Behandlung.
++    App::DocumentObject* canonicalPart = canonicalizeForMbD(part);
++    if (!canonicalPart) {
++        canonicalPart = part;
++    }
++
+     // First we deactivate the joint
+     bool state = false;
+     if (joint) {
+@@ -2656,14 +4258,16 @@ std::vector<ObjRef> AssemblyObject::getDownstreamParts(
          setJointActivated(joint, false);
      }
  
@@ -4583,9 +4907,19 @@ index c40e895b9ff..5da43544bed 100644
 +    // JointRef-Vektor statt extractJointObjects() - siehe isPartConnected() fuer die Begruendung.
 +    std::vector<JointRef> joints = getJoints();
  
-     std::vector<ObjRef> connectedParts = {{part, nullptr}};
-     traverseAndMarkConnectedParts(part, connectedParts, joints);
-@@ -2675,6 +4011,23 @@ std::vector<ObjRef> AssemblyObject::getDownstreamParts(
+-    std::vector<ObjRef> connectedParts = {{part, nullptr}};
+-    traverseAndMarkConnectedParts(part, connectedParts, joints);
++    std::vector<ObjRef> connectedParts = {{canonicalPart, nullptr}};
++    traverseAndMarkConnectedParts(canonicalPart, connectedParts, joints);
+ 
+     std::vector<ObjRef> downstreamParts;
+     for (auto& parti : connectedParts) {
+-        if (!isPartConnected(parti.obj) && (parti.obj != part)) {
++        if (!isPartConnected(parti.obj) && (parti.obj != canonicalPart)) {
+             downstreamParts.push_back(parti);
+         }
+     }
+@@ -2675,6 +4279,23 @@ std::vector<ObjRef> AssemblyObject::getDownstreamParts(
      return downstreamParts;
  }
  
@@ -4609,7 +4943,7 @@ index c40e895b9ff..5da43544bed 100644
  App::DocumentObject* AssemblyObject::getUpstreamMovingPart(
      App::DocumentObject* part,
      App::DocumentObject*& joint,
-@@ -2694,7 +4047,11 @@ App::DocumentObject* AssemblyObject::getUpstreamMovingPart(
+@@ -2694,7 +4315,11 @@ App::DocumentObject* AssemblyObject::getUpstreamMovingPart(
          return part;
      }
  
@@ -4622,7 +4956,7 @@ index c40e895b9ff..5da43544bed 100644
  
      return getUpstreamMovingPart(part, joint, name);
  }
-@@ -2718,7 +4075,7 @@ void AssemblyObject::setObjMasses(std::vector<std::pair<App::DocumentObject*, do
+@@ -2718,7 +4343,7 @@ void AssemblyObject::setObjMasses(std::vector<std::pair<App::DocumentObject*, do
      objMasses = objectMasses;
  }
  
@@ -4631,7 +4965,7 @@ index c40e895b9ff..5da43544bed 100644
  {
      std::vector<AssemblyLink*> subAssemblies = {};
  
-@@ -2736,6 +4093,112 @@ std::vector<AssemblyLink*> AssemblyObject::getSubAssemblies()
+@@ -2736,6 +4361,112 @@ std::vector<AssemblyLink*> AssemblyObject::getSubAssemblies()
      return subAssemblies;
  }
  
@@ -4744,20 +5078,217 @@ index c40e895b9ff..5da43544bed 100644
  void AssemblyObject::ensureIdentityPlacements()
  {
      std::vector<App::DocumentObject*> group = Group.getValues();
-@@ -2799,9 +4262,40 @@ void AssemblyObject::syncGroundedJoints()
+@@ -2782,6 +4513,187 @@ void AssemblyObject::syncGroundedJoints()
+         }
+     }
  
-         // Create grounding joint if placement is locked but no joint exists
++    // FCPROJECT-PATCH (2026-09-27, siehe collectGroundedPartsRecursive()-Kommentar): NUR fuer die
++    // Entscheidung "braucht dieses Teil einen NEUEN GroundedJoint" massgeblich - erfasst auch
++    // Erdungen, die zwei oder mehr Ebenen tiefer in einer nicht-rigiden Unterbaugruppe bereits
++    // existieren, damit hier keine redundante Zweit-Erdung fuer dasselbe physische Teil entsteht.
++    std::unordered_set<App::DocumentObject*> groundedAnywhere;
++    for (auto* subAssembly : getSubAssemblies()) {
++        if (!subAssembly || subAssembly->isRigid()) {
++            continue;
++        }
++        AssemblyObject* nested = subAssembly->getLinkedAssembly();
++        if (!nested || nested == this) {
++            continue;
++        }
++        collectGroundedPartsRecursive(nested, groundedAnywhere);
++    }
++
++    // FCPROJECT-PATCH (2026-09-29, live an BG37->BG43->BG67 gefunden, Nutzerauftrag "mit System,
++    // nicht nur fuer diese Baugruppe"): generelle Erkennung "mehrere unabhaengige Erdungswurzeln
++    // landen im selben Zusammenhangskomponenten" - ersetzt den bisherigen, auf den Sonderfall
++    // "identisches physisches Ziel doppelt geerdet" beschraenkten Block (2026-09-28-Fund).
++    //
++    // Zwei strukturell verschiedene Ausloeser, EINE gemeinsame Erkennung:
++    // (a) Dasselbe physische Teil ist sowohl LOKAL (an dieser Ebene) als auch VERSCHACHTELT
++    //     geerdet - typischerweise ein Nebenprodukt von CommandInsertLink.py::
++    //     handleFirstInsertion()s "ground first part"-Komfortlogik beim ersten Einfuegen einer
++    //     flexiblen Unterbaugruppe (legt eine lokale Erdung auf dem Spiegel des ohnehin schon
++    //     intern geerdeten Ziels an). Hier ist die INNERE (tiefer verschachtelte, urspruenglich
++    //     vom Nutzer/Insert-Mechanismus gesetzte) Erdung die massgebliche - die AEUSSERE, spaeter
++    //     hinzugekommene lokale Kopie ist die ueberzaehlige.
++    // (b) ZWEI VERSCHIEDENE physische Teile sind je EIGENSTAENDIG geerdet (z.B. ein Motorgehaeuse
++    //     innerhalb einer eigens testbaren Unterbaugruppe UND der Maschinenrahmen einer
++    //     uebergeordneten Baugruppe), werden aber durch einen ECHTEN Joint (z.B. eine
++    //     Motor-Rahmen-Verschraubung) nachtraeglich zu EINEM zusammenhaengenden Mechanismus
++    //     verbunden. Live gefunden: BG67s eigene interne Erdung von 048 (Motor-Stator) UND BG37s
++    //     eigene Erdung von 036 (Rahmen), verbunden ueber einen neu hinzugefuegten Fixed-Joint -
++    //     exakt die Topologie aus reference-closed-loop-rotation-ambiguity-32477-addendum.md
++    //     (zwei unabhaengig verankerte Strukturen + Kreuz-Fixed-Joint = nachweislich instabile
++    //     Solver-Wurzelwahl, dort bereits als Bugreport-Addendum eingereicht). Hier ist die
++    //     AEUSSERE (der eigentlichen "Welt" naeherstehende, z.B. der reale Maschinenrahmen)
++    //     Erdung die massgebliche - die TIEFER verschachtelte, urspruenglich nur fuer isolierte
++    //     Tests der Unterbaugruppe gedachte Erdung wird durch die echte externe Befestigung
++    //     ueberfluessig.
++    //
++    // Die Tie-Break-Regel ist deshalb BEWUSST gegensaetzlich zu (a) und (b): bei identischem Ziel
++    // gewinnt die TIEFERE Erdung, bei verschiedenen ueber einen echten Joint verbundenen Zielen
++    // gewinnt die FLACHERE (aeussere) Erdung. Unterscheidbar rein an der Graphtopologie (gleiches
++    // Ziel vs. verschiedene, ueber echte Joints verbundene Ziele) - kein Spezialfall fuer
++    // bestimmte Objektnamen oder Baugruppen.
++    //
++    // WICHTIG (Nutzerauftrag): nie loeschen, nur ueber die vorhandene Suppressed-Eigenschaft
++    // abschalten - der Nutzer moechte eine ueberzaehlige Erdung jederzeit wieder aktivieren
++    // koennen, z.B. wenn eine Unterbaugruppe spaeter wieder eigenstaendig getestet wird.
++    std::vector<GroundedRootInfo> allRoots;
++    for (auto& [target, joint] : groundedMap) {
++        if (target) {
++            allRoots.push_back({target, joint, 0});
++        }
++    }
++    for (auto* subAssembly : getSubAssemblies()) {
++        if (!subAssembly || subAssembly->isRigid()) {
++            continue;
++        }
++        AssemblyObject* nested = subAssembly->getLinkedAssembly();
++        if (!nested || nested == this) {
++            continue;
++        }
++        collectGroundedJointsRecursive(nested, allRoots, 1);
++    }
++
++    if (allRoots.size() > 1) {
++        std::vector<JointRef> allJoints = getJoints();
++        std::vector<bool> visited(allRoots.size(), false);
++        for (std::size_t i = 0; i < allRoots.size(); ++i) {
++            if (visited[i] || !allRoots[i].target) {
++                continue;
++            }
++            App::DocumentObject* canonicalI = canonicalizeForMbD(allRoots[i].target);
++            if (!canonicalI) {
++                canonicalI = allRoots[i].target;
++            }
++            std::vector<ObjRef> reachable = {{canonicalI, nullptr}};
++            traverseAndMarkConnectedParts(canonicalI, reachable, allJoints);
++
++            std::vector<std::size_t> cluster;
++            bool sameTargetOnly = true;
++            for (std::size_t j = 0; j < allRoots.size(); ++j) {
++                if (visited[j] || !allRoots[j].target) {
++                    continue;
++                }
++                App::DocumentObject* canonicalJ = canonicalizeForMbD(allRoots[j].target);
++                if (!canonicalJ) {
++                    canonicalJ = allRoots[j].target;
++                }
++                if (canonicalJ == canonicalI || isObjInSetOfObjRefs(canonicalJ, reachable)) {
++                    cluster.push_back(j);
++                    visited[j] = true;
++                    if (canonicalJ != canonicalI) {
++                        sameTargetOnly = false;
++                    }
++                }
++            }
++            if (cluster.size() <= 1) {
++                continue;
++            }
++
++            // Tie-break: identisches Ziel -> tiefste Erdung gewinnt; verschiedene, ueber echte
++            // Joints verbundene Ziele -> flachste (aeusserste) Erdung gewinnt.
++            std::size_t keepIdx = cluster[0];
++            for (std::size_t idx : cluster) {
++                bool better = sameTargetOnly ? (allRoots[idx].depth > allRoots[keepIdx].depth)
++                                              : (allRoots[idx].depth < allRoots[keepIdx].depth);
++                if (better) {
++                    keepIdx = idx;
++                }
++            }
++            for (std::size_t idx : cluster) {
++                if (idx == keepIdx) {
++                    continue;
++                }
++                App::DocumentObject* redundantJoint = allRoots[idx].joint;
++                App::DocumentObject* redundantTarget = allRoots[idx].target;
++                if (!redundantJoint || !redundantTarget) {
++                    continue;
++                }
++                // FCPROJECT-PATCH (2026-09-29): GroundedJoint (JointObject.py) hat KEINE
++                // "Suppressed"-Eigenschaft (nur normale Joints) - getJointActivated()/
++                // setJointActivated() greifen hier ins Leere. Der tatsaechliche "Erdungs-Effekt"
++                // ist stattdessen die ReadOnly-Sperre auf ObjectToGround's Placement/LinkPlacement
++                // (siehe JointObject.py GroundedJoint.setReadOnly()) - "abschalten" heisst daher
++                // hier: ueber denselben Proxy-Code-Pfad die Sperre aufheben (Ziel wieder
++                // beschreibbar machen), OHNE das GroundedJoint-Objekt selbst zu loeschen oder eine
++                // neue persistente Eigenschaft anzulegen (Nutzerregel: keine neuen persistenten
++                // Eigenschaften ohne Ruecksprache, siehe feedback-fcstd-compatibility-mandatory).
++                // Da diese Entscheidung bei JEDEM solve() aus der aktuellen Joint-Topologie neu
++                // hergeleitet wird (nicht persistiert), ist sie automatisch reversibel: entfaellt
++                // die aeussere Verbindung wieder, faellt auch die Abschaltung beim naechsten
++                // solve() weg und die bestehende "braucht dieses Teil eine neue Erdung"-Logik
++                // weiter unten uebernimmt wieder.
++                auto* targetPlc = redundantTarget->getPlacementProperty();
++                if (!targetPlc || !targetPlc->isReadOnly()) {
++                    continue;  // bereits abgeschaltet (oder nie aktiv)
++                }
++                Base::Console().warning(
++                    "Assembly: '{}' schaltet redundante Erdung '{}' (Ziel '{}') ab - {} bereits "
++                    "mit der massgeblichen Erdung '{}' (Ziel '{}') verbunden.\n",
++                    getFullName(),
++                    redundantJoint->getFullName(),
++                    redundantTarget->getFullName(),
++                    sameTargetOnly ? "dasselbe physische Teil ist" : "dieses Teil ist ueber einen echten Joint",
++                    allRoots[keepIdx].joint ? allRoots[keepIdx].joint->getFullName() : "?",
++                    allRoots[keepIdx].target->getFullName()
++                );
++
++                Base::PyGILStateLocker lock;
++                try {
++                    App::Document* jointDoc = redundantJoint->getDocument();
++                    if (jointDoc) {
++                        std::string jointDocName = jointDoc->getName();
++                        std::string jointName = redundantJoint->getNameInDocument();
++                        std::string code = "import FreeCAD\n"
++                                           "try:\n"
++                                           "    doc = FreeCAD.getDocument('"
++                            + jointDocName
++                            + "')\n"
++                              "    j = doc.getObject('"
++                            + jointName
++                            + "')\n"
++                              "    if j and hasattr(j, 'Proxy') and hasattr(j.Proxy, 'setReadOnly'):\n"
++                              "        j.Proxy.setReadOnly(j, False)\n"
++                              "except Exception as e:\n"
++                              "    FreeCAD.Console.PrintError(str(e) + '\\n')\n";
++                        Base::Interpreter().runString(code.c_str());
++                    }
++                }
++                catch (...) {
++                }
++                groundedMap.erase(redundantTarget);
++            }
++        }
++    }
++
+     std::vector<App::DocumentObject*> allParts = getAssemblyComponents(this);
+ 
+     for (auto part : allParts) {
+@@ -2795,13 +4707,46 @@ void AssemblyObject::syncGroundedJoints()
+ 
+         bool isReadOnly = propPlc->isReadOnly();
+         auto it = groundedMap.find(part);
+-        bool hasJoint = (it != groundedMap.end());
+-
+-        // Create grounding joint if placement is locked but no joint exists
++        bool hasLocalJoint = (it != groundedMap.end());
++        // FCPROJECT-PATCH (2026-09-27): fuer die Erzeugungs-Entscheidung zaehlt eine Erdung
++        // AN JEDER TIEFE (lokal ODER zwei+ Ebenen tiefer in einer nicht-rigiden Unterbaugruppe) -
++        // siehe collectGroundedPartsRecursive()-Kommentar.
++        bool hasJoint = hasLocalJoint || groundedAnywhere.count(part) > 0;
++
++        // Create grounding joint if placement is locked but no joint exists (anywhere in the
++        // nesting chain).
          if (isReadOnly && !hasJoint) {
 +            Base::Console().log(
-+                "FCPROJECT-DEBUG: syncGroundedJoints('%s') legt NEUEN GroundedJoint an fuer "
-+                "part='%s' (Dokument '%s').\n",
++                "FCPROJECT-DEBUG: syncGroundedJoints('{}') legt NEUEN GroundedJoint an fuer "
++                "part='{}' (Dokument '{}').\n",
 +                getFullName(),
 +                part->getNameInDocument(),
 +                part->getDocument() ? part->getDocument()->getName() : "<null>"
 +            );
-+            // Konsistenter Zustand (oder Selbstheilung greift) - ein evtl. anhaengiger
-+            // Loesch-Verdacht von einem frueheren Aufruf ist damit hinfaellig.
-+            pendingGroundedJointRemoval.erase(part);
 +
              Base::PyGILStateLocker lock;
              try {
@@ -4785,7 +5316,7 @@ index c40e895b9ff..5da43544bed 100644
                  std::string asmName = getNameInDocument();
                  std::string partName = part->getNameInDocument();
                  std::string code = "import FreeCAD\n"
-@@ -2810,11 +4304,14 @@ void AssemblyObject::syncGroundedJoints()
+@@ -2810,11 +4755,14 @@ void AssemblyObject::syncGroundedJoints()
                                     "    import UtilsAssembly\n"
                                     "    doc = FreeCAD.getDocument('"
                      + docName
@@ -4801,46 +5332,31 @@ index c40e895b9ff..5da43544bed 100644
                      + partName
                      + "')\n"
                        "    jg = UtilsAssembly.getJointGroup(asm)\n"
-@@ -2832,9 +4329,35 @@ void AssemblyObject::syncGroundedJoints()
+@@ -2832,10 +4780,18 @@ void AssemblyObject::syncGroundedJoints()
              catch (...) {
              }
          }
 -        // Delete grounding joint if placement lock was lifted
-+        // Delete grounding joint if placement lock was lifted - aber erst nach einer zweiten
-+        // Bestaetigung in einem SPAETEREN solve()-Aufruf (siehe Kommentar bei
-+        // pendingGroundedJointRemoval in AssemblyObject.h). Das faengt die Race Condition ab,
-+        // bei der der ganz fruehe, durch onChanged(&Group) waehrend des Dokument-Restores
-+        // ausgeloeste solve()-Aufruf schneller laeuft als GroundedJoint.onDocumentRestored()
-+        // (Python), das das ReadOnly-Flag neu setzt: bei einem einmaligen Race-Treffer ist das
-+        // Flag spaetestens beim naechsten solve() korrekt gesetzt, der Verdacht wird dann durch
-+        // den ersten if-Zweig oben (isReadOnly && !hasJoint faellt weg) wieder ausgeraeumt,
-+        // BEVOR es zu dieser zweiten Bestaetigung kommt. Beim echten Anwendungsfall (Nutzer hebt
-+        // die Sperre manuell per Rechtsklick auf) bleibt der inkonsistente Zustand dagegen ueber
-+        // mehrere solve()-Aufrufe hinweg bestehen - dort loescht der zweite Treffer wie bisher.
-         else if (!isReadOnly && hasJoint) {
+-        else if (!isReadOnly && hasJoint) {
 -            getDocument()->removeObject(it->second->getNameInDocument());
-+            if (pendingGroundedJointRemoval.count(part)) {
-+                Base::Console().message(
-+                    "Assembly: GroundedJoint '%s' fuer Teil '%s' entfernt (Sperre wurde "
-+                    "ueber mehrere Solve-Zyklen hinweg aufgehoben).\n",
-+                    it->second->getNameInDocument(), part->getNameInDocument()
-+                );
-+                getDocument()->removeObject(it->second->getNameInDocument());
-+                pendingGroundedJointRemoval.erase(part);
-+            }
-+            else {
-+                pendingGroundedJointRemoval.insert(part);
-+            }
-+        }
-+        else {
-+            // Konsistenter Zustand (isReadOnly && hasJoint, oder !isReadOnly && !hasJoint) -
-+            // ein evtl. anhaengiger Loesch-Verdacht ist hinfaellig.
-+            pendingGroundedJointRemoval.erase(part);
-         }
+-        }
++        // FCPROJECT-PATCH (2026-10-02, live an BG43->BG47 gefunden, Nutzerauftrag "nichts
++        // loeschen, deaktivieren"): frueher wurde ein GroundedJoint, dessen Ziel nicht (mehr)
++        // ReadOnly ist, hier nach zwei bestaetigenden solve()-Aufrufen geloescht. Das widersprach
++        // der Regel direkt oberhalb in dieser Funktion (Doppel-Anker-Erkennung: "nie loeschen,
++        // nur abschalten") - sobald die Doppel-Anker-Erkennung ein verschachteltes GroundedJoint
++        // deaktiviert (ReadOnly=false setzt), loeschte dieser Zweig es beim naechsten eigenen
++        // solve() der betroffenen Unterbaugruppe wieder permanent (live reproduziert: BG47s
++        // eigenes GroundedJoint verschwand nach zwei solve()-Aufrufen auf BG47 selbst). Ein
++        // GroundedJoint, dessen Ziel nicht ReadOnly ist, hat ohnehin keine Wirkung auf den Solve -
++        // es muss nicht zusaetzlich aus dem Dokument entfernt werden, weder wenn die Entsperrung
++        // von der Doppel-Anker-Erkennung noch wenn sie von einem manuellen Rechtsklick des
++        // Nutzers stammt. Kein Loesch-Zweig mehr noetig.
      }
  }
+ 
 diff --git a/src/Mod/Assembly/App/AssemblyObject.h b/src/Mod/Assembly/App/AssemblyObject.h
-index 63bb7168d88..6d8932b2f6e 100644
+index 63bb7168d88..56618dec690 100644
 --- a/src/Mod/Assembly/App/AssemblyObject.h
 +++ b/src/Mod/Assembly/App/AssemblyObject.h
 @@ -26,6 +26,7 @@
@@ -5199,7 +5715,26 @@ index 63bb7168d88..6d8932b2f6e 100644
  
      bool isEmpty() const;
      int numberOfComponents() const;
-@@ -269,9 +506,99 @@ private:
+@@ -261,6 +498,18 @@ public:
+     }
+     fastsignals::signal<void()> signalSolverUpdate;
+ 
++    // FCPROJECT-PATCH (2026-09-27, siehe solveHiddenFlexibleUnderRigid()-Kommentar in
++    // AssemblyObject.cpp): nach einem erzwungenen solve() einer flexiblen, hinter einer rigiden
++    // Ebene versteckten Unterbaugruppe muss deren frisch geloestes Placement noch in das
++    // tatsaechlich gerenderte lokale Spiegel-Objekt uebertragen werden. IdentityGraph kann hier
++    // NICHT helfen (bewusst so designed: eine rigide AssemblyLink ist fuer den gesamten Graphen
++    // ein opakes Blatt, der Graph steigt nie in ihr Inneres ab) - stattdessen direkt ueber
++    // 'mirrorLink->objLinkMap' (von AssemblyLink::synchronizeComponents() gepflegt, bildet echtes
++    // Quellobjekt -> lokale Spiegel-Kopie ab), das GENAU fuer diesen Zweck existiert. Public, weil
++    // solveHiddenFlexibleUnderRigid() dies auf einer FREMDEN AssemblyObject-Instanz (nicht 'this')
++    // aufruft.
++    void propagateSolvedPlacementsTo(AssemblyLink* mirrorLink);
++
+ private:
+     void rebuildRigidClusters();
+     App::DocumentObject* getRigidRepresentative(App::DocumentObject* part) const;
+@@ -269,9 +518,99 @@ private:
      void updateRigidPlacementCache();
      void prepareMbdForIslandDrag(std::vector<App::DocumentObject*> dragParts);
  
@@ -5299,23 +5834,8 @@ index 63bb7168d88..6d8932b2f6e 100644
      std::unordered_map<App::DocumentObject*, App::DocumentObject*> rigidRepByPart;
      std::unordered_map<App::DocumentObject*, std::vector<App::DocumentObject*>> rigidMembersByRep;
      std::unordered_map<App::DocumentObject*, Base::Placement> rigidPlacementCache;
-@@ -281,8 +608,24 @@ private:
+@@ -283,6 +622,9 @@ private:
  
-     std::vector<std::pair<App::DocumentObject*, Base::Placement>> previousPositions;
- 
-+    // FCPROJECT-PATCH (Root-Cause-Fix, solver-root-cause-fix): syncGroundedJoints() loeschte
-+    // bisher ein GroundedJoint-Objekt sofort beim ERSTEN solve()-Aufruf, der ein
-+    // nicht-ReadOnly Placement bei gleichzeitig noch existierendem GroundedJoint sieht. Das
-+    // triff faelschlich zu, wenn der ganz frueh (waehrend/kurz nach dem Dokument-Restore per
-+    // onChanged(&Group) ausgeloeste) solve()-Aufruf schneller laeuft als
-+    // GroundedJoint.onDocumentRestored() (Python), das das ReadOnly-Flag neu setzt - eine
-+    // echte Race Condition, siehe patches/bugreport-groundedjoint-deletion-race/Questions.md.
-+    // Dieses Set verlangt eine ZWEITE Bestaetigung in einem SPAETEREN solve()-Aufruf, bevor
-+    // tatsaechlich geloescht wird - harmlos fuer den echten Anwendungsfall (Nutzer hebt die
-+    // Sperre manuell auf: der inkonsistente Zustand bleibt ueber mehrere solve()-Aufrufe
-+    // hinweg bestehen), verhindert aber den einmaligen Race-Treffer beim Laden.
-+    std::unordered_set<App::DocumentObject*> pendingGroundedJointRemoval;
-+
      bool bundleFixed;
  
 +    // Siehe setActiveEditContext()-Deklaration weiter oben.
@@ -5552,7 +6072,7 @@ index ddd002de8af..5f177e6c52a 100644
 +    Py_Return;
 +}
 diff --git a/src/Mod/Assembly/App/AssemblyUtils.cpp b/src/Mod/Assembly/App/AssemblyUtils.cpp
-index 3e0b804b8f6..e2a3166c5b6 100644
+index 3e0b804b8f6..50670d07045 100644
 --- a/src/Mod/Assembly/App/AssemblyUtils.cpp
 +++ b/src/Mod/Assembly/App/AssemblyUtils.cpp
 @@ -670,10 +670,98 @@ App::DocumentObject* getLinkedObjFromRef(const App::DocumentObject* joint, const
@@ -5695,8 +6215,8 @@ index 3e0b804b8f6..e2a3166c5b6 100644
 +    // bei jedem Selektions-/Zieh-Ereignis aufgerufen wird.
 +    if (verboseLog) {
 +        Base::Console().log(
-+            "FCPROJECT-DEBUG getMovingPartFromSel: assemblyObject='%s', selRoot='%s', sub='%s', "
-+            "names=[%s]\n",
++            "FCPROJECT-DEBUG getMovingPartFromSel: assemblyObject='{}', selRoot='{}', sub='{}', "
++            "names=[{}]\n",
 +            assemblyObject ? assemblyObject->getFullName().c_str() : "<null>",
 +            obj->getFullName().c_str(),
 +            sub.c_str(),
@@ -5732,7 +6252,7 @@ index 3e0b804b8f6..e2a3166c5b6 100644
 +        }
 +        if (verboseLog) {
 +            Base::Console().log(
-+                "FCPROJECT-DEBUG   step name='%s' in doc='%s' -> obj='%s'\n",
++                "FCPROJECT-DEBUG   step name='{}' in doc='{}' -> obj='{}'\n",
 +                objName.c_str(),
 +                doc->getName(),
 +                obj ? obj->getFullName().c_str() : "<not found>"
@@ -5747,7 +6267,7 @@ index 3e0b804b8f6..e2a3166c5b6 100644
              doc = obj->getLinkedObject()->getDocument();
 +            if (verboseLog) {
 +                Base::Console().log(
-+                    "FCPROJECT-DEBUG     isLink() -> doc switched to '%s'\n",
++                    "FCPROJECT-DEBUG     isLink() -> doc switched to '{}'\n",
 +                    doc->getName()
 +                );
 +            }
@@ -5776,7 +6296,7 @@ index 3e0b804b8f6..e2a3166c5b6 100644
 +                           ->isSubAssemblyFullyUnconnected(asmLink)) {
 +                    if (verboseLog) {
 +                        Base::Console().log(
-+                            "FCPROJECT-DEBUG     flexible AssemblyLink '%s' unverbunden -> als "
++                            "FCPROJECT-DEBUG     flexible AssemblyLink '{}' unverbunden -> als "
 +                            "Ganzes behandelt (nicht durchlaufen)\n",
 +                            asmLink->getNameInDocument()
 +                        );
@@ -5804,7 +6324,7 @@ index 3e0b804b8f6..e2a3166c5b6 100644
 +                            if (verboseLog) {
 +                                Base::Console().log(
 +                                    "FCPROJECT-DEBUG     flexible AssemblyLink -> doc switched to "
-+                                    "'%s'\n",
++                                    "'{}'\n",
 +                                    doc->getName()
 +                                );
 +                            }
@@ -5833,7 +6353,7 @@ index 3e0b804b8f6..e2a3166c5b6 100644
  
 +        if (verboseLog) {
 +            Base::Console().log(
-+                "FCPROJECT-DEBUG   -> RETURN '%s'\n",
++                "FCPROJECT-DEBUG   -> RETURN '{}'\n",
 +                obj->getFullName().c_str()
 +            );
 +        }
