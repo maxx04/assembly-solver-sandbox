@@ -819,10 +819,11 @@ class Joint:
 
             presolved = joint.JointType in JointUsingPreSolve and self.preSolve(joint, False)
 
+            assembly = self.getAssembly(joint)
             # FCPROJECT-PATCH (2026-09-13, siehe solveIfAllowed() oben fuer Begruendung):
-            isAssembly = self.getAssembly(joint) is not None
+            isAssembly = assembly is not None
             if isAssembly and not presolved:
-                solveIfAllowed(self.getAssembly(joint))
+                solveIfAllowed(assembly)
             else:
                 self.updateJCSPlacements(joint)
 
@@ -1298,7 +1299,7 @@ class ViewProviderJoint:
         # Assuming Reference1 corresponds to the first part link
         if hasattr(self.app_obj, "Reference1"):
             part = UtilsAssembly.getMovingPart(self.app_obj.Reference1)
-            if part is not None and not assembly.isPartConnected(part):
+            if part is not None and assembly is not None and not assembly.isPartConnected(part):
                 overlays[Gui.IconPosition.BottomLeft] = "Part_Detached"
 
         return overlays
