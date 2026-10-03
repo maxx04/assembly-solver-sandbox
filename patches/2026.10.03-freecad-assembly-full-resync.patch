@@ -2491,7 +2491,7 @@ index 7ca17b4e3be..6e38571c0c2 100644
  
      return ret;
 diff --git a/src/Mod/Assembly/App/AssemblyObject.cpp b/src/Mod/Assembly/App/AssemblyObject.cpp
-index c40e895b9ff..257d36e549d 100644
+index 171363a633c..99c879c05e7 100644
 --- a/src/Mod/Assembly/App/AssemblyObject.cpp
 +++ b/src/Mod/Assembly/App/AssemblyObject.cpp
 @@ -81,6 +81,7 @@
@@ -4298,8 +4298,8 @@ index c40e895b9ff..257d36e549d 100644
      auto mbdMarker = makeMbdMarker(markerName, plc1);
      mbdPart->addMarker(mbdMarker);
  
-@@ -2451,7 +3563,8 @@ int AssemblyObject::slidingPartIndex(App::DocumentObject* joint)
-     Base::Placement plc2 = getPlacementFromProp(joint, "Placement2");
+@@ -2449,7 +3561,8 @@ int AssemblyObject::slidingPartIndex(App::DocumentObject* joint)
+     Base::Placement plc2 = getJointSideGlobalPlacement(joint, "Reference2", "Placement2");
  
      int slidingFound = 0;
 -    for (auto* jt : getJoints()) {
@@ -4308,7 +4308,7 @@ index c40e895b9ff..257d36e549d 100644
          if (getJointType(jt) == JointType::Slider) {
              App::DocumentObject* jpart1 = getMovingPartFromRef(jt, "Reference1");
              App::DocumentObject* jpart2 = getMovingPartFromRef(jt, "Reference2");
-@@ -2483,31 +3596,373 @@ int AssemblyObject::slidingPartIndex(App::DocumentObject* joint)
+@@ -2482,31 +3595,373 @@ int AssemblyObject::slidingPartIndex(App::DocumentObject* joint)
      return slidingFound;
  }
  
@@ -4689,7 +4689,7 @@ index c40e895b9ff..257d36e549d 100644
      auto it = objectPartMap.find(part);
      if (it != objectPartMap.end()) {
          // part has been associated with an ASMTPart before
-@@ -2549,21 +4004,76 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
+@@ -2548,21 +4003,76 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
  
      // part has not been associated with an ASMTPart before
      std::string str = part->getFullName();
@@ -4772,7 +4772,7 @@ index c40e895b9ff..257d36e549d 100644
                      App::DocumentObject* partToAdd = currentPart == part1 ? part2 : part1;
  
                      if (objectPartMap.find(partToAdd) != objectPartMap.end()) {
-@@ -2571,9 +4081,83 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
+@@ -2570,9 +4080,83 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
                          continue;
                      }
  
@@ -4858,7 +4858,7 @@ index c40e895b9ff..257d36e549d 100644
  
                      // Recursively call for partToAdd
                      self(partToAdd, self);
-@@ -2586,12 +4170,12 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
+@@ -2585,12 +4169,12 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
      return data;
  }
  
@@ -4873,7 +4873,7 @@ index c40e895b9ff..257d36e549d 100644
  }
  
  std::shared_ptr<ASMTPart> AssemblyObject::makeMbdPart(std::string& name, Base::Placement plc, double mass)
-@@ -2649,6 +4233,24 @@ std::vector<ObjRef> AssemblyObject::getDownstreamParts(
+@@ -2648,6 +4232,24 @@ std::vector<ObjRef> AssemblyObject::getDownstreamParts(
          return {};
      }
  
@@ -4898,7 +4898,7 @@ index c40e895b9ff..257d36e549d 100644
      // First we deactivate the joint
      bool state = false;
      if (joint) {
-@@ -2656,14 +4258,16 @@ std::vector<ObjRef> AssemblyObject::getDownstreamParts(
+@@ -2655,14 +4257,16 @@ std::vector<ObjRef> AssemblyObject::getDownstreamParts(
          setJointActivated(joint, false);
      }
  
@@ -4919,7 +4919,7 @@ index c40e895b9ff..257d36e549d 100644
              downstreamParts.push_back(parti);
          }
      }
-@@ -2675,6 +4279,23 @@ std::vector<ObjRef> AssemblyObject::getDownstreamParts(
+@@ -2674,6 +4278,23 @@ std::vector<ObjRef> AssemblyObject::getDownstreamParts(
      return downstreamParts;
  }
  
@@ -4943,7 +4943,7 @@ index c40e895b9ff..257d36e549d 100644
  App::DocumentObject* AssemblyObject::getUpstreamMovingPart(
      App::DocumentObject* part,
      App::DocumentObject*& joint,
-@@ -2694,7 +4315,11 @@ App::DocumentObject* AssemblyObject::getUpstreamMovingPart(
+@@ -2693,7 +4314,11 @@ App::DocumentObject* AssemblyObject::getUpstreamMovingPart(
          return part;
      }
  
@@ -4956,7 +4956,7 @@ index c40e895b9ff..257d36e549d 100644
  
      return getUpstreamMovingPart(part, joint, name);
  }
-@@ -2718,7 +4343,7 @@ void AssemblyObject::setObjMasses(std::vector<std::pair<App::DocumentObject*, do
+@@ -2717,7 +4342,7 @@ void AssemblyObject::setObjMasses(std::vector<std::pair<App::DocumentObject*, do
      objMasses = objectMasses;
  }
  
@@ -4965,7 +4965,7 @@ index c40e895b9ff..257d36e549d 100644
  {
      std::vector<AssemblyLink*> subAssemblies = {};
  
-@@ -2736,6 +4361,112 @@ std::vector<AssemblyLink*> AssemblyObject::getSubAssemblies()
+@@ -2735,6 +4360,112 @@ std::vector<AssemblyLink*> AssemblyObject::getSubAssemblies()
      return subAssemblies;
  }
  
@@ -5078,7 +5078,7 @@ index c40e895b9ff..257d36e549d 100644
  void AssemblyObject::ensureIdentityPlacements()
  {
      std::vector<App::DocumentObject*> group = Group.getValues();
-@@ -2782,6 +4513,187 @@ void AssemblyObject::syncGroundedJoints()
+@@ -2781,6 +4512,187 @@ void AssemblyObject::syncGroundedJoints()
          }
      }
  
@@ -5266,7 +5266,7 @@ index c40e895b9ff..257d36e549d 100644
      std::vector<App::DocumentObject*> allParts = getAssemblyComponents(this);
  
      for (auto part : allParts) {
-@@ -2795,13 +4707,46 @@ void AssemblyObject::syncGroundedJoints()
+@@ -2794,13 +4706,46 @@ void AssemblyObject::syncGroundedJoints()
  
          bool isReadOnly = propPlc->isReadOnly();
          auto it = groundedMap.find(part);
@@ -5316,7 +5316,7 @@ index c40e895b9ff..257d36e549d 100644
                  std::string asmName = getNameInDocument();
                  std::string partName = part->getNameInDocument();
                  std::string code = "import FreeCAD\n"
-@@ -2810,11 +4755,14 @@ void AssemblyObject::syncGroundedJoints()
+@@ -2809,11 +4754,14 @@ void AssemblyObject::syncGroundedJoints()
                                     "    import UtilsAssembly\n"
                                     "    doc = FreeCAD.getDocument('"
                      + docName
@@ -5332,7 +5332,7 @@ index c40e895b9ff..257d36e549d 100644
                      + partName
                      + "')\n"
                        "    jg = UtilsAssembly.getJointGroup(asm)\n"
-@@ -2832,10 +4780,18 @@ void AssemblyObject::syncGroundedJoints()
+@@ -2831,10 +4779,18 @@ void AssemblyObject::syncGroundedJoints()
              catch (...) {
              }
          }
@@ -7396,7 +7396,7 @@ index e2ac92c0ebe..01d4c3a8e1f 100644
  
          cmdListMenuOnly = [
 diff --git a/src/Mod/Assembly/JointObject.py b/src/Mod/Assembly/JointObject.py
-index a29299b8202..3fbeac924cf 100644
+index e25c44893fd..765c8a0fa49 100644
 --- a/src/Mod/Assembly/JointObject.py
 +++ b/src/Mod/Assembly/JointObject.py
 @@ -144,20 +144,40 @@ JointParallelForbidden = [
@@ -7444,27 +7444,27 @@ index a29299b8202..3fbeac924cf 100644
          # Get the immediate parent object
          parents = getattr(current, "InList", [])
          current = parents[0] if parents else None
-@@ -799,7 +819,8 @@ class Joint:
- 
+@@ -800,7 +820,8 @@ class Joint:
              presolved = joint.JointType in JointUsingPreSolve and self.preSolve(joint, False)
  
--            isAssembly = self.getAssembly(joint).Type == "Assembly"
+             assembly = self.getAssembly(joint)
+-            isAssembly = assembly is not None and assembly.Type == "Assembly"
 +            # FCPROJECT-PATCH (2026-09-13, siehe solveIfAllowed() oben fuer Begruendung):
-+            isAssembly = self.getAssembly(joint) is not None
++            isAssembly = assembly is not None
              if isAssembly and not presolved:
-                 solveIfAllowed(self.getAssembly(joint))
+                 solveIfAllowed(assembly)
              else:
-@@ -838,7 +859,8 @@ class Joint:
+@@ -839,7 +860,8 @@ class Joint:
      def setJointConnectors(self, joint, refs):
          # current selection is a vector of strings like "Assembly.Assembly1.Assembly2.Body.Pad.Edge16" including both what selection return as obj_name and obj_sub
          assembly = self.getAssembly(joint)
--        isAssembly = assembly.Type == "Assembly"
+-        isAssembly = assembly is not None and assembly.Type == "Assembly"
 +        # FCPROJECT-PATCH (2026-09-13, siehe solveIfAllowed() oben fuer Begruendung):
 +        isAssembly = assembly is not None
  
          if len(refs) >= 1:
              joint.Reference1 = refs[0]
-@@ -881,7 +903,21 @@ class Joint:
+@@ -882,7 +904,21 @@ class Joint:
      def redrawJointPlacements(self, joint):
          if joint.ViewObject:
              proxy = joint.ViewObject.Proxy
@@ -7487,17 +7487,17 @@ index a29299b8202..3fbeac924cf 100644
                  proxy.redrawJointPlacements(joint)
  
      """
-@@ -928,7 +964,8 @@ class Joint:
+@@ -929,7 +965,8 @@ class Joint:
          if not part1 or not part2:
              return False
  
--        isAssembly = assembly.Type == "Assembly"
+-        isAssembly = assembly is not None and assembly.Type == "Assembly"
 +        # FCPROJECT-PATCH (2026-09-13, siehe solveIfAllowed() oben fuer Begruendung):
 +        isAssembly = assembly is not None
          if isAssembly:
              joint.Suppressed = True
              part1Connected = assembly.isPartConnected(part1)
-@@ -973,7 +1010,24 @@ class Joint:
+@@ -974,7 +1011,24 @@ class Joint:
          if not sameDir:
              moving_part_global_jcs = UtilsAssembly.flipPlacement(moving_part_global_jcs)
  
@@ -7523,7 +7523,7 @@ index a29299b8202..3fbeac924cf 100644
  
          for part in parts_to_move:
              part.Placement = transform_plc * part.Placement
-@@ -988,7 +1042,12 @@ class Joint:
+@@ -989,7 +1043,12 @@ class Joint:
              self.partsMovedByPresolved = {}
  
              if joint.ViewObject:
@@ -7537,17 +7537,17 @@ index a29299b8202..3fbeac924cf 100644
  
      def preventParallel(self, joint):
          # Angle and perpendicular joints in the solver cannot handle the situation where both JCS are Parallel
-@@ -1001,7 +1060,8 @@ class Joint:
+@@ -1002,7 +1061,8 @@ class Joint:
          part1 = UtilsAssembly.getMovingPart(joint.Reference1)
          part2 = UtilsAssembly.getMovingPart(joint.Reference2)
  
--        isAssembly = assembly.Type == "Assembly"
+-        isAssembly = assembly is not None and assembly.Type == "Assembly"
 +        # FCPROJECT-PATCH (2026-09-13, siehe solveIfAllowed() oben fuer Begruendung):
 +        isAssembly = assembly is not None
          if isAssembly:
              part1ConnectedByJoint = assembly.isJointConnectingPartToGround(joint, "Reference1")
              part2ConnectedByJoint = assembly.isJointConnectingPartToGround(joint, "Reference2")
-@@ -1040,7 +1100,17 @@ class Joint:
+@@ -1041,7 +1101,17 @@ class Joint:
          # See https://github.com/FreeCAD/FreeCAD/issues/29355 for instance.
          # This function swap the references if possible to avoid those issues.
          assembly = self.getAssembly(joint)
@@ -7566,7 +7566,7 @@ index a29299b8202..3fbeac924cf 100644
              return
  
          part1 = UtilsAssembly.getMovingPart(joint.Reference1)
-@@ -1711,7 +1781,15 @@ class MakeJointSelGate:
+@@ -1712,7 +1782,15 @@ class MakeJointSelGate:
                  if parent.isDerivedFrom("App::LocalCoordinateSystem"):
                      datum = parent
  
@@ -7583,7 +7583,7 @@ index a29299b8202..3fbeac924cf 100644
                  # accept only datum that are not attached
                  return datum.MapMode == "Deactivated"
  
-@@ -1806,11 +1884,18 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -1807,11 +1885,18 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
              self.createJointObject()
              self.visibilityBackup = False
  
@@ -7607,7 +7607,7 @@ index a29299b8202..3fbeac924cf 100644
          bind = Gui.ExpressionBinding(self.jForm.angleSpinbox).bind(self.joint, "Angle")
          bind = Gui.ExpressionBinding(self.jForm.distanceSpinbox).bind(self.joint, "Distance")
          bind = Gui.ExpressionBinding(self.jForm.distanceSpinbox2).bind(self.joint, "Distance2")
-@@ -1834,10 +1919,12 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -1835,10 +1920,12 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
          self.jForm.limitCheckbox3.stateChanged.connect(self.adaptUi)
          self.jForm.limitCheckbox4.stateChanged.connect(self.adaptUi)
  
@@ -7624,7 +7624,7 @@ index a29299b8202..3fbeac924cf 100644
          bind = Gui.ExpressionBinding(self.jForm.limitLenMinSpinbox).bind(self.joint, "LengthMin")
          bind = Gui.ExpressionBinding(self.jForm.limitLenMaxSpinbox).bind(self.joint, "LengthMax")
          bind = Gui.ExpressionBinding(self.jForm.limitRotMinSpinbox).bind(self.joint, "AngleMin")
-@@ -1887,13 +1974,65 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -1888,13 +1975,65 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
  
          self.assembly.recompute(True)
  
@@ -7690,7 +7690,7 @@ index a29299b8202..3fbeac924cf 100644
          return True
  
      def autoClosedOnTransactionChange(self):
-@@ -1916,6 +2055,25 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -1917,6 +2056,25 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
              self.assembly.ViewObject.MoveOnlyPreselected = False
              self.assembly.ViewObject.MoveInCommand = True
  
@@ -7716,7 +7716,7 @@ index a29299b8202..3fbeac924cf 100644
          Gui.Selection.removeSelectionGate()
          Gui.Selection.removeObserver(self)
          Gui.Selection.setSelectionStyle(Gui.Selection.SelectionStyle.NormalSelection)
-@@ -2151,9 +2309,22 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -2152,9 +2310,22 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
  
          self.blockOffsetRotation = True
          self.jForm.offsetSpinbox.setProperty("rawValue", pos.z)
@@ -7742,7 +7742,7 @@ index a29299b8202..3fbeac924cf 100644
          self.blockOffsetRotation = False
  
      def advancedOffsetToggled(self, on):
-@@ -2247,6 +2418,7 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -2248,6 +2419,7 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
      def updateJointList(self):
          self.jForm.featureList.clear()
          simplified_names = []
@@ -7750,7 +7750,7 @@ index a29299b8202..3fbeac924cf 100644
          for ref in self.refs:
  
              sname = UtilsAssembly.getObject(ref).Label
-@@ -2255,7 +2427,24 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -2256,7 +2428,24 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
              if element_name != "":
                  sname = sname + "." + element_name
              simplified_names.append(sname)
@@ -7775,7 +7775,7 @@ index a29299b8202..3fbeac924cf 100644
  
      def updateLimits(self):
          needLengthLimits = self.jType in JointUsingLimitLength
-@@ -2480,5 +2669,19 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -2481,5 +2670,19 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
          self.presel_ref = [comp, [new_sub]]
  
      def clearSelection(self, doc_name):

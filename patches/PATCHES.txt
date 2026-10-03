@@ -6,7 +6,7 @@
 #     gegen ein ECHTES Vanilla-Checkout des Ziel-Commits, nicht mehr gegen HEAD - siehe dortige
 #     Kommentare)
 #
-# VANILLA_BASE: 454a4b82ce
+# VANILLA_BASE: e7ee55e026
 # ^ Nutzerauftrag 2026-09-27 ("wer prueft, dass alle Commits im Patch landen?"): der Commit,
 # gegen den die Patches oben den Diff bilden (git diff VANILLA_BASE HEAD -- src/Mod/Assembly
 # src/3rdParty/OndselSolver). check-patches.sh liest diese Zeile automatisch und prueft nach dem
@@ -41,11 +41,20 @@
 # Patch eingepflegt werden (durch Neu-Export von "git diff <letzter-Vanilla-Sync> HEAD -- ..."),
 # statt wieder Monate lang auseinanderlaufen zu lassen.
 #
-# 2026-10-03: Patch neu generiert (umbenannt von 2026.09.27- auf 2026.10.03-), um 4 seit dem
+# 2026-10-03 (1): Patch neu generiert (umbenannt von 2026.09.27- auf 2026.10.03-), um 4 seit dem
 # letzten Export entstandene Commits nachzutragen (GroundedJoint-Loesch/Deaktivier-Konflikt,
 # BG47-Drag-Identitaetsluecken + Doppel-Anker-Erkennung, geerdetes Teil ohne Container-Kette,
-# flexible Unterbaugruppe hinter rigider Ebene/"Motor kollabiert"). VANILLA_BASE bleibt
+# flexible Unterbaugruppe hinter rigider Ebene/"Motor kollabiert"). VANILLA_BASE blieb dabei noch
 # 454a4b82ce (kein neuer Vanilla-Resync, nur Nachtrag).
+#
+# 2026-10-03 (2): echter Vanilla-Resync auf e7ee55e026 (131 Commits, davon 6 in src/Mod/Assembly -
+# u.a. Rack&Pinion-Bugfix, Fixed-Joint-auf-Part-Fix). Zwei echte Kontext-Kollisionen manuell
+# aufgeloest (siehe Commit "Vanilla-Resync auf e7ee55e026" fuer Details): slidingPartIndex()
+# kombiniert unsere JointRef-Iteration mit upstreams neuer Platzhalter-Berechnung; die 4
+# "isAssembly"-Stellen in JointObject.py behalten unseren bestehenden, umfassenderen Fix
+# (assembly is not None, ohne .Type-Pruefung) statt upstreams engeren Crash-Guard zurueckzuholen.
+# Build+volle kinematic-tests-Regressionsmatrix bestaetigt (6/6 erwartete Baseline-Fehler, keine
+# neuen).
 
 2026.10.03-freecad-assembly-full-resync.patch
 
