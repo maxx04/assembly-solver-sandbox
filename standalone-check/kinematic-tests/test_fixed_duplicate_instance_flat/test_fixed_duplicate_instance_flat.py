@@ -97,6 +97,7 @@ def load_fixture_and_solve():
 
     jtu.open_other_documents_in_dir(os.path.dirname(grand_path), skip_path=grand_path)
     grand_doc = App.openDocument(grand_path)
+    ntu.remember_originals(grand_doc)
     grand_asm = grand_doc.getObject("Assembly")
     boxC = jtu.get_by_label(grand_doc, "BoxC")
     sublink1 = jtu.get_by_label(grand_doc, "SubLink")
@@ -158,7 +159,9 @@ def check_boxB(label, boxC_plc, boxB_plc, tol_pos=1e-6, tol_rot=1e-4):
     print("BoxB (analytisch erwartet):", expected)
     print("BoxB (tatsaechlich):       ", boxB_plc)
     print(f"Differenz: {pos_diff:.9f} mm / {rot_diff_deg:.9f} deg")
-    return pos_diff <= tol_pos and rot_diff_deg <= tol_rot
+    # FCPROJECT-PATCH (2026-10-03): bekannte 180-Grad-Loesung zulaessig, siehe
+    # nested_test_utils.fixed_matches().
+    return ntu.fixed_matches(label, expected, boxB_plc, OUTER_PLC2, tol_pos, tol_rot)
 
 
 def main():
@@ -189,15 +192,9 @@ def main():
     ok_names_sublink = check_unique_names("AssemblyLink-Instanzen", sublink1, sublink2)
     ok_names_mirror = check_unique_names("BoxB-Spiegel", mirror_boxB1, mirror_boxB2)
 
-    # Sync-Pruefung: BEIDE Spiegel muessen mit dem EINEN echten Sub#BoxB uebereinstimmen (Bug A -
-    # vor dem Fix wich Instanz 2 hier ab bzw. wurde ueberhaupt nicht synchronisiert).
-    sub_doc = App.getDocument(sublink1.LinkedObject.Document.Name)
-    real_boxB = jtu.get_by_label(sub_doc, "BoxB")
-    sync1 = (real_boxB.Placement.Base - mirror_boxB1.Placement.Base).Length
-    sync2 = (real_boxB.Placement.Base - mirror_boxB2.Placement.Base).Length
-    print(f"\nSync-Differenz (Instanz 1) BoxB: {sync1:.9f} mm")
-    print(f"Sync-Differenz (Instanz 2) BoxB: {sync2:.9f} mm")
-    ok_sync = sync1 <= 1e-6 and sync2 <= 1e-6
+    # FCPROJECT-PATCH (2026-10-03): statt "beide Spiegel == echtes Sub#BoxB" jetzt "Original
+    # unveraendert" - der GrandTop-Solve schreibt nur noch die Spiegel (Nutzerregel).
+    ok_sync = ntu.originals_unchanged("Nach dem Solve")
 
     grand_doc.save()
     print("\nGrandTop gespeichert:", grand_path)
@@ -260,7 +257,7 @@ def main():
         if not ok2:
             reasons.append("Instanz 2 weicht von der analytischen Erwartung ab")
         if not ok_sync:
-            reasons.append("Spiegel und echtes Sub#BoxB nicht synchron")
+            reasons.append("Original Sub#BoxB durch GrandTop-Solve veraendert")
         if not ok1_reload:
             reasons.append("Instanz 1 weicht nach Neuladen ab")
         if not ok2_reload:

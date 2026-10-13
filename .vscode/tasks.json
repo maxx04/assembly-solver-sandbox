@@ -22,6 +22,30 @@
       "group": { "kind": "build", "isDefault": true },
       "problemMatcher": ["$gcc"],
       "presentation": { "reveal": "always", "panel": "shared", "clear": true }
+    },
+    {
+      "label": "build-all-and-deploy",
+      "detail": "Baut ALLE FreeCAD-Module neu und installiert - nach einem Vanilla-Wechsel des Build-Baums (update-sandbox.sh) noetig, siehe standalone-check/CMakeLists.txt",
+      "type": "shell",
+      "command": "cmake",
+      "args": ["--build", "standalone-check/build", "--target", "build-all-and-deploy"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "dependsOn": ["build-and-deploy: configure"],
+      "group": "build",
+      "problemMatcher": ["$gcc"],
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true }
+    },
+    {
+      "label": "rebuild-fresh-and-deploy",
+      "detail": "Woechentliches Standard-Update: kompletter Neubau aus leerem Build-Ordner + Installation (nach update-sandbox.sh), siehe standalone-check/rebuild-fresh.sh",
+      "type": "shell",
+      "command": "cmake",
+      "args": ["--build", "standalone-check/build", "--target", "rebuild-fresh-and-deploy"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "dependsOn": ["build-and-deploy: configure"],
+      "group": "build",
+      "problemMatcher": ["$gcc"],
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true }
     }
   ]
 }

@@ -213,6 +213,14 @@ public:
     // Jeder lokale Spiegel-Kandidat (auf JEDER Tiefe), der auf 'h' aufloest - ersetzt
     // collectLocalMirrorCandidates() + Brute-Force-Abgleich in syncLocalMirrorPlacement().
     std::vector<App::DocumentObject*> mirrorsOf(const IdentityHandle& h);
+    // FCPROJECT-PATCH (2026-10-03, Plan plans/2026-10-03-solver-nur-auf-spiegeln.md): die INSTANZ
+    // eines Handles im Kontext von rootAssembly - das Objekt im Dokumentbaum von rootAssembly
+    // (lokales Teil oder rootAssemblys EIGENER Spiegel), das auf 'h' aufloest. Anders als
+    // mirrorsOf() wird nie in die Gruppen verlinkter Original-Dokumente abgestiegen (Originale und
+    // Spiegel von Zwischen-Dokumenten gehoeren nicht zu diesem Kontext), und nie in rigide
+    // AssemblyLinks (die sind selbst ein Koerper). nullptr, wenn es keine Instanz gibt.
+    // Invariante: im Kontext einer Baugruppe liest, fixiert und schreibt der Solver nur Instanzen.
+    App::DocumentObject* instanceOf(const IdentityHandle& h);
 
     bool isGrounded(const IdentityHandle& h);
     std::vector<IdentityHandle> groundedHandles();
@@ -248,6 +256,12 @@ public:
     // Resolver-Logik selbst, siehe ausfuehrliche Einschraenkung am Definitionsort). Gedacht als
     // Diagnosehilfe (Fehlersuche, Ergaenzung zu exportDot()), kein automatischer Test.
     std::string verifyAgainstAsmt();
+    // FCPROJECT-PATCH (2026-10-03, todo-identitygraph-duplicate-handle-split): Invariante "ein
+    // Solver-Koerper = genau ein IdentityHandle". Gruppiert alle Endpunkte von jointEdges() und
+    // alle groundedHandles() nach materializeForObjectPartMap() und liefert je Koerper mit mehr als
+    // einem Handle eine Zeile "SPLIT ..." (leer = konsistent). Rein diagnostisch, fuer den
+    // gleichnamigen Regressionstest.
+    std::vector<std::string> verifyHandleConsistency();
 
     // Verwirft den zwischengespeicherten Aufbau (Joint-Kanten, Erdungs-Set). resolve()/
     // resolveJointRef() selbst lesen immer live von der Dokumentstruktur und brauchen dies nicht.
@@ -262,6 +276,8 @@ private:
 
     bool groundedBuilt = false;
     std::unordered_set<IdentityHandle, IdentityHandleHash> groundedSet;
+    bool instanceIndexBuilt = false;
+    std::unordered_map<IdentityHandle, App::DocumentObject*, IdentityHandleHash> instanceIndex;
 };
 
 }  // namespace Assembly

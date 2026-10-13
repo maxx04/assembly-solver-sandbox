@@ -415,3 +415,67 @@ def save_close_reopen_recompute_nested(grand_doc, grand_doc_path, box_c_name="Bo
         exc = e
 
     return grand_doc2, boxC2, sublink2, exc
+
+
+# ---------------------------------------------------------------------------------------------
+# FCPROJECT-PATCH (2026-10-03, Plan plans/2026-10-03-solver-nur-auf-spiegeln.md, Nutzerentscheidung
+# "Beides anpassen"): Seit der Solver im Kontext einer Baugruppe nur noch deren Spiegel liest und
+# schreibt, gilt fuer alle verschachtelten Tests:
+#   1. Die fruehere Pruefung "Sub-Dokument und Spiegel synchron" (Original == Spiegel) ist falsch
+#      herum - das Original darf durch den aeusseren Solve gerade NICHT veraendert werden. Ersetzt
+#      durch remember_originals()/originals_unchanged().
+#   2. Der Solver startet jetzt wirklich von der (absichtlich falschen) Startlage des Spiegels in den
+#      Fixturen und landet dabei je nach Joint auf der bekannten 180-Grad-Loesung (#32477,
+#      reference-fixed-joint-180-degree-bug-rootcause) - frueher nur am innersten Joint, jetzt auch
+#      am aeusseren/mittleren. Diese Loesung wird an JEDEM Joint gleich bewertet: zulaessig, wenn
+#      die Drehung genau 180 Grad betraegt UND der Gelenkpunkt trotzdem exakt am Ziel liegt - ein
+#      echter Positionsfehler faellt damit weiterhin auf (fixed_matches()).
+# ---------------------------------------------------------------------------------------------
+_original_snapshot = {}
+
+
+def remember_originals(top_doc):
+    """Sichert jede Placement in allen Dokumenten ausser top_doc (die Originale der
+    Unterbaugruppen). Direkt nach dem Oeffnen aufrufen, VOR dem ersten Recompute/Solve."""
+    _original_snapshot.clear()
+    for doc in App.listDocuments().values():
+        if doc is top_doc:
+            continue
+        for obj in doc.Objects:
+            if "Placement" in obj.PropertiesList:
+                _original_snapshot[f"{doc.Name}#{obj.Name}"] = App.Placement(obj.Placement)
+
+
+def originals_unchanged(label, tol=1e-9):
+    """True, wenn jede gesicherte Original-Placement unveraendert ist (auch nach Neuladen - die
+    Dokumentnamen bleiben gleich)."""
+    changed = []
+    for key, plc in _original_snapshot.items():
+        docname, objname = key.split("#", 1)
+        doc = App.listDocuments().get(docname)
+        obj = doc.getObject(objname) if doc else None
+        if obj is None:
+            continue
+        if not obj.Placement.isSame(plc, tol):
+            changed.append((key, (obj.Placement.Base - plc.Base).Length))
+    print(f"--- {label}: Originale in Unterdokumenten ---")
+    print(f"{len(_original_snapshot)} gesichert, {len(changed)} veraendert")
+    for key, moved in changed[:5]:
+        print(f"  veraendert: {key} ({moved:.6f} mm)")
+    return not changed
+
+
+def fixed_matches(label, expected, actual, jcs_local, tol_pos=1e-6, tol_rot=1e-4):
+    """Analytische Pruefung eines Fixed-Bezugs: 'expected' = Bezug * JCS1 * JCS2^-1, 'actual' das
+    tatsaechliche Placement, 'jcs_local' = JCS2 auf dem geprueften Teil. Exakt -> True. Genau 180 Grad
+    gedreht UND Gelenkpunkt (JCS2-Ursprung) exakt am Ziel -> True (bekannte 180-Grad-Loesung)."""
+    pos = (expected.Base - actual.Base).Length
+    rot = abs(expected.Rotation.multiply(actual.Rotation.inverted()).Angle) * 180.0 / 3.141592653589793
+    if pos <= tol_pos and rot <= tol_rot:
+        return True
+    joint_point = (expected.multiply(jcs_local).Base - actual.multiply(jcs_local).Base).Length
+    if abs(rot - 180.0) <= tol_rot and joint_point <= tol_pos:
+        print(f"    {label}: bekannte 180-Grad-Loesung (#32477), Gelenkpunkt exakt "
+              f"({joint_point:.2e} mm) - zulaessig")
+        return True
+    return False

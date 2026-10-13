@@ -347,7 +347,7 @@ Position/Geschwindigkeit/Beschleunigung ("IC" = Initial Conditions):
 | Geschwindigkeit | `VelICSolver` | linear, kein Newton-Raphson nötig |
 | Beschleunigung | `AccICNewtonRaphson` | ebenfalls linear |
 | Kinematischer Zeitschritt | `PosKineNewtonRaphson`/`AccKineNewtonRaphson` | für Simulationen (`generateSimulation()`) |
-| Interaktives Ziehen | `PosICDragNewtonRaphson`/`PosICDragLimitNewtonRaphson` | inkl. Gelenklimits |
+| Interaktives Ziehen | `PosICDragNewtonRaphson`/`PosICDragLimitNewtonRaphson` | inkl. Gelenklimits (upstream NUR hier; bei uns zusätzlich im normalen Solve, siehe §3.2c) |
 
 Ablauf für den Normalfall: `AssemblyObject::solve()` → `mbdAssembly->runPreDrag()`
 (`ASMTAssembly.cpp:1334`) → **lazy Modellaufbau** über `preMbDrun()`/`createMbD()`
@@ -421,6 +421,94 @@ hat kein Gegengewicht, das die harte Bedingung numerisch durchsetzen wuerde - es
 Der aktuell verfolgte Fix-Ansatz: konsequent ALLE Teile ausserhalb der bewegten Gruppe
 (Leitkoerper + Downstream) ebenfalls mit dem hohen 1e6-Gewicht "anpinnen" (eigene, unveraenderte
 Placement als Ziel), statt nur direkte Gelenk-Nachbarn - noch nicht implementiert/verifiziert.
+
+### 3.2b Mitläufer, freie Freiheitsgrade und Anschläge beim Ziehen (2026-10-10)
+
+Anlass: in BG22 drehte sich beim Schieben des Z-Trägers der Motor-Rotor mit, obwohl nichts ihn
+antreibt. Headless nachgestellt; Messwerte in Memory `todo-rotor-flies-away-during-rotation.md`.
+
+**Korrektur zu §3.2a Punkt 2:** `PosICDragNewtonRaphson::initializeGlobally()` setzt zwar zuerst
+1e3/1e6, ruft danach aber `item->fillqsuWeights()` für alle Teile auf, und `Part::fillqsuWeights()`
+überschreibt die Werte wieder. Am Ende gelten die **massen- und trägheitsbasierten** Gewichte:
+Position `1e6·m/mMax + 1e3`, Drehung (Euler-Parameter) `1e6·J/Jmax + 1e3`. FreeCAD gibt allen
+Teilen Masse 1 und Trägheit (1,1,1), gezogenen Teilen per `setObjMasses()` Masse 10
+(`ViewProviderAssembly::tryInitMove()`). Verschiebung wird in mm gewichtet, Drehung über
+dimensionslose Euler-Parameter. Eine Drehung um 1° „kostet“ damit ungefähr so viel wie eine
+Verschiebung von nur 0,01 mm.
+
+**Folge 1: freie Freiheitsgrade driften.** Wird ein Teil mit freier Drehachse (z.B. Rotor am
+Revolute) nicht selbst gezogen, sondern vom Solver mitgeführt, und liegt sein Ursprung neben der
+Achse, dann „spart“ der Solver Verschiebung, indem er es ein wenig mitdreht (BG22: ~0,2°).
+Abhilfe: Solche Teile gehören in die mitgezogene Gruppe. `getDownstreamParts()` bestimmt die
+Erdung deshalb VOR dem testweisen Abschalten des Gelenks (Regel C3 in docs/CONSTRAINTS.md).
+Sonst fiel eine nur über dieses Gelenk angebundene Unter-BG auf ihre eigene Erdung zurück und
+galt fälschlich als verbunden.
+
+**Folge 2: Anschläge.** Die GUI gibt jedem mitgezogenen Teil als Ziel „Startlage + Mausweg“.
+Hält ein Gelenk-Anschlag (z.B. Slider-Limit) das Leitteil fest, laufen die Ziele der Mitläufer
+trotzdem weiter. Der Solver löst diesen Widerspruch über freie Freiheitsgrade auf (BG22: Rotor
+9° und mehr, kurz nach dem Anschlag bei 80,35 mm).
+
+**Anschlag-Korrektur in `AssemblyObject::doDragStep()`:**
+1. Wie bisher alle Ziele setzen und einen Drag-Schritt rechnen. Der erste Eintrag ist das
+   Leitteil (Reihenfolge aus `findDragMode()`: bewegtes Teil zuerst).
+2. Prüfen, ob das Leitteil sein Ziel erreicht hat (Toleranz 1e-4). Wenn ja: fertig, kein
+   Mehraufwand.
+3. Wenn nein (Anschlag): Korrektur = erreichte Leitteil-Lage × Leitteil-Ziel⁻¹. Damit die Ziele
+   aller Mitläufer korrigieren, sodass sie der TATSÄCHLICH erreichten Bewegung des Leitteils
+   folgen statt dem Mausweg. Den Schritt einmal wiederholen.
+
+Ergebnis BG22: Rotor beim Schieben bis 40 mm über den Anschlag hinaus 0,000° gedreht, auch nach
+Loslassen und abschließendem Solve. Kosten: ein zusätzlicher Drag-Schritt (~11 ms) nur, solange
+der Anschlag erreicht ist.
+
+**Noch offen:** Die Drehformel in `ViewProviderAssembly::tryMouseMove()` (RotationOnPlane, Ball,
+TranslationOnAxisAndRotationOnePlane) verrechnet die LOKALE Placement des Teils mit der GLOBALEN
+Gelenk-Lage. Das ist nur richtig, solange die Container des gezogenen Teils keine eigene
+Verschiebung/Drehung haben. Bisher ohne beobachtetes Symptom.
+
+### 3.2c Gelenkgrenzen auch im normalen Solve - bewusste Abweichung von Upstream (2026-10-11)
+
+**Upstream-Entscheidung:** OndselSolver-PR
+[#11 „Limits-are-for-dragging-only“](https://github.com/FreeCAD/OndselSolver/pull/11)
+(Aik-Siong Koh, geschrieben 2025-10-04, gemerged 2026-08-22 von Chris Hennes). Gelenkgrenzen
+(`ASMTTranslationLimit`/`ASMTRotationLimit`, in FreeCAD `EnableLengthMin/Max`,
+`EnableAngleMin/Max`) gelten seitdem NUR im Drag-Schritt (`runDragStep()` →
+`PosICDragLimitNewtonRaphson`). `runPreDrag()` (= jeder normale `solve()`) und `runKINEMATIC()`
+(Simulation) ignorieren sie. Einzige Begründung in der PR: *„runKINEMATIC does not use limits.“*
+Eine Begründung, warum das auch für den normalen Solve gelten soll, gibt es nicht.
+
+**Folge (live an BG22 gefunden):** BG75 wurde über eine Zylinderführung angebunden und dabei vom
+Solver verschoben. Die M5-Schrauben samt Scheibe und Nutenstein hängen per Slider mit Grenze
+±2,1 mm an der Halteplatte. Der Solver ließ sie einfach in der Welt stehen (der Slider erlaubt
+das): Gelenkwerte −172 mm, −67 mm und beim Halter 455 mm statt höchstens 408 mm. Alle Gelenke
+galten als erfüllt, nur die Grenzen nicht. Die Anzeige „Schrauben finden ihre Stelle nicht“ war
+für den Nutzer nicht als Grenzverletzung erkennbar.
+
+**Unsere Abweichung (`AssemblyObject::solve()`, Commit 45bd7d1045):** Nach `runPreDrag()` folgt,
+nur wenn die Baugruppe Grenzen hat, ein Grenz-Durchgang `runDragStep()` mit LEERER Liste
+gezogener Teile. `PosICDragLimitNewtonRaphson` aktiviert dabei die verletzten Grenzen und löst
+nach. Lassen sie sich nicht erfüllen, setzt `ASMTAssembly::runDragStep()` selbst auf das Ergebnis
+von `runPreDrag()` zurück (`restorePosRot()`), der Solve scheitert dadurch nie.
+- Teile landen am Anschlag, nicht an ihrer früheren Stelle im Langloch (dafür fehlt dem Solver
+  die Information; wer eine bestimmte Lage will, braucht ein eigenes Gelenk).
+- Simulation (`generateSimulation()` → `runKINEMATIC()`) bleibt unverändert ohne Grenzen.
+  **TODO:** dort ebenfalls Grenzen beachten (eine Motion kann ein Teil über seinen Anschlag
+  fahren). Vorher klären, was am Anschlag passieren soll: Simulation anhalten, Bewegung
+  begrenzen oder je Bild warnen.
+- Kosten: ein Drag-Schritt pro Solve, nur bei Baugruppen mit Grenzen; „No limits reached“ endet
+  sofort.
+- Test: `test_slider_limit_flat` (Teil 60 mm über die Grenze geschoben: gepatcht 2,1 mm,
+  Weekly-Vanilla bleibt bei 60 mm).
+
+**Für ein Upstream-Issue:** Die Abweichung widerspricht einer bewussten Entscheidung des
+Solver-Autors. Argumente: (1) Grenzen sind erklärter Konstruktionswille; ein Solve, der sie
+verletzt und trotzdem „erfolgreich“ meldet, liefert einen ungültigen Zustand ohne Warnung.
+(2) Beim Ziehen gelten sie, beim Neuberechnen nicht - dasselbe Modell hat je nach Weg zwei
+verschiedene Ergebnisse. (3) Der Durchgang ist rein additiv und fällt bei Unlösbarkeit auf das
+bisherige Verhalten zurück. Offene Frage an Upstream: Gibt es Fälle (z.B. Konvergenz, Leistung,
+Simulation-Start), für die „nur beim Ziehen“ wichtig ist? Vor dem Melden das Verhalten
+noch einmal gegen die aktuelle Weekly-AppImage prüfen.
 
 ### 3.3 Kopplungs-Sequenz (Zusammenfassung von §2.1 + hier)
 

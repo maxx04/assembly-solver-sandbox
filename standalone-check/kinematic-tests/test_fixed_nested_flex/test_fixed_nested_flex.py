@@ -101,6 +101,7 @@ def load_fixture_and_solve():
 
     jtu.open_other_documents_in_dir(os.path.dirname(grand_path), skip_path=grand_path)
     grand_doc = App.openDocument(grand_path)
+    ntu.remember_originals(grand_doc)
     grand_asm = grand_doc.getObject("Assembly")
     boxC = jtu.get_by_label(grand_doc, "BoxC")
     sublink = jtu.get_by_label(grand_doc, "SubLink")
@@ -143,7 +144,14 @@ def check(label, boxC_plc, mirror_boxA_plc, mirror_boxB_plc, tol_pos=1e-6, tol_r
     print("BoxA (tatsaechlich):       ", mirror_boxA_plc)
     print(f"BoxA Positions-/Rotations-Differenz: {posA:.9f} mm / {rotA:.9f} deg")
 
-    return posB <= tol_pos and rotB <= tol_rot and posA <= tol_pos and rotA <= tol_rot
+    # FCPROJECT-PATCH (2026-10-03): BoxB gegen den aeusseren Fixed-Bezug, BoxA gegen die
+    # TATSAECHLICHE BoxB (innerer Fixed-Joint) - liegt BoxB auf der bekannten 180-Grad-Loesung, waere
+    # eine aus der ERWARTETEN BoxB abgeleitete BoxA-Erwartung sonst faelschlich verletzt. 180-Grad-
+    # Loesungen an beiden Joints wie in nested_test_utils.fixed_matches() beschrieben zulaessig.
+    ok_b = ntu.fixed_matches(f"{label} BoxB (aeusserer Fixed)", boxB_expected, mirror_boxB_plc, OUTER_PLC2, tol_pos, tol_rot)
+    boxA_from_actual = mirror_boxB_plc.multiply(INNER_PLC2).multiply(INNER_PLC1.inverse())
+    ok_a = ntu.fixed_matches(f"{label} BoxA (innerer Fixed)", boxA_from_actual, mirror_boxA_plc, INNER_PLC1, tol_pos, tol_rot)
+    return ok_b and ok_a
 
 
 def main():
@@ -173,14 +181,7 @@ def main():
     # bestehen diese Pruefung beide - kein nachweisbarer Unterschied fuer diesen einfachsten
     # Verschachtelungsfall (siehe Moduldocstring/README.md fuer die Chronologie eines frueheren,
     # sich als Testartefakt herausstellenden Befunds).
-    sub_doc = App.getDocument(mirror_boxA.LinkedObject.Document.Name)
-    subA = mirror_boxA.LinkedObject
-    subB = mirror_boxB.LinkedObject
-    sync_diff_A = (subA.Placement.Base - mirror_boxA.Placement.Base).Length
-    sync_diff_B = (subB.Placement.Base - mirror_boxB.Placement.Base).Length
-    print(f"\nSub<->Spiegel-Sync-Differenz BoxA: {sync_diff_A:.9f} mm")
-    print(f"Sub<->Spiegel-Sync-Differenz BoxB: {sync_diff_B:.9f} mm")
-    ok_sync = sync_diff_A <= 1e-6 and sync_diff_B <= 1e-6
+    ok_sync = ntu.originals_unchanged("Vor Neuladen")
 
     # Namen VOR dem Schliessen cachen - nach App.closeDocument() sind die alten Python-Objekte
     # (mirror_boxA/mirror_boxB) tote Referenzen (ReferenceError: "Cannot access attribute 'Name'
@@ -212,14 +213,7 @@ def main():
     # korrigieren) - moeglich, dass dieser explizite solve()-Aufruf selbst schon fuer Sync
     # sorgt, unabhaengig vom Patch. Diese zweite Pruefung, rein ueber recompute() nach dem
     # Neuladen, ist die schaerfere Kontrolle.
-    sub_doc2 = App.getDocument(mirror_boxA2.LinkedObject.Document.Name)
-    subA2 = mirror_boxA2.LinkedObject
-    subB2 = mirror_boxB2.LinkedObject
-    sync_diff_A2 = (subA2.Placement.Base - mirror_boxA2.Placement.Base).Length
-    sync_diff_B2 = (subB2.Placement.Base - mirror_boxB2.Placement.Base).Length
-    print(f"\nSub<->Spiegel-Sync-Differenz BoxA (nach Neuladen, nur recompute()): {sync_diff_A2:.9f} mm")
-    print(f"Sub<->Spiegel-Sync-Differenz BoxB (nach Neuladen, nur recompute()): {sync_diff_B2:.9f} mm")
-    ok_sync_reload = sync_diff_A2 <= 1e-6 and sync_diff_B2 <= 1e-6
+    ok_sync_reload = ntu.originals_unchanged("Nach Neuladen")
 
     ok_reload = check(
         "Nach Speichern+Schliessen+Neuladen+Recompute",
@@ -236,9 +230,9 @@ def main():
         if not ok_initial:
             reasons.append("Placement-Kette direkt nach dem Solve weicht ab")
         if not ok_sync:
-            reasons.append("Sub-Dokument und Spiegel in GrandTop nicht synchron (vor Neuladen)")
+            reasons.append("Original im Sub-Dokument durch GrandTop-Solve veraendert (vor Neuladen)")
         if not ok_sync_reload:
-            reasons.append("Sub-Dokument und Spiegel in GrandTop nicht synchron (nach Neuladen)")
+            reasons.append("Original im Sub-Dokument durch GrandTop-Solve veraendert (nach Neuladen)")
         if not ok_reload:
             reasons.append("Placement-Kette nach Neuladen weicht ab")
         print(f"RESULT: FAIL ({'; '.join(reasons)})")

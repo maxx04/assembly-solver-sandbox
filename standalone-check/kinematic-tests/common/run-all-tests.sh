@@ -12,7 +12,7 @@
 #
 # Beispiel:
 #   ./common/run-all-tests.sh /home/maxx/freecad-sandbox/install
-#   ./common/run-all-tests.sh /home/maxx/freecad-sandbox/install-clean-test   # vanilla-Vergleich
+#   ./common/run-all-tests.sh /home/maxx/freecad/App_weekly/freecad.App   # vanilla-Vergleich (Weekly-AppImage)
 #
 # Exit-Code: 0 nur wenn ALLE Tests PASS, sonst 1 (fuer Skript-Verkettung/CI). Ein einzelner
 # fehlgeschlagener Test bricht NICHT die restlichen ab (bewusst kein "set -e" ueber die

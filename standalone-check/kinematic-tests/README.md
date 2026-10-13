@@ -5,9 +5,10 @@ Autonome, nicht-interaktive Regressionstests für den Assembly-Solver. Methodik 
 
 1. **Analytisch berechnen**, wie Bewegung/Reaktion aussehen MUSS, wenn ein Teil per Skript
    bewegt/gesetzt wird - unabhängig vom Solver (reine Placement-Algebra bzw. Geometrie).
-2. Gegen **"normales" (unmodifiziertes) FreeCAD** (`/home/maxx/freecad-sandbox/install-clean-test`)
+2. Gegen **"normales" (unmodifiziertes) FreeCAD** (offizielle Weekly-AppImage
+   `/home/maxx/freecad/App_weekly/freecad.App`, seit 2026-10-10; vorher selbst gebaute install-clean-test)
    vergleichen - validiert die Testmethodik selbst und dient als Regressions-Referenz.
-3. Gegen **unseren gepatchten Stand** (`/home/maxx/freecad/install`) vergleichen.
+3. Gegen **unseren gepatchten Stand** (`/home/maxx/freecad-sandbox/install`) vergleichen.
 4. Reihenfolge: erst **nicht verschachtelte** Modelle, verschiedene Jointarten - danach
    schrittweise tiefer verschachteln. Bei nicht verschachtelten Fällen MÜSSEN alle drei
    (analytisch/vanilla/gepatcht) übereinstimmen - sobald Verschachtelungstiefe die bekannten
@@ -22,8 +23,8 @@ Keine manuelle Interaktion nötig - alles headless via Xvfb.
 ./common/run-test.sh <freecad-install-dir> <testfall-skript.py> [Xvfb-Display, default :95]
 
 # Beispiel: denselben Testfall gegen beide Stände laufen lassen
-./common/run-test.sh /home/maxx/freecad/install            test_fixed_joint_flat/test_fixed_joint_flat.py
-./common/run-test.sh /home/maxx/freecad-sandbox/install-clean-test test_fixed_joint_flat/test_fixed_joint_flat.py
+./common/run-test.sh /home/maxx/freecad-sandbox/install          test_fixed_joint_flat/test_fixed_joint_flat.py
+./common/run-test.sh /home/maxx/freecad/App_weekly/freecad.App   test_fixed_joint_flat/test_fixed_joint_flat.py   # Vanilla (Weekly)
 ```
 
 Exit-Code 0 = PASS, 1 = FAIL (für Skript-Verkettung/CI). Startet bei Bedarf sein eigenes,

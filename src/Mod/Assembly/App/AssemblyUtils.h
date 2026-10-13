@@ -170,6 +170,9 @@ AssemblyExport App::DocumentObject* getObjFromProp(
 );
 AssemblyExport App::DocumentObject* getObjFromRef(App::DocumentObject* obj, const std::string& sub);
 AssemblyExport App::DocumentObject* getObjFromRef(const App::PropertyXLinkSub* prop);
+// FCPROJECT-PATCH (2026-10-13): Weltlage des Objekts, auf das sich Placement1/2 eines Joints
+// beziehen (getObjFromRef(), Python: UtilsAssembly.getObject()). Siehe AssemblyUtils.cpp.
+AssemblyExport Base::Placement getJcsReferenceGlobalPlacement(App::PropertyXLinkSub* ref);
 AssemblyExport App::DocumentObject* getObjFromJointRef(
     const App::DocumentObject* joint,
     const char* propName
@@ -278,5 +281,10 @@ AssemblyExport std::vector<std::string> getSubAsList(
 );
 AssemblyExport void syncPlacements(App::DocumentObject* src, App::DocumentObject* to);
 AssemblyExport double getJointCurrentValue(App::DocumentObject* joint, bool isAngle);
+AssemblyExport double getJointValueFromJcs(
+    const Base::Placement& plc1,
+    const Base::Placement& plc2,
+    bool isAngle
+);
 
 }  // namespace Assembly

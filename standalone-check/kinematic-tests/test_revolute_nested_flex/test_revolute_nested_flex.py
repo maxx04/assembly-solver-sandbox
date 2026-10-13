@@ -71,6 +71,7 @@ def load_fixture_and_solve():
 
     jtu.open_other_documents_in_dir(os.path.dirname(grand_path), skip_path=grand_path)
     grand_doc = App.openDocument(grand_path)
+    ntu.remember_originals(grand_doc)
     grand_asm = grand_doc.getObject("Assembly")
     boxC = jtu.get_by_label(grand_doc, "BoxC")
     sublink = jtu.get_by_label(grand_doc, "SubLink")
@@ -131,21 +132,14 @@ def main():
         print("BoxB (tatsaechlich):       ", mirror_boxB_plc)
         print(f"BoxB Positions-/Rotations-Differenz: {pos_diff:.9f} mm / {rot_diff_deg:.9f} deg")
 
-        ok_outer = pos_diff <= 1e-6 and rot_diff_deg <= 1e-4
+        ok_outer = ntu.fixed_matches(f"{label} aeusserer Fixed", boxB_expected, mirror_boxB_plc, OUTER_PLC2)
         return ok_outer, ok_inner
 
     ok_outer, ok_inner = full_check(
         "Direkt nach dem Solve", boxC.Placement, mirror_boxA.Placement, mirror_boxB.Placement
     )
 
-    sub_doc = App.getDocument(mirror_boxA.LinkedObject.Document.Name)
-    subA = mirror_boxA.LinkedObject
-    subB = mirror_boxB.LinkedObject
-    sync_diff_A = (subA.Placement.Base - mirror_boxA.Placement.Base).Length
-    sync_diff_B = (subB.Placement.Base - mirror_boxB.Placement.Base).Length
-    print(f"\nSub<->Spiegel-Sync-Differenz BoxA: {sync_diff_A:.9f} mm")
-    print(f"Sub<->Spiegel-Sync-Differenz BoxB: {sync_diff_B:.9f} mm")
-    ok_sync = sync_diff_A <= 1e-6 and sync_diff_B <= 1e-6
+    ok_sync = ntu.originals_unchanged("Vor Neuladen")
 
     mirror_boxA_name = mirror_boxA.Label
     mirror_boxB_name = mirror_boxB.Label
@@ -167,14 +161,7 @@ def main():
         print("RESULT: FAIL (Spiegel-Objekte nach Neuladen nicht mehr auffindbar)")
         return 1
 
-    sub_doc2 = App.getDocument(mirror_boxA2.LinkedObject.Document.Name)
-    subA2 = mirror_boxA2.LinkedObject
-    subB2 = mirror_boxB2.LinkedObject
-    sync_diff_A2 = (subA2.Placement.Base - mirror_boxA2.Placement.Base).Length
-    sync_diff_B2 = (subB2.Placement.Base - mirror_boxB2.Placement.Base).Length
-    print(f"\nSub<->Spiegel-Sync-Differenz BoxA (nach Neuladen, nur recompute()): {sync_diff_A2:.9f} mm")
-    print(f"Sub<->Spiegel-Sync-Differenz BoxB (nach Neuladen, nur recompute()): {sync_diff_B2:.9f} mm")
-    ok_sync_reload = sync_diff_A2 <= 1e-6 and sync_diff_B2 <= 1e-6
+    ok_sync_reload = ntu.originals_unchanged("Nach Neuladen")
 
     ok_outer_reload, ok_inner_reload = full_check(
         "Nach Speichern+Schliessen+Neuladen+Recompute",
@@ -191,9 +178,9 @@ def main():
         if not ok_inner:
             reasons.append("innerer Revolute-Joint direkt nach dem Solve verletzt")
         if not ok_sync:
-            reasons.append("Sub-Dokument und Spiegel in GrandTop nicht synchron (vor Neuladen)")
+            reasons.append("Original im Sub-Dokument durch GrandTop-Solve veraendert (vor Neuladen)")
         if not ok_sync_reload:
-            reasons.append("Sub-Dokument und Spiegel in GrandTop nicht synchron (nach Neuladen)")
+            reasons.append("Original im Sub-Dokument durch GrandTop-Solve veraendert (nach Neuladen)")
         if not ok_outer_reload:
             reasons.append("aeusserer Joint nach Neuladen falsch")
         if not ok_inner_reload:

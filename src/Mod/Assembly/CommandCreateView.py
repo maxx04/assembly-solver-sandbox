@@ -1351,8 +1351,8 @@ class TaskAssemblyCreateView(QtCore.QObject):
         ref = UtilsAssembly.addVertexToReference(ref, vertex_name)
 
         plc = UtilsAssembly.findPlacement(ref)
-        global_plc = UtilsAssembly.getGlobalPlacement(ref)
-        plc = global_plc * plc
+        # FCPROJECT-PATCH (2026-10-13): Weltlage wie fuer Joints (getJcsGlobalPlc()).
+        plc = UtilsAssembly.getJcsGlobalPlc(plc, ref)
 
         self.blockDraggerMove = True
         self.assembly.ViewObject.DraggerPlacement = plc

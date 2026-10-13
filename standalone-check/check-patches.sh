@@ -56,7 +56,10 @@ if ! git -C "$SANDBOX_ROOT" cat-file -e "${TARGET_COMMIT}^{commit}" 2>/dev/null;
 fi
 
 # Liest PATCHES.txt: Leerzeilen und #-Kommentare (auch am Zeilenende) ignorieren.
-mapfile -t PATCHES < <(sed -e 's/#.*$//' -e 's/[[:space:]]*$//' "$PATCHES_LIST" | grep -v '^[[:space:]]*$')
+# "build:"-Zeilen sind Patches fuer den Build-Baum (freecad-source), nicht fuer diese Sandbox -
+# hier uebersprungen (siehe PATCHES.txt, Abschnitt "Format").
+mapfile -t PATCHES < <(sed -e 's/#.*$//' -e 's/[[:space:]]*$//' "$PATCHES_LIST" | grep -v '^[[:space:]]*$' | grep -v '^build:')
+mapfile -t BUILD_PATCHES < <(sed -e 's/#.*$//' -e 's/[[:space:]]*$//' "$PATCHES_LIST" | grep '^build:' | sed -e 's/^build:[[:space:]]*//')
 
 # Nutzerauftrag 2026-09-27 ("wer prueft, dass alle Commits im Patch landen?"): VANILLA_BASE aus
 # PATCHES.txt lesen - der Commit, gegen den die Patches ihren Diff bilden. Ohne diese Zeile
@@ -97,6 +100,9 @@ done
 echo
 echo "== Nicht Teil von PATCHES.txt (siehe dortige Begruendung) =="
 echo "uebersprungen  freecad-app-getplacementof-partdesign-feature.patch (betrifft src/App/*, hier nicht ausgecheckt - gegen freecad-source direkt pruefen)"
+for bp in "${BUILD_PATCHES[@]}"; do
+    echo "uebersprungen  ${bp} (build:-Patch fuer freecad-source, wendet update-sandbox.sh an)"
+done
 
 if [[ $FAIL -ne 0 ]]; then
     echo
@@ -114,7 +120,10 @@ if [[ -z "$VANILLA_BASE" ]]; then
     echo "== Vollstaendigkeitspruefung uebersprungen (kein 'VANILLA_BASE:'-Eintrag in PATCHES.txt) =="
 else
     echo "== Vollstaendigkeitspruefung: Ergebnis vs. aktueller committeter Sandbox-Stand =="
-    DIRTY="$(git -C "$SANDBOX_ROOT" status --porcelain -- src/Mod/Assembly src/3rdParty/OndselSolver)"
+    # --ignore-submodules=dirty (2026-10-11): das OndselSolver-Submodul traegt den eigenen
+    # OndselSolver-Patch dauerhaft als "modified content" - dessen Inhalt prueft der
+    # Byte-Vergleich unten ohnehin.
+    DIRTY="$(git -C "$SANDBOX_ROOT" status --porcelain --ignore-submodules=dirty -- src/Mod/Assembly src/3rdParty/OndselSolver)"
     if [[ -n "$DIRTY" ]]; then
         echo "UEBERSPRUNGEN: uncommittete Aenderungen an src/Mod/Assembly oder" >&2
         echo "src/3rdParty/OndselSolver - erst committen, dann erneut pruefen:" >&2

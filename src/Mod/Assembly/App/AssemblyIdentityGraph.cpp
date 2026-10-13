@@ -209,11 +209,17 @@ App::DocumentObject* refineNestedMirrorTarget(
     // Kopieren" (docs/ARCHITECTURE.md §5) explizit das tiefe ECHTE Objekt - ein erster Versuch,
     // hier IMMER vorwaerts zu uebersetzen, lieferte bei jedem NICHT duplizierten Fall
     // faelschlich einen (unnoetigen) lokalen Spiegel statt 'realSource' selbst.
-    if (duplicatePath.empty()) {
-        return realSource;
-    }
-    auto it = localContext->objLinkMap.find(realSource);
-    return it != localContext->objLinkMap.end() ? it->second : realSource;
+    //
+    // FCPROJECT-PATCH (2026-10-03, todo-identitygraph-duplicate-handle-split, gefunden per
+    // verifyHandleConsistency() am Fixture test_fixed_duplicate_instance_nested): auch MIT
+    // Duplikation keine Vorwaerts-Uebersetzung mehr. Die Instanz steckt bereits vollstaendig in
+    // 'duplicatePath'; templateObj ist per Konvention (siehe IdentityHandle) immer das geteilte
+    // Quellobjekt - genau so loesen resolveObject() und ein Joint der aeusseren Ebene dasselbe
+    // Teil auf ({sub#BoxB, [MidLink1]}). Die Vorwaerts-Uebersetzung lieferte stattdessen
+    // {grand#BoxB, [MidLink1]} - ein zweites Handle fuer denselben Solver-Koerper, das alle
+    // handle-basierten Graph-Funktionen (neighbors(), isGrounded(), exportDot()) zerteilte. Den
+    // instanzeigenen Spiegel liefert materializeForObjectPartMap() per mirrorsOf() aus dem Handle.
+    return realSource;
 }
 }  // namespace
 
@@ -748,8 +754,12 @@ SolverHandle IdentityGraph::resolveForSolver(const IdentityHandle& h)
 
 UiHandle IdentityGraph::resolveForUi(const IdentityHandle& h)
 {
-    auto mirrors = mirrorsOf(h);
-    App::DocumentObject* local = mirrors.empty() ? h.templateObj : mirrors.front();
+    // FCPROJECT-PATCH (2026-10-03): dieselbe Instanz wie der Solver-Schluessel (instanceOf()).
+    App::DocumentObject* local = instanceOf(h);
+    if (!local) {
+        auto mirrors = mirrorsOf(h);
+        local = mirrors.empty() ? h.templateObj : mirrors.front();
+    }
     return UiHandle(h, local);
 }
 
@@ -771,6 +781,15 @@ App::DocumentObject* IdentityGraph::materializeForObjectPartMap(const IdentityHa
 {
     if (!handle.templateObj) {
         return nullptr;
+    }
+    // FCPROJECT-PATCH (2026-10-03, Plan plans/2026-10-03-solver-nur-auf-spiegeln.md): der
+    // Solver-Schluessel ist die INSTANZ im Kontext von rootAssembly (lokales Teil oder eigener
+    // Spiegel), nicht mehr das Original im Unterdokument - Startlage, Fixierung und Rueckschreiben
+    // laufen damit ausschliesslich ueber Objekte dieses Kontexts, ein Original wird von aussen nie
+    // gelesen oder geschrieben. Ohne Instanz (Objekt liegt nicht im Baum dieses Kontexts) bleibt das
+    // bisherige Verhalten als Rueckfall.
+    if (auto* instance = instanceOf(handle)) {
+        return instance;
     }
     if (handle.duplicateInstancePath.empty() && !handle.duplicateLeaf) {
         return handle.templateObj;
@@ -826,6 +845,121 @@ void collectCandidates(App::DocumentObject* obj, std::vector<App::DocumentObject
     }
 }
 }  // namespace
+
+namespace
+{
+// Kandidaten fuer instanceOf(): nur der Dokumentbaum der Wurzel-Baugruppe - Spiegel-Gruppen
+// flexibler AssemblyLinks ja, Gruppen verlinkter Original-Dokumente und Inneres rigider Links nein.
+void collectInstanceCandidates(
+    const std::vector<App::DocumentObject*>& objects,
+    std::vector<App::DocumentObject*>& out
+)
+{
+    for (auto* obj : objects) {
+        if (!obj) {
+            continue;
+        }
+        out.push_back(obj);
+        if (auto* asmLink = freecad_cast<AssemblyLink*>(obj)) {
+            if (!asmLink->isRigid()) {
+                collectInstanceCandidates(asmLink->Group.getValues(), out);
+            }
+            continue;
+        }
+        if (auto* group = freecad_cast<App::DocumentObjectGroup*>(obj)) {
+            collectInstanceCandidates(group->Group.getValues(), out);
+        }
+    }
+}
+}  // namespace
+
+App::DocumentObject* IdentityGraph::instanceOf(const IdentityHandle& h)
+{
+    if (!h.templateObj) {
+        return nullptr;
+    }
+
+    // Schneller Weg fuer den Normalfall (keine Duplikation): die echte Container-Kette von
+    // rootAssembly zum Original ist per findContainerChain() bekannt - ihr erstes Glied ist ein
+    // Link im Dokument von rootAssembly, die weiteren sind echte Container in den Unterdokumenten.
+    // Ueber die objLinkMap der jeweiligen Spiegel (Quelle -> Spiegel) von oben nach unten folgen
+    // ergibt die Instanz, ohne jedes Objekt des Baums per resolveObject() aufzuloesen (live an BG22
+    // gemessen: der volle Index pro Graph verdoppelte die Solve-Zeit).
+    //
+    // Bei Duplikation (duplicateInstancePath nicht leer) beginnt der Abstieg am instanzeigenen
+    // Container (letzter Eintrag des Pfads, ein Spiegel im Dokument dieses Kontexts) statt an
+    // rootAssembly - BG22 hat viele mehrfach eingefuegte Winkel/Halter, dort lief sonst jedes Mal
+    // der volle Index. Nur duplicateLeaf (dupliziertes einfaches Teil) geht weiter ueber den Index.
+    if (!h.duplicateLeaf) {
+        App::DocumentObject* target = h.templateObj;
+        AssemblyLink* current = nullptr;
+        AssemblyObject* scope = rootAssembly;
+        bool usable = true;
+        if (!h.duplicateInstancePath.empty()) {
+            current = h.duplicateInstancePath.back();
+            // Das Handle ist der instanzeigene Container selbst (z.B. eine duplizierte rigide BG).
+            if (current->getLinkedObject2(false) == target) {
+                return current;
+            }
+            if (h.duplicateInstancePath.size() >= 2
+                && h.duplicateInstancePath[h.duplicateInstancePath.size() - 2]->getSourceForMirror(current)
+                    == target) {
+                return current;
+            }
+            scope = current->getLinkedAssembly();
+            usable = scope != nullptr;
+        }
+        else {
+            std::vector<AssemblyLink*> localPath;
+            if (findLocalGroupPath(rootAssembly->Group.getValues(), target, localPath)) {
+                return target;  // liegt selbst im Baum dieses Kontexts
+            }
+        }
+        std::vector<AssemblyLink*> chain;
+        if (usable && findContainerChain(scope, target, chain)) {
+            std::size_t i = 0;
+            if (!current) {
+                // Ohne Duplikation ist das erste Glied bereits ein Link im Dokument dieses Kontexts.
+                if (chain.empty()) {
+                    usable = false;
+                }
+                else {
+                    current = chain.front();
+                    i = 1;
+                }
+            }
+            for (; usable && i < chain.size(); ++i) {
+                auto it = current->objLinkMap.find(chain[i]);
+                auto* next = it != current->objLinkMap.end() ? freecad_cast<AssemblyLink*>(it->second)
+                                                              : nullptr;
+                if (!next) {
+                    usable = false;
+                    break;
+                }
+                current = next;
+            }
+            if (usable && current) {
+                auto it = current->objLinkMap.find(target);
+                if (it != current->objLinkMap.end() && it->second) {
+                    return it->second;
+                }
+            }
+        }
+    }
+
+    if (!instanceIndexBuilt) {
+        std::vector<App::DocumentObject*> candidates;
+        collectInstanceCandidates(rootAssembly->Group.getValues(), candidates);
+        for (auto* candidate : candidates) {
+            // emplace: bei mehreren Treffern gewinnt der erste (aeusserste) - ein Container wird vor
+            // seinem Inhalt eingesammelt.
+            instanceIndex.emplace(resolveObject(candidate), candidate);
+        }
+        instanceIndexBuilt = true;
+    }
+    auto it = instanceIndex.find(h);
+    return it != instanceIndex.end() ? it->second : nullptr;
+}
 
 std::vector<App::DocumentObject*> IdentityGraph::mirrorsOf(const IdentityHandle& h)
 {
@@ -1007,6 +1141,8 @@ void IdentityGraph::invalidate()
     edges.clear();
     groundedBuilt = false;
     groundedSet.clear();
+    instanceIndexBuilt = false;
+    instanceIndex.clear();
 }
 
 namespace
@@ -1376,6 +1512,17 @@ std::string IdentityGraph::exportDot()
         insertIntoClusterTree(clusterRoot, chain, id);
     }
 
+    // FCPROJECT-PATCH (2026-10-09, Nutzerauftrag): Kopf jeder Unterbaugruppe zeigt, ob sie in
+    // DIESEM Kontext starr oder flexibel ist (Wert der Instanz in der aktiven BG, siehe Regel C1 in
+    // docs/CONSTRAINTS.md). Der BG22-Mischzustand (BG43 starr in BG22, flexibel in BG37) war vorher
+    // nur indirekt an den Joint-Schleifen am BG43-Knoten zu erkennen.
+    auto rigidityRow = [](const AssemblyLink* link) -> std::string {
+        const bool rigid = link->isRigid();
+        return std::string("<TR><TD ALIGN=\"LEFT\"><FONT POINT-SIZE=\"10\" COLOR=\"")
+            + (rigid ? "#9d0208" : "#1d3557") + "\"><I>"
+            + (rigid ? "starr" : "flexibel") + "</I></FONT></TD></TR>";
+    };
+
     auto emitNodeLine = [&](std::string& text, int id) {
         const IdentityHandle& handle = handleById[id];
         App::DocumentObject* localObj = localObjById[id];
@@ -1401,6 +1548,9 @@ std::string IdentityGraph::exportDot()
         text += "  n" + std::to_string(id)
             + " [label=<<TABLE BORDER=\"0\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"0\">";
         text += "<TR><TD ALIGN=\"LEFT\">" + htmlEscape(label) + "</TD></TR>";
+        if (isAssembly) {
+            text += rigidityRow(static_cast<AssemblyLink*>(localObj));
+        }
         text += "<TR><TD HEIGHT=\"4\"></TD></TR>";
         text += "<TR><TD ALIGN=\"LEFT\"><FONT POINT-SIZE=\"9\">UI: " + hexPointer(localObj)
             + "</FONT></TD></TR>";
@@ -1465,6 +1615,7 @@ std::string IdentityGraph::exportDot()
         text += "    label=<<TABLE BORDER=\"0\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"0\">";
         text += "<TR><TD ALIGN=\"LEFT\"><FONT POINT-SIZE=\"11\"><B>"
             + htmlEscape(link->getNameInDocument()) + "</B></FONT></TD></TR>";
+        text += rigidityRow(link);
         // Nutzerbefund 2026-09-21: dieselbe Umstellung wie in emitNodeLine() - IMMER zeigen, nicht
         // nur bei Abweichung (siehe dortiger Kommentar fuer die volle Begruendung).
         text += "<TR><TD HEIGHT=\"4\"></TD></TR>";
@@ -1694,6 +1845,77 @@ struct HandleDisjointSet
     }
 };
 }  // namespace
+
+std::vector<std::string> IdentityGraph::verifyHandleConsistency()
+{
+    auto describe = [](const IdentityHandle& h) {
+        std::string text = h.templateObj ? h.templateObj->getFullName() : std::string("<null>");
+        if (!h.duplicateInstancePath.empty()) {
+            text += " via [";
+            for (std::size_t i = 0; i < h.duplicateInstancePath.size(); ++i) {
+                auto* link = h.duplicateInstancePath[i];
+                text += (i ? ", " : "") + (link ? link->getFullName() : std::string("<null>"));
+            }
+            text += "]";
+        }
+        if (h.duplicateLeaf) {
+            text += " leaf " + h.duplicateLeaf->getFullName();
+        }
+        return text;
+    };
+
+    std::vector<std::pair<IdentityHandle, std::string>> endpoints;
+    for (const auto& edge : jointEdges()) {
+        const std::string jointName = edge.nestingPrefix
+            + (edge.joint ? edge.joint->getFullName() : std::string("<null>"));
+        endpoints.emplace_back(edge.a, jointName + ".Reference1");
+        endpoints.emplace_back(edge.b, jointName + ".Reference2");
+    }
+    for (const auto& h : groundedHandles()) {
+        endpoints.emplace_back(h, "grounded");
+    }
+
+    // Reihenfolge stabil halten (Ausgabe soll zwischen Laeufen vergleichbar sein).
+    std::vector<App::DocumentObject*> keyOrder;
+    std::unordered_map<App::DocumentObject*, std::vector<std::pair<IdentityHandle, std::string>>> byKey;
+    for (const auto& [handle, origin] : endpoints) {
+        App::DocumentObject* key = materializeForObjectPartMap(handle);
+        if (!key) {
+            continue;
+        }
+        auto& group = byKey[key];
+        if (group.empty()) {
+            keyOrder.push_back(key);
+        }
+        group.emplace_back(handle, origin);
+    }
+
+    std::vector<std::string> report;
+    for (auto* key : keyOrder) {
+        const auto& group = byKey[key];
+        std::vector<IdentityHandle> distinct;
+        for (const auto& [handle, origin] : group) {
+            if (std::find(distinct.begin(), distinct.end(), handle) == distinct.end()) {
+                distinct.push_back(handle);
+            }
+        }
+        if (distinct.size() <= 1) {
+            continue;
+        }
+        std::string line = "SPLIT " + key->getFullName() + ": " + std::to_string(distinct.size())
+            + " Handles";
+        for (const auto& handle : distinct) {
+            line += "\n    - " + describe(handle) + " <-";
+            for (const auto& [h, origin] : group) {
+                if (h == handle) {
+                    line += " " + origin;
+                }
+            }
+        }
+        report.push_back(line);
+    }
+    return report;
+}
 
 std::string IdentityGraph::verifyAgainstAsmt()
 {

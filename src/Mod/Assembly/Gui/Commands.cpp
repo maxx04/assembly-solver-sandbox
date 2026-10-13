@@ -71,6 +71,22 @@ void selectObjects(const std::vector<App::DocumentObject*>& objectsToSelect)
     }
 }
 
+namespace
+{
+// FCPROJECT-PATCH (2026-10-03): Namen aus AssemblyObject::getLastRedundant() & Co. koennen fuer
+// Joints aus verschachtelten Dokumenten die Form "Dokument#Objekt" haben.
+App::DocumentObject* resolveAssemblyReportName(App::Document* doc, const std::string& name)
+{
+    auto hashPos = name.find('#');
+    if (hashPos == std::string::npos) {
+        return doc ? doc->getObject(name.c_str()) : nullptr;
+    }
+    auto* otherDoc = App::GetApplication().getDocument(name.substr(0, hashPos).c_str());
+    return otherDoc ? otherDoc->getObject(name.substr(hashPos + 1).c_str()) : nullptr;
+}
+
+}  // namespace
+
 void selectObjectsByName(AssemblyObject* assembly, const std::vector<std::string>& names)
 {
     if (!assembly || names.empty()) {
@@ -81,7 +97,7 @@ void selectObjectsByName(AssemblyObject* assembly, const std::vector<std::string
     App::Document* doc = assembly->getDocument();
 
     for (const auto& name : names) {
-        if (auto* obj = doc->getObject(name.c_str())) {
+        if (auto* obj = resolveAssemblyReportName(doc, name)) {
             objectsToSelect.push_back(obj);
         }
     }

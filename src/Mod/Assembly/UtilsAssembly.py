@@ -378,7 +378,12 @@ def getRootPath(obj, part):
 
 # Return the jcs global placement
 def getJcsGlobalPlc(jcsPlc, ref):
-    obj_global_plc = getGlobalPlacement(ref)
+    # FCPROJECT-PATCH (2026-10-13): Placement1/2 sind relativ zu getObject(ref) (siehe
+    # findPlacement()). Die Weltlage deshalb genau bis zu diesem Objekt bestimmen - bei einem
+    # Unterpfad in ein Body-Feature ("Link.BaseFeature.Edge9") nahm getGlobalPlacement(ref) sonst
+    # die Placement des Features ein zweites Mal mit (Schraube lag 90 Grad quer). Gleiche Regel wie
+    # getJcsReferenceGlobalPlacement() in AssemblyUtils.cpp.
+    obj_global_plc = getGlobalPlacement(ref, getObject(ref))
     return obj_global_plc * jcsPlc
 
 
@@ -487,7 +492,7 @@ def findElementClosestVertex(ref, mousePos):
     # We need mousePos to be in the same lcs as obj
     plc = App.Placement()
     plc.Base = mousePos
-    global_plc = getGlobalPlacement(ref)
+    global_plc = getGlobalPlacement(ref, obj)  # FCPROJECT-PATCH (2026-10-13): bis obj, siehe getJcsGlobalPlc()
     plc = global_plc.inverse() * plc  # We make it relative to obj Origin
     plc = obj.Placement * plc  # Make plc in the same lcs as obj
     mousePos = plc.Base
@@ -651,6 +656,25 @@ def getJointsOfType(asm, jointTypes):
         if joint.JointType in jointTypes:
             joints.append(joint)
     return joints
+
+
+def getJointInstancesOfType(asm, jointTypes):
+    """FCPROJECT-PATCH (2026-10-10, plans/2026-10-10-simulation-an-struktur-anpassen.md): like
+    getJointsOfType(), but one entry per joint INSTANCE as (joint, nestingPrefix). A
+    sub-assembly inserted twice contributes its joints twice with different prefixes; joints
+    directly in the assembly have prefix ""."""
+    if not hasattr(asm, "getJointInstances"):
+        return [(joint, "") for joint in getJointsOfType(asm, jointTypes)]
+    return [(joint, prefix) for joint, prefix in asm.getJointInstances() if joint.JointType in jointTypes]
+
+
+def jointInstanceDisplayName(joint, prefix):
+    """Label of a joint instance for UI lists: the joint label plus the inserted sub-assembly
+    instance it belongs to (last element of the nesting prefix, unique within the document)."""
+    if not prefix:
+        return joint.Label
+    instance = prefix.rstrip(".").split(".")[-1]
+    return "{} \u2014 {}".format(joint.Label, instance)
 
 
 def getBomGroup(assembly):

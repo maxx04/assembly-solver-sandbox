@@ -143,12 +143,15 @@ PyObject* AssemblyObjectPy::clearUndo(PyObject* args) const
 PyObject* AssemblyObjectPy::isPartConnected(PyObject* args) const
 {
     PyObject* pyobj;
+    // FCPROJECT-PATCH (2026-10-03, Diagnose BG67-"Part_Detached"-Overlay): optionales zweites
+    // Argument schaltet das bereits vorhandene verboseLog von isPartConnected() aus Python frei.
+    int verboseLog = 0;
 
-    if (!PyArg_ParseTuple(args, "O!", &(App::DocumentObjectPy::Type), &pyobj)) {
+    if (!PyArg_ParseTuple(args, "O!|p", &(App::DocumentObjectPy::Type), &pyobj, &verboseLog)) {
         return nullptr;
     }
     auto* obj = static_cast<App::DocumentObjectPy*>(pyobj)->getDocumentObjectPtr();
-    bool ok = this->getAssemblyObjectPtr()->isPartConnected(obj);
+    bool ok = this->getAssemblyObjectPtr()->isPartConnected(obj, verboseLog != 0);
     return Py_BuildValue("O", (ok ? Py_True : Py_False));
 }
 
@@ -230,6 +233,22 @@ PyObject* AssemblyObjectPy::verifyIdentityGraphEquivalence(PyObject* args) const
     return Py::new_reference_to(ret);
 }
 
+PyObject* AssemblyObjectPy::verifyIdentityGraphHandleConsistency(PyObject* args) const
+{
+    if (!PyArg_ParseTuple(args, "")) {
+        return nullptr;
+    }
+
+    std::vector<std::string> lines
+        = this->getAssemblyObjectPtr()->verifyIdentityGraphHandleConsistency();
+
+    Py::List ret;
+    for (const auto& line : lines) {
+        ret.append(Py::String(line));
+    }
+    return Py::new_reference_to(ret);
+}
+
 Py::List AssemblyObjectPy::getJoints() const
 {
     Py::List ret;
@@ -251,25 +270,40 @@ PyObject* AssemblyObjectPy::getDownstreamParts(PyObject* args) const
 {
     PyObject* pyPart;
     PyObject* pyJoint;
+    PyObject* pyAlsoIgnore = nullptr;
 
-    // Parse the two arguments: a part object and a joint object
+    // Parse the arguments: a part object, a joint object and (FCPROJECT-PATCH 2026-10-11)
+    // optionally a list of further joints to ignore
     if (!PyArg_ParseTuple(
             args,
-            "O!O!",
+            "O!O!|O!",
             &(App::DocumentObjectPy::Type),
             &pyPart,
             &(App::DocumentObjectPy::Type),
-            &pyJoint
+            &pyJoint,
+            &PyList_Type,
+            &pyAlsoIgnore
         )) {
         return nullptr;
     }
 
     auto* part = static_cast<App::DocumentObjectPy*>(pyPart)->getDocumentObjectPtr();
     auto* joint = static_cast<App::DocumentObjectPy*>(pyJoint)->getDocumentObjectPtr();
+    std::vector<App::DocumentObject*> alsoIgnore;
+    if (pyAlsoIgnore) {
+        for (Py_ssize_t i = 0; i < PyList_Size(pyAlsoIgnore); i++) {
+            PyObject* item = PyList_GetItem(pyAlsoIgnore, i);
+            if (!PyObject_TypeCheck(item, &(App::DocumentObjectPy::Type))) {
+                PyErr_SetString(PyExc_TypeError, "Expected a list of App.DocumentObject");
+                return nullptr;
+            }
+            alsoIgnore.push_back(static_cast<App::DocumentObjectPy*>(item)->getDocumentObjectPtr());
+        }
+    }
 
     // Call the C++ method
     std::vector<Assembly::ObjRef> downstreamParts
-        = this->getAssemblyObjectPtr()->getDownstreamParts(part, joint);
+        = this->getAssemblyObjectPtr()->getDownstreamParts(part, joint, alsoIgnore);
 
     // Convert the result into a Python list of DocumentObjects
     Py::List ret;
@@ -279,6 +313,117 @@ PyObject* AssemblyObjectPy::getDownstreamParts(PyObject* args) const
         }
     }
 
+    return Py::new_reference_to(ret);
+}
+
+// FCPROJECT-PATCH (2026-10-04, siehe feedback-drag-test-strategy-needed.md): die Suche nach der
+// Ziehart (ViewProviderAssembly::findDragMode()) headless nachvollziehbar machen.
+// FCPROJECT-PATCH (2026-10-10, Plan plans/2026-10-10-simulation-an-struktur-anpassen.md,
+// Schritt 3/4): Gelenke je Instanz samt Verschachtelungspfad fuer die Motion-Auswahl.
+PyObject* AssemblyObjectPy::getJointInstances(PyObject* args) const
+{
+    if (!PyArg_ParseTuple(args, "")) {
+        return nullptr;
+    }
+    Py::List ret;
+    for (const auto& jr : this->getAssemblyObjectPtr()->getJoints()) {
+        if (!jr.joint) {
+            continue;
+        }
+        Py::Tuple item(2);
+        item.setItem(0, Py::Object(jr.joint->getPyObject(), true));
+        item.setItem(1, Py::String(jr.nestingPrefix));
+        ret.append(item);
+    }
+    return Py::new_reference_to(ret);
+}
+
+PyObject* AssemblyObjectPy::getJointOfPartConnectingToGround(PyObject* args) const
+{
+    PyObject* pyPart;
+    if (!PyArg_ParseTuple(args, "O!", &(App::DocumentObjectPy::Type), &pyPart)) {
+        return nullptr;
+    }
+    auto* part = static_cast<App::DocumentObjectPy*>(pyPart)->getDocumentObjectPtr();
+    std::string name;
+    std::string prefix;
+    App::DocumentObject* joint
+        = this->getAssemblyObjectPtr()->getJointOfPartConnectingToGround(part, name, {}, &prefix);
+    Py::Tuple ret(3);
+    ret.setItem(0, joint ? Py::Object(joint->getPyObject(), true) : Py::None());
+    ret.setItem(1, Py::String(name));
+    ret.setItem(2, Py::String(prefix));
+    return Py::new_reference_to(ret);
+}
+
+PyObject* AssemblyObjectPy::getUpstreamMovingPart(PyObject* args) const
+{
+    PyObject* pyPart;
+    if (!PyArg_ParseTuple(args, "O!", &(App::DocumentObjectPy::Type), &pyPart)) {
+        return nullptr;
+    }
+    auto* part = static_cast<App::DocumentObjectPy*>(pyPart)->getDocumentObjectPtr();
+    App::DocumentObject* joint = nullptr;
+    std::string name;
+    App::DocumentObject* upPart = this->getAssemblyObjectPtr()->getUpstreamMovingPart(part, joint, name);
+    Py::Tuple ret(3);
+    ret.setItem(0, upPart ? Py::Object(upPart->getPyObject(), true) : Py::None());
+    ret.setItem(1, joint ? Py::Object(joint->getPyObject(), true) : Py::None());
+    ret.setItem(2, Py::String(name));
+    return Py::new_reference_to(ret);
+}
+
+// FCPROJECT-PATCH (2026-10-11): ueberbestimmte Gruppen des letzten Solves, je Gruppe eine Zeile
+// "Verursacher (Typ), zusammen mit: ..." (siehe AssemblyObject::updateSolveStatus()).
+PyObject* AssemblyObjectPy::getRedundancyGroups(PyObject* args) const
+{
+    if (!PyArg_ParseTuple(args, "")) {
+        return nullptr;
+    }
+    Py::List ret;
+    for (const auto& group : this->getAssemblyObjectPtr()->getLastRedundancyGroups()) {
+        ret.append(Py::String(group));
+    }
+    return Py::new_reference_to(ret);
+}
+
+// FCPROJECT-PATCH (2026-10-13): Gelenkgrenzen, die der letzte Solve nicht einhalten konnte, je
+// Grenze eine Zeile (siehe AssemblyObject::reportUnsatisfiedLimits()).
+PyObject* AssemblyObjectPy::getLimitViolations(PyObject* args) const
+{
+    if (!PyArg_ParseTuple(args, "")) {
+        return nullptr;
+    }
+    Py::List ret;
+    for (const auto& line : this->getAssemblyObjectPtr()->getLastLimitViolations()) {
+        ret.append(Py::String(line));
+    }
+    return Py::new_reference_to(ret);
+}
+
+// FCPROJECT-PATCH (2026-10-12): Diagnose/Test fuer findDragMode() - siehe
+// AssemblyObject::getDragJointOfPart().
+PyObject* AssemblyObjectPy::getDragJointOfPart(PyObject* args) const
+{
+    PyObject* pyPart;
+    if (!PyArg_ParseTuple(args, "O!", &(App::DocumentObjectPy::Type), &pyPart)) {
+        return nullptr;
+    }
+    auto* part = static_cast<App::DocumentObjectPy*>(pyPart)->getDocumentObjectPtr();
+    App::DocumentObject* joint = nullptr;
+    std::string name;
+    std::vector<App::DocumentObject*> bypassed;
+    App::DocumentObject* dragPart
+        = this->getAssemblyObjectPtr()->getDragJointOfPart(part, joint, name, bypassed);
+    Py::List pyBypassed;
+    for (auto* b : bypassed) {
+        pyBypassed.append(Py::Object(b->getPyObject(), true));
+    }
+    Py::Tuple ret(4);
+    ret.setItem(0, dragPart ? Py::Object(dragPart->getPyObject(), true) : Py::None());
+    ret.setItem(1, joint ? Py::Object(joint->getPyObject(), true) : Py::None());
+    ret.setItem(2, Py::String(name));
+    ret.setItem(3, pyBypassed);
     return Py::new_reference_to(ret);
 }
 

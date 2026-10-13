@@ -112,6 +112,139 @@ App::DocumentObjectExecReturn* AssemblyLink::execute()
     return App::Part::execute();
 }
 
+namespace
+{
+// FCPROJECT-PATCH (2026-10-09): true, wenn ein AssemblyLink oberhalb von link (in dessen
+// eigenem Dokument, ueber die Group-Kette) starr ist. Siehe synchronizeComponents().
+bool hasRigidAncestorLink(const App::DocumentObject* link)
+{
+    for (auto* parent : link->getInList()) {
+        auto* parentLink = freecad_cast<AssemblyLink*>(parent);
+        if (!parentLink || !parentLink->hasObject(link)) {
+            continue;
+        }
+        if (parentLink->isRigid() || hasRigidAncestorLink(parentLink)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// FCPROJECT-PATCH (2026-10-09): das Gegenstueck eines Spiegels eine Ebene tiefer in DERSELBEN
+// Instanzkette. Beispiel BG22 > BG37 > BG43 > 067: der 067-Spiegel in BG22 verweist per
+// LinkedObject direkt auf BG43s 067 und ueberspringt damit BG37. Sein Gegenstueck ist aber BG37s
+// 067-Spiegel - nur der liegt im selben Koordinatenrahmen wie die uebrigen BG37-Spiegel, von denen
+// die Nachbarn im BG22-Spiegel ihre Lage haben. Ermittelt ueber den Eltern-Spiegel: Gegenstueck
+// des Eltern-Spiegels, darin der Spiegel derselben Quelle. Ohne Eltern-Spiegel (direkt in einer
+// Baugruppe eingebaut) ist es das verlinkte Objekt selbst.
+App::DocumentObject* counterpartOf(AssemblyLink* link)
+{
+    for (auto* parent : link->getInList()) {
+        auto* parentLink = freecad_cast<AssemblyLink*>(parent);
+        if (!parentLink || !parentLink->hasObject(link)) {
+            continue;
+        }
+        auto* parentCounterpart = freecad_cast<AssemblyLink*>(counterpartOf(parentLink));
+        App::DocumentObject* source = parentLink->getSourceForMirror(link);
+        if (parentCounterpart && source) {
+            auto it = parentCounterpart->objLinkMap.find(source);
+            if (it != parentCounterpart->objLinkMap.end() && it->second) {
+                return it->second;
+            }
+        }
+        break;
+    }
+    return link->getLinkedObject2(false);
+}
+
+// FCPROJECT-PATCH (2026-10-07): verschiebt alle Teile unterhalb von container um plc (in
+// Weltkoordinaten des Containers der obersten Ebene), ohne flexible Container-Spiegel selbst zu
+// veraendern. chain ist die Placement-Kette der Container zwischen der obersten Ebene und
+// container. Fuer ein Teil mit lokaler Placement L gilt danach: chain * L' = plc * chain * L.
+// Teile, Link-Gruppen-Elemente und rigide verschachtelte BGs (selbst ein Solver-Koerper) werden
+// verschoben, flexible verschachtelte BGs rekursiv durchlaufen.
+void applyPlacementKeepingContainers(
+    App::DocumentObject* container,
+    const Base::Placement& plc,
+    const Base::Placement& chain
+)
+{
+    auto* groupExt = container->getExtensionByType<App::GroupExtension>(true);
+    if (!groupExt) {
+        return;
+    }
+    const Base::Placement delta = chain.inverse() * plc * chain;
+
+    auto shift = [&delta](App::DocumentObject* obj) {
+        auto* prop = dynamic_cast<App::PropertyPlacement*>(obj->getPropertyByName("Placement"));
+        if (prop) {
+            prop->setValue(delta * prop->getValue());
+        }
+    };
+
+    for (auto* obj : groupExt->Group.getValues()) {
+        if (!obj) {
+            continue;
+        }
+        if (!obj->isDerivedFrom<App::Part>() && !obj->isDerivedFrom<PartApp::Feature>()
+            && !obj->isDerivedFrom<App::Link>()) {
+            continue;
+        }
+
+        if (auto* subLink = freecad_cast<AssemblyLink*>(obj)) {
+            if (!subLink->isRigid()) {
+                applyPlacementKeepingContainers(subLink, plc, chain * subLink->Placement.getValue());
+                continue;
+            }
+        }
+
+        if (obj->isLinkGroup()) {
+            for (auto* elt : static_cast<App::Link*>(obj)->ElementList.getValues()) {
+                if (elt) {
+                    shift(elt);
+                }
+            }
+        }
+        else {
+            shift(obj);
+        }
+    }
+}
+
+// FCPROJECT-PATCH (2026-10-11, live an BG22 gefunden: BG75 flexibel eingefuegt, Solve 60s,
+// Teile fliegen): Quelle der Start-Placement eines NEU angelegten Spiegels. source stammt aus
+// getLinkedAssembly()->Group, bei einem verschachtelten Spiegel also aus der INNERSTEN Baugruppe
+// (z.B. BG47s Original-Buchse). Die gueltige Lage dieser Instanz hat aber das Gegenstueck eine
+// Ebene tiefer (BG75s eigener Buchsen-Spiegel, von BG75 geloest) - dieselbe Quelle, die der
+// Starr-Zweig von synchronizeComponents() nutzt. Ohne Gegenstueck (direkt in einer Baugruppe
+// eingebaut) ist source selbst richtig. objLinkMap ist Laufzeitzustand und kann leer sein, wenn
+// das Gegenstueck noch nicht synchronisiert wurde; dann wird dessen Group durchsucht.
+App::DocumentObject* startPlacementSource(AssemblyLink* mirrorParent, App::DocumentObject* source)
+{
+    auto* counterpart = freecad_cast<AssemblyLink*>(counterpartOf(mirrorParent));
+    if (!counterpart) {
+        return source;
+    }
+    auto it = counterpart->objLinkMap.find(source);
+    if (it != counterpart->objLinkMap.end() && it->second) {
+        return it->second;
+    }
+    for (auto* obj : counterpart->Group.getValues()) {
+        App::DocumentObject* linked = nullptr;
+        if (auto* asmLink = freecad_cast<AssemblyLink*>(obj)) {
+            linked = asmLink->getLinkedObject2(false);
+        }
+        else if (auto* link = dynamic_cast<App::Link*>(obj); link && !link->isLinkGroup()) {
+            linked = link->getLinkedObject(false);
+        }
+        if (linked == source) {
+            return obj;
+        }
+    }
+    return source;
+}
+}  // namespace
+
 void AssemblyLink::onChanged(const App::Property* prop)
 {
     if (App::GetApplication().isRestoring()) {
@@ -128,6 +261,17 @@ void AssemblyLink::onChanged(const App::Property* prop)
     }
 
     if (prop == &Rigid) {
+        // FCPROJECT-PATCH (2026-10-09, Regel C1 in docs/CONSTRAINTS.md): ein verschachtelter
+        // Spiegel (Eltern-Objekt ist ein AssemblyLink, keine AssemblyObject) uebernimmt Rigid nur
+        // von seiner Quelle (synchronizeComponents()). Die Umschalt-Logik unten - Erdung im
+        // Eltern-Assembly entfernen, Placement in die Kinder schieben, Eltern-Joints umhaengen -
+        // gilt nur fuer eine direkt in einer Baugruppe eingebaute Instanz; fuer einen Spiegel gibt
+        // es kein Eltern-Assembly (getParentAssembly() == nullptr, vorher Null-Dereferenzierung).
+        if (!getParentAssembly()) {
+            App::Part::onChanged(prop);
+            return;
+        }
+
         Base::Placement movePlc;
 
         // A flexible sub-assembly cannot be grounded.
@@ -201,40 +345,14 @@ void AssemblyLink::onChanged(const App::Property* prop)
 
                 // We need to apply the placement of the assembly link to the children or they will
                 // move.
-                std::vector<App::DocumentObject*> group = Group.getValues();
-                for (auto* obj : group) {
-                    if (!obj->isDerivedFrom<App::Part>() && !obj->isDerivedFrom<PartApp::Feature>()
-                        && !obj->isDerivedFrom<App::Link>()) {
-                        continue;
-                    }
-
-                    if (obj->isLinkGroup()) {
-                        auto* srcLink = static_cast<App::Link*>(obj);
-                        const std::vector<App::DocumentObject*> srcElements
-                            = srcLink->ElementList.getValues();
-
-                        for (auto elt : srcElements) {
-                            if (!elt) {
-                                continue;
-                            }
-
-                            auto* prop = dynamic_cast<App::PropertyPlacement*>(
-                                elt->getPropertyByName("Placement")
-                            );
-                            if (prop) {
-                                prop->setValue(plc * prop->getValue());
-                            }
-                        }
-                    }
-                    else {
-                        auto* prop = dynamic_cast<App::PropertyPlacement*>(
-                            obj->getPropertyByName("Placement")
-                        );
-                        if (prop) {
-                            prop->setValue(plc * prop->getValue());
-                        }
-                    }
-                }
+                // FCPROJECT-PATCH (2026-10-07, live an BG37 mit starr eingebauter BG43 gefunden):
+                // flexible Container-Spiegel folgen seit "Solver nur auf Spiegeln" immer ihrer
+                // Quelle (synchronizeComponents()). Wurde die Link-Placement hier auch in einen
+                // verschachtelten flexiblen Container geschoben, setzte der naechste Recompute ihn
+                // auf die Quelle zurueck - Motor und Buchse sprangen weg, die BG kollabierte.
+                // Deshalb geht die Placement an den Containern vorbei in deren Teile, so dass jede
+                // Weltlage erhalten bleibt (siehe applyPlacementKeepingContainers()).
+                applyPlacementKeepingContainers(this, plc, Base::Placement());
 
                 // FCPROJECT-PATCH (Migrationsschritt 4.1+4.3 "Adressieren statt Kopieren", siehe
                 // docs/ARCHITECTURE.md Abschnitt 5): vorher redrawJointPlacements(getJoints())
@@ -388,6 +506,23 @@ void AssemblyLink::synchronizeComponents()
         return;
     }
 
+    // FCPROJECT-PATCH (2026-10-12, live an BG22 gefunden): Regel C1 (starr/flexibel legt das
+    // einbauende Dokument fest) wendet ein verschachtelter Spiegel jetzt SELBST an, bevor er
+    // entscheidet, wie er seine Teile behandelt. Bisher setzte erst der Eltern-Spiegel den Wert
+    // (unten, Abschnitt "Regel C1") - der Spiegel selbst wird aber VOR seinem Eltern-Objekt
+    // neu berechnet und arbeitete dann mit dem veralteten Wert aus der Datei: noch "starr",
+    // kopierte er die Anzeige-Lagen der inzwischen flexiblen Quelle (BG75 nach dem Umschalten,
+    // Container-Versatz schon in den Teilen) und verschob den Motor in BG22 um 472mm.
+    // Nur fuer Spiegel (kein Eltern-Assembly); eine direkt eingebaute Instanz entscheidet selbst.
+    if (!getParentAssembly()) {
+        if (auto* source = freecad_cast<AssemblyLink*>(getLinkedObject2(false))) {
+            if (source->Rigid.getValue() != Rigid.getValue()) {
+                Rigid.setValue(source->Rigid.getValue());
+                reinitFromCounterpart = true;
+            }
+        }
+    }
+
     objLinkMap.clear();
     mirrorToSourceMap.clear();
     objSubPrefixMap.clear();
@@ -429,6 +564,9 @@ void AssemblyLink::synchronizeComponents()
     );
 
     // We check if a component needs to be added to the AssemblyLink
+    // FCPROJECT-PATCH (2026-10-13): in diesem Durchlauf NEU angelegte Blatt-Spiegel (Quelle, Spiegel)
+    // - siehe Nachlauf "neues Teil in bestehender Instanz" unten.
+    std::vector<std::pair<App::DocumentObject*, App::DocumentObject*>> newlyCreatedLeaves;
     for (auto* obj : topLevelComponents) {
         if (isSuppressedLinkElement(obj)) {
             continue;
@@ -539,7 +677,7 @@ void AssemblyLink::synchronizeComponents()
                     }
 
                     syncSuppressedState(srcObj, newObj);
-                    syncPlacements(srcObj, newObj);
+                    syncPlacements(startPlacementSource(this, srcObj), newObj);
 
                     if (isSuppressedLinkElement(srcObj)) {
                         continue;
@@ -558,10 +696,44 @@ void AssemblyLink::synchronizeComponents()
                 addObject(newLink);
                 link = newLink;
             }
+
+            // FCPROJECT-PATCH (2026-10-07, live an BG37 mit flexibel eingefuegter BG43 gefunden):
+            // ein NEU angelegter Spiegel startet in der Lage seiner Quelle. Vorher blieb er auf der
+            // Default-Placement; das fiel nicht auf, solange der Solver ins Original schrieb und
+            // danach alle Spiegel nachzog. Seit "Solver nur auf Spiegeln" ist die Spiegel-Placement
+            // die Startlage des Solvers - ohne diese Initialisierung kam die eingefuegte BG
+            // zerwuerfelt an (Teile 20-60mm daneben) und der Solve scheiterte (iterNo > iterMax).
+            // Nur beim Anlegen: danach ist die Placement Zustand dieser Instanz.
+            // Verschachtelt: aus dem Gegenstueck, nicht aus dem innersten Original
+            // (startPlacementSource(), 2026-10-11).
+            syncPlacements(startPlacementSource(this, obj), link);
+            auto* newAsmLink = freecad_cast<AssemblyLink*>(link);
+            if (!link->isLinkGroup() && (!newAsmLink || newAsmLink->isRigid())) {
+                newlyCreatedLeaves.emplace_back(obj, link);
+            }
         }
 
         objLinkMap[obj] = link;
         mirrorToSourceMap[link] = obj;
+
+        // FCPROJECT-PATCH (2026-10-09, Regel C1 in docs/CONSTRAINTS.md): ob eine Unterbaugruppe
+        // starr oder flexibel ist, legt allein das einbauende Dokument fest. Ein verschachtelter
+        // Spiegel uebernimmt den Wert deshalb immer von seiner Quelle, nicht nur beim Anlegen.
+        // Live an BG22 gefunden: der BG43-Spiegel unter BG37 war aus einem alten Stand noch
+        // starr, in BG37 ist BG43 inzwischen flexibel - Mischzustand, derselbe Motor wurde zwei
+        // Solver-Koerper und BG43 fiel auseinander. Nach einem Wechsel wird der Spiegel sofort
+        // (nicht erst beim naechsten Recompute - er wurde in diesem schon vor uns ausgefuehrt)
+        // aus seinem Gegenstueck neu aufgesetzt; verschachtelte Spiegel darunter ebenso.
+        if (auto* srcAsmLink = freecad_cast<AssemblyLink*>(obj)) {
+            if (auto* mirrorAsmLink = freecad_cast<AssemblyLink*>(link)) {
+                if (mirrorAsmLink->Rigid.getValue() != srcAsmLink->Rigid.getValue()
+                    || reinitFromCounterpart) {
+                    mirrorAsmLink->Rigid.setValue(srcAsmLink->Rigid.getValue());
+                    mirrorAsmLink->reinitFromCounterpart = true;
+                    mirrorAsmLink->synchronizeComponents();
+                }
+            }
+        }
 
         if (auto* srcLinkArray = freecad_cast<PartApp::LinkArray*>(obj)) {
             if (srcLinkArray->ShowElement.getValue()) {
@@ -576,10 +748,126 @@ void AssemblyLink::synchronizeComponents()
         }
     }
 
+    // FCPROJECT-PATCH (2026-10-13, live an BG22 gefunden: in BG75 zwei Schrauben per Teiletausch
+    // ersetzt, BG22 hing danach im Solve): ein NEUES Teil in einer schon eingebauten flexiblen
+    // Instanz startete in der Lage seines Gegenstuecks - die gilt nur im Dokument des Gegenstuecks.
+    // Steckt die Instanz hier versetzt (BG75 in BG22 ~430mm und 90 Grad anders), lag das neue
+    // Teil um genau diesen Versatz neben seinen Nachbarn. Jetzt uebernimmt es den Versatz seines
+    // naechsten schon vorhandenen Nachbarn (naechster nach Lage im Gegenstueck): Lage =
+    // (Nachbar hier) * (Nachbar dort)^-1 * (Teil dort). Gibt es keinen vorhandenen Nachbarn (ganze
+    // Baugruppe frisch eingefuegt), bleibt es bei der Lage des Gegenstuecks.
+    if (!newlyCreatedLeaves.empty() && !isRigid() && !hasRigidAncestorLink(this)) {
+        auto placementOf = [](App::DocumentObject* obj) -> const App::PropertyPlacement* {
+            return obj ? dynamic_cast<App::PropertyPlacement*>(obj->getPropertyByName("Placement"))
+                       : nullptr;
+        };
+        for (const auto& [newSource, newMirror] : newlyCreatedLeaves) {
+            const auto* newCounterpartPlc = placementOf(startPlacementSource(this, newSource));
+            auto* newMirrorPlc = dynamic_cast<App::PropertyPlacement*>(
+                newMirror->getPropertyByName("Placement")
+            );
+            if (!newCounterpartPlc || !newMirrorPlc) {
+                continue;
+            }
+            const Base::Vector3d newPos = newCounterpartPlc->getValue().getPosition();
+            double bestDistance = -1.0;
+            Base::Placement bestOffset;
+            for (const auto& [source, mirror] : objLinkMap) {
+                const bool isNew = std::any_of(
+                    newlyCreatedLeaves.begin(),
+                    newlyCreatedLeaves.end(),
+                    [mirror = mirror](const auto& entry) { return entry.second == mirror; }
+                );
+                auto* mirrorAsmLink = freecad_cast<AssemblyLink*>(mirror);
+                if (isNew || !mirror || mirror->isLinkGroup() || (mirrorAsmLink && !mirrorAsmLink->isRigid())) {
+                    continue;
+                }
+                const auto* counterpartPlc = placementOf(startPlacementSource(this, source));
+                const auto* mirrorPlc = placementOf(mirror);
+                if (!counterpartPlc || !mirrorPlc) {
+                    continue;
+                }
+                const double distance
+                    = (counterpartPlc->getValue().getPosition() - newPos).Length();
+                if (bestDistance < 0.0 || distance < bestDistance) {
+                    bestDistance = distance;
+                    bestOffset = mirrorPlc->getValue() * counterpartPlc->getValue().inverse();
+                }
+            }
+            if (bestDistance >= 0.0 && !bestOffset.isIdentity()) {
+                newMirrorPlc->setValue(bestOffset * newCounterpartPlc->getValue());
+            }
+        }
+    }
+
     // If the assemblyLink is rigid, then we keep all placements synchronized.
-    if (isRigid()) {
+    // FCPROJECT-PATCH (2026-10-09, live an BG22 gefunden: BG43 starr in BG37, BG37 flexibel in
+    // BG22 - die Teile des flexiblen Motor-Containers 067 UNTER der starren BG43 lagen
+    // zerwuerfelt): eine starre BG zeigt den Stand, den ihr verlinktes Objekt zeigt ("zeigt ja,
+    // aendert nein"). Das gilt fuer alles darunter, auch fuer flexible Container - unter einem
+    // starren Vorfahren loest niemand deren Teile, also muessen sie ebenfalls nachgefuehrt werden.
+    // Quelle der Placement ist das Gegenstueck im DIREKT verlinkten Objekt: ist das selbst ein
+    // AssemblyLink (z.B. BG43s eigener 067-Spiegel), dessen Spiegel - nicht das Original der
+    // innersten Baugruppe, das nie in einem einbindenden Kontext geloest wurde.
+    //
+    // reinitFromCounterpart: einmalig dasselbe nach einem Starr/Flexibel-Wechsel, den
+    // synchronizeComponents() des Eltern-Spiegels von der Quelle uebernommen hat (Regel C1) - die
+    // bisherigen Spiegel-Lagen stammen aus dem anderen Modus und sind keine gueltige Startlage.
+    //
+    // FCPROJECT-PATCH (2026-10-12, live an BG22 gefunden: Motor 067 in BG75 von starr auf
+    // flexibel, in BG22 landete er 400mm/90 Grad neben dem Rest der BG75): beim Wechsel ZU
+    // flexibel wird NICHT mehr vom Gegenstueck kopiert. Im starren Zustand ist die
+    // Container-Placement die in DIESEM Kontext geloeste Lage des starren Koerpers (BG75 steckt
+    // in BG22 an anderer Stelle als in BG75 selbst), die Teile darunter seine aktuelle Struktur.
+    // Das Gegenstueck kennt nur die Lage in SEINEM Dokument. Das weltlage-erhaltende Nachfuehren
+    // des Containers (flexibler Zweig unten) behaelt genau diese Lage. Beim Wechsel zu starr
+    // gilt weiter: anzeigen, was das Gegenstueck zeigt.
+    if (reinitFromCounterpart && !isRigid() && !hasRigidAncestorLink(this)) {
+        reinitFromCounterpart = false;
+    }
+    if (isRigid() || hasRigidAncestorLink(this) || reinitFromCounterpart) {
         for (const auto& [sourceObj, linkObj] : objLinkMap) {
-            syncPlacements(sourceObj, linkObj);
+            // startPlacementSource(): Gegenstueck ueber objLinkMap, sonst ueber dessen Group -
+            // nie das innerste Original, wenn das Gegenstueck noch nicht synchronisiert ist.
+            syncPlacements(startPlacementSource(this, sourceObj), linkObj);
+        }
+        reinitFromCounterpart = false;
+    }
+    else {
+        // FCPROJECT-PATCH (2026-10-03, Plan plans/2026-10-03-solver-nur-auf-spiegeln.md): auch bei
+        // einem flexiblen Link folgen die Spiegel verschachtelter CONTAINER (AssemblyLinks) immer
+        // ihrer Quelle, nur in diese Richtung. Ein Container ist nie ein Solver-Koerper, seine
+        // Placement gehoert zur Struktur der Unterbaugruppe; die Weltlage jedes Teils in diesem
+        // Kontext ist lokale Placement mal genau diese Spiegel-Kette (IdentityGraph::
+        // containerChainPlacement()). Weicht ein Container-Spiegel ab (live an BG37 gefunden:
+        // Motor-Container um 142 Grad verdreht), zeigen GUI und Solver verschiedene Lagen. Die
+        // Spiegel der Blatt-Teile bleiben dagegen Zustand dieser Instanz (der Solver schreibt sie).
+        //
+        // Nur FLEXIBLE Container: ein rigider AssemblyLink ist selbst ein Solver-Koerper, seine
+        // Placement ist Zustand dieser Instanz wie bei jedem Blatt-Teil (live an BG22 gefunden: ein
+        // rigider Halter innerhalb einer flexiblen Fuehrungsbaugruppe wurde sonst um 34mm auf die
+        // Quelle zurueckgesetzt, der Solve scheiterte).
+        //
+        // FCPROJECT-PATCH (2026-10-12, live an BG22 gefunden: Motor 067 in BG75 von starr auf
+        // flexibel umgeschaltet, in BG22 flog er 374mm/90 Grad weg, Solve 58-166s, gescheitert):
+        // das Nachfuehren des Containers darf die Teile darin in der Welt NICHT bewegen - ein
+        // Container ist reine Struktur. Beim Umschalten schiebt BG75 seine Container-Placement in
+        // die Teile und setzt den Container auf Identitaet (onChanged(Rigid),
+        // applyPlacementKeepingContainers()); der BG22-Spiegel hatte seine Teile aber schon VORHER
+        // vom Gegenstueck uebernommen (reinitFromCounterpart, Regel C1) und folgte danach nur noch
+        // dem Container. Allgemein: aendert sich die Container-Placement von alt auf neu, bekommen
+        // die Teile die Gegenverschiebung neu^-1 * alt.
+        for (const auto& [sourceObj, linkObj] : objLinkMap) {
+            auto* sourceLink = freecad_cast<AssemblyLink*>(sourceObj);
+            auto* mirrorLink = freecad_cast<AssemblyLink*>(linkObj);
+            if (sourceLink && mirrorLink && !mirrorLink->isRigid()) {
+                const Base::Placement oldPlc = mirrorLink->Placement.getValue();
+                const Base::Placement newPlc = sourceLink->Placement.getValue();
+                if (!oldPlc.isSame(newPlc)) {
+                    syncPlacements(sourceObj, linkObj);
+                    applyPlacementKeepingContainers(mirrorLink, newPlc.inverse() * oldPlc, Base::Placement());
+                }
+            }
         }
     }
 

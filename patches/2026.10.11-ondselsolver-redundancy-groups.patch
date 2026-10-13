@@ -1,0 +1,268 @@
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/PosICNewtonRaphson.cpp b/src/3rdParty/OndselSolver/OndselSolver/PosICNewtonRaphson.cpp
+index 41963a1..1884def 100644
+--- a/src/3rdParty/OndselSolver/OndselSolver/PosICNewtonRaphson.cpp
++++ b/src/3rdParty/OndselSolver/OndselSolver/PosICNewtonRaphson.cpp
+@@ -17,6 +17,12 @@
+ #include "CREATE.h"
+ #include "GESpMatParPvPrecise.h"
+ #include "GESpMatFullPvPosIC.h"
++#include "System.h"
++#include "Joint.h"
++#include <algorithm>
++#include <cmath>
++#include <map>
++#include <set>
+ 
+ using namespace MbD;
+ 
+@@ -127,11 +133,202 @@ void PosICNewtonRaphson::handleSingularMatrix()
+ 	}
+ }
+ 
++namespace {
++// FCPROJECT-PATCH (2026-10-11): OndselSolver meldet nur, WELCHE Gleichung linear abhaengig ist -
++// welche das ist, haengt von der Pivotreihenfolge ab und trifft oft ein unbeteiligtes Gelenk
++// (live an BG22: eine Parallel-Verbindung ueberbestimmte die Drehung um eine Gewindestange, gemeldet
++// wurde ein Gelenk einer anderen Fuehrungsbaugruppe). Hier wird die entnommene Zeile als
++// Linearkombination der uebrigen Constraint-Zeilen der Jacobi-Matrix dargestellt (kleinste
++// Quadrate ueber die Normalgleichungen); alle Zeilen mit nennenswertem Koeffizienten bilden
++// zusammen mit ihr die ueberbestimmte Gruppe. Laeuft nur, wenn eine Redundanz gefunden wurde.
++using SparseRowCopy = std::map<size_t, double>;
++
++double dotRows(const SparseRowCopy& a, const SparseRowCopy& b)
++{
++	const SparseRowCopy& small = a.size() <= b.size() ? a : b;
++	const SparseRowCopy& large = a.size() <= b.size() ? b : a;
++	double sum = 0.0;
++	for (const auto& [col, value] : small) {
++		auto it = large.find(col);
++		if (it != large.end()) {
++			sum += value * it->second;
++		}
++	}
++	return sum;
++}
++
++// Loest (M + eps*I) c = b mit Gauss-Elimination und Spaltenpivot; M symmetrisch positiv
++// semidefinit.
++std::vector<double> solveDense(std::vector<std::vector<double>> M, std::vector<double> b)
++{
++	const size_t k = b.size();
++	for (size_t i = 0; i < k; ++i) {
++		M[i][i] += 1.0e-12 * (M[i][i] + 1.0);
++	}
++	for (size_t p = 0; p < k; ++p) {
++		size_t pivot = p;
++		for (size_t i = p + 1; i < k; ++i) {
++			if (std::abs(M[i][p]) > std::abs(M[pivot][p])) {
++				pivot = i;
++			}
++		}
++		std::swap(M[p], M[pivot]);
++		std::swap(b[p], b[pivot]);
++		if (std::abs(M[p][p]) < 1.0e-300) {
++			continue;
++		}
++		for (size_t i = p + 1; i < k; ++i) {
++			const double f = M[i][p] / M[p][p];
++			if (f == 0.0) {
++				continue;
++			}
++			for (size_t j = p; j < k; ++j) {
++				M[i][j] -= f * M[p][j];
++			}
++			b[i] -= f * b[p];
++		}
++	}
++	std::vector<double> c(k, 0.0);
++	for (size_t i = k; i-- > 0;) {
++		double sum = b[i];
++		for (size_t j = i + 1; j < k; ++j) {
++			sum -= M[i][j] * c[j];
++		}
++		c[i] = std::abs(M[i][i]) < 1.0e-300 ? 0.0 : sum / M[i][i];
++	}
++	return c;
++}
++}  // namespace
++
+ void PosICNewtonRaphson::lookForRedundantConstraints()
+ {
+ 	std::string str("MbD: Checking for redundant constraints.");
+ 	system->logString(str);
++	// FCPROJECT-PATCH (2026-10-11): Constraint-Zeilen sichern, bevor der Loeser sie veraendert.
++	std::map<size_t, SparseRowCopy> constraintRows;
++	for (size_t i = nqsu; i < pypx->nrow(); ++i) {
++		SparseRowCopy row;
++		for (const auto& [col, value] : *pypx->at(i)) {
++			if (col < nqsu && value != 0.0) {
++				row[col] = value;
++			}
++		}
++		constraintRows[i] = std::move(row);
++	}
+ 	auto posICsolver = CREATE<GESpMatFullPvPosIC>::With();
+ 	posICsolver->system = this;
+-	dx = posICsolver->solvewithsaveOriginal(pypx, y->negated(), false);
++	try {
++		dx = posICsolver->solvewithsaveOriginal(pypx, y->negated(), false);
++	}
++	catch (const SingularMatrixError& ex) {
++		recordRedundancyGroups(constraintRows, ex.getRedundantEqnNos());
++		throw;
++	}
++}
++
++void PosICNewtonRaphson::recordRedundancyGroups(
++	const std::map<size_t, std::map<size_t, double>>& constraintRows,
++	const std::shared_ptr<std::vector<size_t>>& redundantEqnNos)
++{
++	if (!redundantEqnNos || !system || !system->system) {
++		return;
++	}
++	std::map<size_t, std::string> eqnToJoint;
++	system->system->jointsMotionsDo([&](std::shared_ptr<Joint> joint) {
++		joint->constraintsDo([&](std::shared_ptr<Constraint> con) {
++			eqnToJoint[con->iG] = joint->name;
++		});
++	});
++	const std::set<size_t> redundant(redundantEqnNos->begin(), redundantEqnNos->end());
++	std::vector<size_t> basis;
++	for (const auto& [eqn, row] : constraintRows) {
++		if (!row.empty() && redundant.find(eqn) == redundant.end()) {
++			basis.push_back(eqn);
++		}
++	}
++	const size_t k = basis.size();
++	if (k == 0) {
++		return;
++	}
++	std::vector<std::vector<double>> M(k, std::vector<double>(k, 0.0));
++	for (size_t i = 0; i < k; ++i) {
++		const auto& rowI = constraintRows.at(basis[i]);
++		for (size_t j = i; j < k; ++j) {
++			M[i][j] = M[j][i] = dotRows(rowI, constraintRows.at(basis[j]));
++		}
++	}
++	for (size_t eqn : redundant) {
++		auto rowIt = constraintRows.find(eqn);
++		auto jointIt = eqnToJoint.find(eqn);
++		if (rowIt == constraintRows.end() || jointIt == eqnToJoint.end()) {
++			continue;
++		}
++		const double rowNorm = std::sqrt(dotRows(rowIt->second, rowIt->second));
++		std::vector<double> b(k);
++		for (size_t i = 0; i < k; ++i) {
++			b[i] = dotRows(constraintRows.at(basis[i]), rowIt->second);
++		}
++		const std::vector<double> c = solveDense(M, b);
++		std::set<std::string> involved;
++		for (size_t i = 0; i < k; ++i) {
++			const double contribution = std::abs(c[i]) * std::sqrt(M[i][i]);
++			if (contribution > 1.0e-6 * rowNorm) {
++				auto owner = eqnToJoint.find(basis[i]);
++				if (owner != eqnToJoint.end()) {
++					involved.insert(owner->second);
++				}
++			}
++		}
++		// Minimale Gruppe: Gelenke einzeln weglassen, solange die entnommene Zeile noch im
++		// Spann der uebrigen liegt (Zeilen ohne Gelenk, z.B. Euler-Normierung der Koerper,
++		// bleiben immer). Die Kleinste-Quadrate-Loesung oben verteilt die Abhaengigkeit auf
++		// alle moeglichen Pfade; uebrig bleibt hier die eigentliche geschlossene Schleife.
++		auto inSpan = [&](const std::set<std::string>& joints) {
++			std::vector<size_t> rows;
++			for (size_t eqnI : basis) {
++				auto owner = eqnToJoint.find(eqnI);
++				if (owner == eqnToJoint.end() || owner->second == jointIt->second
++					|| joints.count(owner->second)) {
++					rows.push_back(eqnI);
++				}
++			}
++			const size_t m = rows.size();
++			std::vector<std::vector<double>> Ms(m, std::vector<double>(m, 0.0));
++			std::vector<double> bs(m);
++			for (size_t i = 0; i < m; ++i) {
++				const auto& rowI = constraintRows.at(rows[i]);
++				for (size_t j = i; j < m; ++j) {
++					Ms[i][j] = Ms[j][i] = dotRows(rowI, constraintRows.at(rows[j]));
++				}
++				bs[i] = dotRows(rowI, rowIt->second);
++			}
++			const std::vector<double> cs = solveDense(Ms, bs);
++			SparseRowCopy residual = rowIt->second;
++			for (size_t i = 0; i < m; ++i) {
++				for (const auto& [col, value] : constraintRows.at(rows[i])) {
++					residual[col] -= cs[i] * value;
++				}
++			}
++			return std::sqrt(dotRows(residual, residual)) <= 1.0e-6 * rowNorm;
++		};
++		involved.erase(jointIt->second);
++		if (inSpan(involved)) {
++			const std::vector<std::string> candidates(involved.begin(), involved.end());
++			for (const auto& candidate : candidates) {
++				std::set<std::string> trial = involved;
++				trial.erase(candidate);
++				if (inSpan(trial)) {
++					involved = std::move(trial);
++				}
++			}
++		}
++		involved.insert(jointIt->second);
++		system->system->redundancyGroups.emplace_back(
++			jointIt->second, std::vector<std::string>(involved.begin(), involved.end()));
++		std::string msg = "MbD: Redundanzgruppe von " + jointIt->second + ":";
++		for (const auto& name : involved) {
++			msg += " " + name;
++		}
++		system->logString(msg);
++	}
+ }
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/PosICNewtonRaphson.h b/src/3rdParty/OndselSolver/OndselSolver/PosICNewtonRaphson.h
+index 9d16dcf..64583b4 100644
+--- a/src/3rdParty/OndselSolver/OndselSolver/PosICNewtonRaphson.h
++++ b/src/3rdParty/OndselSolver/OndselSolver/PosICNewtonRaphson.h
+@@ -9,6 +9,7 @@
+ #pragma once
+ 
+ #include "AnyPosICNewtonRaphson.h"
++#include <map>
+ 
+ namespace MbD {
+     class PosICNewtonRaphson : public AnyPosICNewtonRaphson
+@@ -25,6 +26,10 @@ namespace MbD {
+         bool isConverged() override;
+         void handleSingularMatrix() override;
+         void lookForRedundantConstraints();
++        // FCPROJECT-PATCH (2026-10-11): siehe PosICNewtonRaphson.cpp
++        void recordRedundancyGroups(
++            const std::map<size_t, std::map<size_t, double>>& constraintRows,
++            const std::shared_ptr<std::vector<size_t>>& redundantEqnNos);
+ 
+         std::shared_ptr<std::vector<size_t>> pivotRowLimits;
+     };
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/System.h b/src/3rdParty/OndselSolver/OndselSolver/System.h
+index 2f775b7..0eebbc7 100644
+--- a/src/3rdParty/OndselSolver/OndselSolver/System.h
++++ b/src/3rdParty/OndselSolver/OndselSolver/System.h
+@@ -18,6 +18,7 @@
+ 
+ #include <memory>
+ #include <vector>
++#include <string>
+ #include <functional>
+ 
+ #include "Item.h"
+@@ -83,6 +84,11 @@ namespace MbD {
+ 		std::shared_ptr<std::vector<std::shared_ptr<ForceTorqueItem>>> forcesTorques;
+ 		bool hasChanged = false;
+ 		std::shared_ptr<SystemSolver> systemSolver;
++		// FCPROJECT-PATCH (2026-10-11): je erkannter redundanter Gleichung der Name des Gelenks,
++		// dem sie entnommen wurde, und die Namen ALLER Gelenke, von deren Gleichungen sie linear
++		// abhaengt (die eigentliche ueberbestimmte Gruppe). Gefuellt von
++		// PosICNewtonRaphson::lookForRedundantConstraints().
++		std::vector<std::pair<std::string, std::vector<std::string>>> redundancyGroups;
+ 
+ 		std::shared_ptr<Time> time;
+ 	};

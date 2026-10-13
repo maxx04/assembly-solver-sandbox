@@ -24,6 +24,10 @@
 #include <boost/core/ignore_unused.hpp>
 #include <algorithm>
 #include <cmath>
+#include <functional>
+#include <limits>
+#include <memory>
+#include <optional>
 #include <algorithm>
 #include <vector>
 #include <unordered_map>
@@ -99,6 +103,57 @@ namespace PartApp = Part;
 namespace
 {
 
+// FCPROJECT-PATCH (2026-10-04, BG22-Haenger in der GUI, per gdb-Stichproben gefunden): der
+// Baum fragt fuer JEDEN Joint das Part_Detached-Overlay ab (getOverlayIcons() ->
+// isPartConnected()); isPartConnected() loest beim Durchlaufen des Joint-Graphen JEDEN Joint in
+// JEDEM Schritt per resolvePartForMbD() auf - und jeder dieser Aufrufe baute bisher einen NEUEN
+// IdentityGraph, dessen instanceOf()-Index jedes Mal komplett neu entstand. Bei BG22 (45
+// Dokumente) waren das Minuten ohne jede Log-Ausgabe. Loesung: fuer die Dauer EINES Vorgangs einen
+// gemeinsamen Graphen bereitstellen. 'fresh' erzwingt einen eigenen Graphen (solve() kann vorher in
+// syncGroundedJoints() die Struktur aendern); verschachtelte Scopes ohne 'fresh' nutzen den aeusseren.
+// FCPROJECT-PATCH (2026-10-10, Plan plans/2026-10-10-simulation-an-struktur-anpassen.md,
+// Schritt 4): ist eine Unterbaugruppe mehrfach eingebaut, ist ihr Gelenk in der aeusseren BG je
+// Instanz ein eigenes Gelenk (eigenes MbD-Gelenk, jointInstanceName()). Eine Motion legt die
+// gemeinte Instanz im Unterpfad ihrer vorhandenen Property "Joint" ab (Verschachtelungspfad, z.B.
+// "CNC3018_032_A_FuehrungsBaugruppe401.") - keine neue Property, Dateien bleiben kompatibel.
+// Leerer Unterpfad (alte Dateien, Gelenk direkt in der BG): die Motion gilt wie bisher fuer jede
+// Instanz dieses Gelenks.
+bool motionMatchesJointInstance(const App::PropertyXLinkSub* pJoint, const std::string& nestingPrefix)
+{
+    const auto& subs = pJoint->getSubValues();
+    if (subs.empty() || subs.front().empty()) {
+        return true;
+    }
+    return subs.front() == nestingPrefix;
+}
+
+class ScopedIdentityGraph
+{
+public:
+    ScopedIdentityGraph(Assembly::AssemblyObject* assembly, Assembly::IdentityGraph*& slot, bool fresh = false)
+        : slot(slot)
+        , previous(slot)
+    {
+        if (fresh || !slot) {
+            owned = std::make_unique<Assembly::IdentityGraph>(assembly);
+            slot = owned.get();
+        }
+    }
+    ~ScopedIdentityGraph()
+    {
+        if (owned) {
+            slot = previous;
+        }
+    }
+    ScopedIdentityGraph(const ScopedIdentityGraph&) = delete;
+    ScopedIdentityGraph& operator=(const ScopedIdentityGraph&) = delete;
+
+private:
+    Assembly::IdentityGraph*& slot;
+    Assembly::IdentityGraph* previous;
+    std::unique_ptr<Assembly::IdentityGraph> owned;
+};
+
 struct RotationJointSide
 {
     App::DocumentObject* joint = nullptr;
@@ -121,8 +176,7 @@ Base::Placement getJointSideGlobalPlacement(
         return {};
     }
 
-    return App::GeoFeature::getGlobalPlacement(nullptr, ref)
-        * App::GeoFeature::getPlacementFromProp(joint, plcName);
+    return getJcsReferenceGlobalPlacement(ref) * App::GeoFeature::getPlacementFromProp(joint, plcName);
 }
 
 bool axesAreCoaxial(const Base::Placement& plc1, const Base::Placement& plc2)
@@ -311,7 +365,7 @@ App::DocumentObjectExecReturn* AssemblyObject::execute()
         // wie eine echte Top-Level-Instanz behandelt (eigener solve()), egal ob eine aeussere
         // Baugruppe sie ohnehin (schlecht oder gut) mitloest.
         if (isNestedUnderFlexibleParent() && !activeEditContext) {
-            Base::Console().message(
+            Base::Console().log(
                 "Assembly: '{}' skipped its own solve() - nested under a flexible parent "
                 "assembly, which solves it as part of its own recompute.\n",
                 getFullName()
@@ -332,7 +386,15 @@ void AssemblyObject::onChanged(const App::Property* prop)
                 assemblyLink->updateContents();
             }
         }
-        updateSolveStatus();
+        // FCPROJECT-PATCH (2026-10-11, "Startchaos"): beim Einlesen einer Datei aendert sich Group
+        // schon, waehrend die uebrigen Objekte und verlinkten Dokumente noch fehlen.
+        // updateSolveStatus() loeste dann "auf Verdacht" (gdb: alle Solves beim Oeffnen von BG22
+        // kamen von hier) - jede mitgeladene Unterbaugruppe einmal, meist mit "no grounded part
+        // found", weil die Erdung noch nicht eingelesen war. Waehrend des Ladens deshalb nicht;
+        // die gespeicherte Lage ist bereits geloest, der naechste Recompute/Drag loest regulaer.
+        if (!isRestoring() && !App::GetApplication().isRestoring()) {
+            updateSolveStatus();
+        }
     }
     App::Part::onChanged(prop);
 }
@@ -447,116 +509,6 @@ void collectGroundedPartsRecursive(
     }
 }
 
-// FCPROJECT-PATCH (2026-09-29, live an BG37->BG43->BG67 gefunden, Nutzerauftrag "mit System,
-// nicht nur fuer diese Baugruppe"): Datensammlung fuer die generelle "mehrere unabhaengige
-// Erdungswurzeln im selben Zusammenhangskomponenten"-Erkennung in syncGroundedJoints() (siehe
-// dortiger Kommentar fuer die volle Herleitung). Anders als collectGroundedPartsRecursive() oben
-// (liefert nur die ZIEL-Objekte, fuer die "braucht dieses Teil eine NEUE Erdung"-Entscheidung)
-// liefert diese Funktion zusaetzlich das GroundedJoint-Objekt selbst (zum Abschalten) UND die
-// Verschachtelungstiefe (fuer die Tie-Break-Entscheidung, welche von mehreren kollidierenden
-// Erdungen die massgebliche bleibt).
-struct GroundedRootInfo
-{
-    App::DocumentObject* target;
-    App::DocumentObject* joint;
-    int depth;
-};
-
-void collectGroundedJointsRecursive(
-    AssemblyObject* assembly,
-    std::vector<GroundedRootInfo>& roots,
-    int depth
-)
-{
-    if (!assembly) {
-        return;
-    }
-    for (auto* gJoint : assembly->getGroundedJoints()) {
-        auto* propObj = dynamic_cast<App::PropertyLink*>(gJoint->getPropertyByName("ObjectToGround"));
-        if (propObj && propObj->getValue()) {
-            roots.push_back({propObj->getValue(), gJoint, depth});
-        }
-    }
-    for (auto* subAssembly : assembly->getSubAssemblies()) {
-        if (!subAssembly || subAssembly->isRigid()) {
-            continue;
-        }
-        AssemblyObject* nested = subAssembly->getLinkedAssembly();
-        if (!nested || nested == assembly) {
-            continue;
-        }
-        collectGroundedJointsRecursive(nested, roots, depth + 1);
-    }
-}
-
-// FCPROJECT-PATCH (2026-09-27, live am echten BG37->BG43(Rigid)->BG67(Flexibel, eigener
-// Drehgelenk-Rotor)-Projekt gefunden, "Motor kollabiert"-Bug, Nutzerentscheidung "067 bleibt
-// trotz starrer Elternbaugruppe eigenstaendig loesbar"): getJoints()/getGroundedParts() ueberspringen
-// eine RIGIDE AssemblyLink bewusst und korrekt (fuer den Solver ist eine starre Unterbaugruppe EIN
-// Koerper) - das bedeutet aber auch, dass eine FLEXIBLE Unterbaugruppe, die INNERHALB einer solchen
-// starren Baugruppe verschachtelt ist (z.B. ein drehbarer Motor, starr ans Gestell geschraubt),
-// von KEINER der bestehenden Abstiegs-Funktionen mehr erreicht wird - nichts loest mehr ihren
-// eigenen solve() aus, sobald ihr direkter (oder ein weiter aussen liegender) Container starr ist.
-// Live bestaetigt: eine solche "versteckte" flexible Baugruppe bleibt fuer immer auf dem Zustand
-// eingefroren, den sie beim letzten (oft fehlgeschlagenen, siehe isRestoring()-bedingtes
-// "no grounded part found" beim allerersten Laden) solve()-Versuch hatte - keine automatische
-// FreeCAD-Touched-Propagation erreicht ein cross-document verlinktes, rigide eingebundenes Objekt.
-// Fix: nach dem eigentlichen solve() dieser Ebene rekursiv (durch ALLE Sub-Assemblies, auch
-// rigide, um dahinter versteckte Ebenen zu erreichen) jede flexible Unterbaugruppe explizit
-// erneut loesen, sobald IRGENDEIN Vorfahre in der Kette rigide ist - genau der Fall, in dem sie
-// von der normalen Joint-Graph-Traversierung sonst nie wieder besucht wird. Eine flexible
-// Unterbaugruppe, die NICHT hinter einer rigiden Ebene versteckt ist, bleibt unveraendert vom
-// bestehenden Mechanismus (isNestedUnderFlexibleParent() + gemeinsamer Joint-Graph) abgedeckt -
-// hier wird sie NICHT zusaetzlich (doppelt) geloest.
-// 'mirrorOfAssembly': die AssemblyLink-Instanz, deren objLinkMap 'assembly's DIREKTE Kinder auf
-// die tatsaechlich im AEUSSERSTEN (Nutzer-sichtbaren) Dokument gerenderten Spiegel abbildet -
-// nullptr bedeutet "wir sind noch nicht ueber eine Verschachtelungsebene gelaufen, 'assembly'
-// selbst ist bereits die direkt sichtbare Instanz". Bei JEDEM Sprung in eine tiefere Ebene muss
-// dieser Bezug durch EXAKT EINEN Schritt durch 'mirrorOfAssembly's eigene objLinkMap uebersetzt
-// werden - der lokale Spiegel eines lokalen Spiegels lebt NICHT im selben Dokument wie das echte
-// verschachtelte Objekt, sondern im Dokument der jeweils AEUSSEREN Instanz (jede AssemblyLink
-// spiegelt nur ihre EIGENEN direkten Kinder, siehe AssemblyLink::synchronizeComponents()).
-void solveHiddenFlexibleUnderRigid(
-    AssemblyObject* assembly,
-    AssemblyLink* mirrorOfAssembly,
-    bool underRigidAncestor
-)
-{
-    if (!assembly) {
-        return;
-    }
-    for (auto* subAssembly : assembly->getSubAssemblies()) {
-        if (!subAssembly) {
-            continue;
-        }
-        AssemblyObject* nested = subAssembly->getLinkedAssembly();
-        if (!nested || nested == assembly) {
-            continue;
-        }
-        bool subIsRigid = subAssembly->isRigid();
-
-        AssemblyLink* mirrorOfSub = subAssembly;
-        if (mirrorOfAssembly) {
-            auto it = mirrorOfAssembly->objLinkMap.find(subAssembly);
-            mirrorOfSub = (it != mirrorOfAssembly->objLinkMap.end())
-                ? freecad_cast<AssemblyLink*>(it->second)
-                : nullptr;
-        }
-
-        if (!subIsRigid && underRigidAncestor) {
-            // Diese flexible Unterbaugruppe ist hinter mindestens einer rigiden Ebene versteckt -
-            // niemand sonst ruft ihren solve() je wieder auf. propagateSolvedPlacementsTo()
-            // braucht 'mirrorOfSub' (nicht 'subAssembly' selbst!), um das frisch geloeste
-            // Placement bis ins tatsaechlich gerenderte Dokument durchzureichen (IdentityGraph
-            // kann das nicht, siehe dessen Kommentar in AssemblyObject.h).
-            nested->solve(false);
-            if (mirrorOfSub) {
-                nested->propagateSolvedPlacementsTo(mirrorOfSub);
-            }
-        }
-        solveHiddenFlexibleUnderRigid(nested, mirrorOfSub, underRigidAncestor || subIsRigid);
-    }
-}
 }  // namespace
 
 int AssemblyObject::solve(bool enableRedo)
@@ -571,11 +523,15 @@ int AssemblyObject::solve(bool enableRedo)
     // Baugruppen ist dadurch oft unklar, ob/wann der Solver ueberhaupt gelaufen ist und was er
     // dabei festgestellt hat (z.B. redundante Joints, siehe Fix 10) - die drei Meldungen unten
     // decken die Fragen "1. gestartet? 2. berechnet? 3. mit welchem Ergebnis?" ab.
-    Base::Console().message("Assembly: Solving '{}'...\n", getFullName());
+    Base::Console().log("Assembly: Solving '{}'...\n", getFullName());
 
     ensureIdentityPlacements();
 
     syncGroundedJoints();
+
+    // Ein gemeinsamer IdentityGraph fuer den Rest dieses Solves (siehe ScopedIdentityGraph); frisch,
+    // weil syncGroundedJoints() eben einen GroundedJoint angelegt haben kann.
+    ScopedIdentityGraph graphScope(this, scopedGraph, /*fresh=*/true);
 
     mbdAssembly = makeMbdAssembly();
     objectPartMap.clear();
@@ -591,6 +547,25 @@ int AssemblyObject::solve(bool enableRedo)
             getFullName()
         );
         return -6;
+    }
+
+    // FCPROJECT-PATCH (2026-10-03, "Erdung ist Kontext-Eigenschaft"): sichtbar machen, welche
+    // verschachtelten Erdungen im Kontext dieser Baugruppe ignoriert werden (ersetzt die fruehere
+    // Warnung "schaltet redundante Erdung ab"). Bewusst hier und nicht in getGroundedParts() -
+    // das liegt im Drag-Heisspfad. Nichts wird abgeschaltet, die Unterbaugruppe behaelt ihre
+    // Erdung fuer sich allein.
+    {
+        std::vector<std::pair<App::DocumentObject*, App::DocumentObject*>> ignoredNestedRoots;
+        getGroundedParts(&ignoredNestedRoots);
+        for (const auto& [ignored, winner] : ignoredNestedRoots) {
+            Base::Console().log(
+                "Assembly: '{}' ignoriert verschachtelte Erdung von '{}' - im Kontext dieser "
+                "Baugruppe ist '{}' massgeblich (die Unterbaugruppe selbst bleibt geerdet).\n",
+                getFullName(),
+                ignored ? ignored->getFullName() : "?",
+                winner ? winner->getFullName() : "?"
+            );
+        }
     }
 
     // verboseLog=true nur hier: dies ist der EINE echte, seltene solve()-Aufruf - nicht die
@@ -609,6 +584,19 @@ int AssemblyObject::solve(bool enableRedo)
 
     try {
         mbdAssembly->runPreDrag();
+        // FCPROJECT-PATCH (2026-10-11, live an BG22 gefunden: BG75 per Zylinder-Fuehrung
+        // angebunden, M5-Schrauben mit Scheibe/Nutenstein rutschen 67-172mm aus ihrem Langloch):
+        // runPreDrag() beachtet Gelenkgrenzen NICHT, OndselSolver prueft sie nur im
+        // Drag-Schritt (PosICDragLimitNewtonRaphson). Wird eine Baugruppe ueber neue Joints
+        // verschoben, bleiben Teile an einem Slider einfach in der Welt stehen und landen weit
+        // jenseits ihrer Grenze. Deshalb hier ein Grenz-Durchgang ohne gezogene Teile: verletzte
+        // Grenzen werden aktiviert und nachgeloest. Lassen sie sich nicht erfuellen, setzt
+        // runDragStep() selbst auf das Ergebnis von runPreDrag() zurueck. Upstream identisch
+        // ohne diesen Durchgang.
+        if (!mbdAssembly->limits->empty()) {
+            mbdAssembly->runDragStep(std::make_shared<std::vector<std::shared_ptr<ASMTPart>>>());
+        }
+        reportUnsatisfiedLimits();
         lastSolverStatus = 0;
     }
     catch (const std::exception& e) {
@@ -631,7 +619,7 @@ int AssemblyObject::solve(bool enableRedo)
     // FCPROJECT-PATCH (15): Nutzerwunsch - jedes geerdete Teil in einer eigenen Zeile statt
     // komma-getrennt in einer Zeile, damit lange Listen im Report View nicht mehr horizontal
     // gescrollt werden muessen.
-    Base::Console().message(
+    Base::Console().log(
         "Assembly: '{}' computed ({} joint(s), {} grounded part(s)):\n",
         getFullName(),
         joints.size(),
@@ -641,16 +629,26 @@ int AssemblyObject::solve(bool enableRedo)
         if (!obj) {
             continue;
         }
-        Base::Console().message("Assembly:   grounded part: {}\n", getJointContextName(obj));
+        Base::Console().log("Assembly:   grounded part: {}\n", getJointContextName(obj));
     }
 
     for (const auto& [rep, members] : rigidMembersByRep) {
-        Base::Console().message(
+        Base::Console().log(
             "Assembly: rigid group '{}' ({} Teil(e)): {}.\n",
             getJointContextName(rep),
             members.size(),
             joinContextNames(members)
         );
+    }
+
+    // FCPROJECT-PATCH (2026-10-03, "BG43-Nachdrehen", zum Ausprobieren): Ausgangswerte merken,
+    // um nach dem Zurueckschreiben zu sehen, ob dieser Durchlauf noch etwas bewegt hat (siehe
+    // Wiederholung weiter unten).
+    std::vector<std::pair<App::DocumentObject*, Base::Placement>> placementsBefore;
+    for (const auto& [obj, data] : objectPartMap) {
+        if (obj) {
+            placementsBefore.emplace_back(obj, getPlacementFromProp(obj, "Placement"));
+        }
     }
 
     setNewPlacements();
@@ -659,6 +657,16 @@ int AssemblyObject::solve(bool enableRedo)
     redrawJointPlacements(joints);
 
     updateSolveStatus();
+
+    double maxMoved = 0.0;
+    for (const auto& [obj, before] : placementsBefore) {
+        Base::Placement after = getPlacementFromProp(obj, "Placement");
+        double rotDiff = 0.0;
+        Base::Vector3d axis;
+        (before.getRotation().inverse() * after.getRotation()).getRawValue(axis, rotDiff);
+        maxMoved = std::max({maxMoved, (after.getPosition() - before.getPosition()).Length(),
+                             std::abs(rotDiff)});
+    }
 
     if (lastHasRedundancies) {
         std::string names;
@@ -674,16 +682,45 @@ int AssemblyObject::solve(bool enableRedo)
             lastRedundantJoints.size(),
             names
         );
+        for (const auto& group : lastRedundancyGroups) {
+            Base::Console().warning("Assembly:   ueberbestimmt: {}\n", group);
+        }
     }
     else {
-        Base::Console().message("Assembly: Solve of '{}' finished successfully.\n", getFullName());
+        Base::Console().log("Assembly: Solve of '{}' finished successfully.\n", getFullName());
     }
 
-    // FCPROJECT-PATCH (2026-09-27, siehe solveHiddenFlexibleUnderRigid()-Kommentar): flexible
-    // Unterbaugruppen hinter einer rigiden Ebene bekommen sonst nie wieder die Chance, sich selbst
-    // zu loesen (z.B. ein drehbarer Motor-Rotor, starr ans Gestell geschraubt) - unabhaengig von
-    // DIESER Ebenes eigenem Erfolg/Misserfolg explizit nachziehen.
-    solveHiddenFlexibleUnderRigid(this, nullptr, false);
+    // FCPROJECT-PATCH (2026-10-03, "BG43-Nachdrehen", zum Ausprobieren): bei grossem Startfehler
+    // (z.B. Unterbaugruppe separat gespeichert, Rotor 40+ Grad gegenueber der Kupplung verdreht)
+    // konvergiert OndselSolver nicht in einem Durchlauf - er erklaert numerisch Constraints fuer
+    // "redundant" und hoert vor dem Ziel auf, erst der naechste Solve trifft. Deshalb: solange
+    // Redundanzen gemeldet werden UND dieser Durchlauf noch etwas bewegt hat, intern erneut loesen
+    // (hoechstens zweimal). Echt redundante, bereits konvergierte Systeme bewegen sich nicht mehr
+    // und brechen nach einem Zusatzlauf ab.
+    static thread_local int redundancyRetryDepth = 0;
+    constexpr int maxRedundancyRetries = 2;
+    constexpr double movedTolerance = 1e-7;
+    if (lastHasRedundancies && maxMoved > movedTolerance
+        && redundancyRetryDepth < maxRedundancyRetries) {
+        Base::Console().log(
+            "Assembly: '{}' - Redundanzen gemeldet und noch Bewegung ({:.3g}), loese erneut ({}/{}).\n",
+            getFullName(),
+            maxMoved,
+            redundancyRetryDepth + 1,
+            maxRedundancyRetries
+        );
+        ++redundancyRetryDepth;
+        int rc = solve(false);
+        --redundancyRetryDepth;
+        return rc;
+    }
+
+    // FCPROJECT-PATCH (2026-10-03, Plan plans/2026-10-03-solver-nur-auf-spiegeln.md,
+    // Nutzerentscheidung "zeigt ja, aendert nein"): hier stand solveHiddenFlexibleUnderRigid(), das
+    // flexible Unterbaugruppen hinter einer rigiden Ebene aus DIESEM Kontext heraus in ihrem eigenen
+    // Dokument loeste und damit Originale veraenderte. Eine rigide Unterbaugruppe ist hier ein
+    // einziger Koerper und zeigt den Stand ihres eigenen Dokuments; ihr Inneres wird nur in ihrem
+    // eigenen Kontext geloest.
 
     return 0;
 }
@@ -711,7 +748,8 @@ void AssemblyObject::updateSolveStatus()
 
     // Solve on demand when queried before the system is solved, but not from within
     // a solve: solve() calls this, so a failed solve would recurse indefinitely.
-    if (!solveInProgress && (!mbdAssembly || !mbdAssembly->mbdSystem)) {
+    if (!solveInProgress && (!mbdAssembly || !mbdAssembly->mbdSystem)
+        && !App::GetApplication().isRestoring()) {
         solve();
     }
 
@@ -719,17 +757,19 @@ void AssemblyObject::updateSolveStatus()
         return;
     }
 
-    // Helper lambda to clean up the joint name from the solver
-    auto cleanJointName = [](const std::string& rawName) -> std::string {
-        // rawName is like : /OndselAssembly/ground_moves#Joint001
-        size_t hashPos = rawName.find_last_of('#');
-        if (hashPos != std::string::npos) {
-            // Return the substring after the '#'
-            return rawName.substr(hashPos + 1);
+    // FCPROJECT-PATCH (2026-10-03, live an BG43 gefunden, [[todo-redundant-joint-crash-wrong-assembly-attribution]]):
+    // die MbD-Joint-Namen sind jointInstanceName() = nestingPrefix + joint->getFullName() (siehe
+    // jointParts()). Die bisherige Aufloesung schnitt alles bis zum letzten '#' ab und suchte den
+    // Rest im Dokument DIESER Baugruppe - ein verschachtelter Joint "BG67_III.BG67#Joint" landete
+    // so faelschlich bei BG43s eigenem "Joint" (falsche Meldung "Over-constrained: <BG43-Joint>",
+    // falsche Auswahl). Jetzt exakte Zuordnung ueber dieselben Instanznamen wie beim Aufbau.
+    std::unordered_map<std::string, App::DocumentObject*> solverNameToJoint;
+    for (const auto& jr : getJoints(false, true, false)) {
+        if (jr.joint) {
+            solverNameToJoint[jointInstanceName(jr.joint, jr.nestingPrefix)] = jr.joint;
         }
-        return rawName;
-    };
-
+    }
+    const std::string solverPathPrefix = "/OndselAssembly/";
 
     // Iterate through all joints and motions in the MBD system
     mbdAssembly->mbdSystem->jointsMotionsDo([&](std::shared_ptr<MbD::Joint> jm) {
@@ -748,13 +788,22 @@ void AssemblyObject::updateSolveStatus()
             // A constraint is redundant if its spec starts with "Redundant"
             if (spec.rfind("Redundant", 0) == 0) {
                 isJointRedundant = true;
+                Base::Console().log(
+                    "FCPROJECT-DEBUG updateSolveStatus: redundant constraint '{}' in solver joint '{}'\n",
+                    spec,
+                    jm->name
+                );
             }
             // Base::Console().warning("    - {}\n", spec);
             --lastDoF;
         });
 
-        const std::string fullName = cleanJointName(jm->name);
-        App::DocumentObject* docObj = getDocument()->getObject(fullName.c_str());
+        std::string solverName = jm->name;
+        if (solverName.rfind(solverPathPrefix, 0) == 0) {
+            solverName = solverName.substr(solverPathPrefix.size());
+        }
+        auto mapped = solverNameToJoint.find(solverName);
+        App::DocumentObject* docObj = mapped != solverNameToJoint.end() ? mapped->second : nullptr;
 
         // We only care about objects that are actual joints in the FreeCAD document.
         // This effectively filters out the grounding joints, which are named after parts.
@@ -763,14 +812,68 @@ void AssemblyObject::updateSolveStatus()
         }
 
         if (isJointRedundant) {
-            // Check if this joint is already in the list to avoid duplicates
-            std::string objName = docObj->getNameInDocument();
+            // Check if this joint is already in the list to avoid duplicates. Joints aus einem
+            // verschachtelten Dokument als "Dokument#Objekt" (eindeutig, von der GUI aufloesbar).
+            std::string objName = docObj->getDocument() == getDocument()
+                ? std::string(docObj->getNameInDocument())
+                : docObj->getFullName();
             if (std::find(lastRedundantJoints.begin(), lastRedundantJoints.end(), objName)
                 == lastRedundantJoints.end()) {
                 lastRedundantJoints.push_back(objName);
             }
         }
     });
+
+    // FCPROJECT-PATCH (2026-10-11, live an BG22: Parallel-Verbindung ueberbestimmte die Drehung um
+    // eine Gewindestange, gemeldet wurde ein Gelenk einer anderen Fuehrungsbaugruppe): welche
+    // Gleichung OndselSolver entnimmt, haengt von der Pivotreihenfolge ab. Die eigentliche
+    // ueberbestimmte Gruppe liefert System::redundancyGroups (alle Gelenke, von deren Gleichungen
+    // die entnommene linear abhaengt). Als Verursacher gilt das zuletzt angelegte Gelenk dieser
+    // Baugruppe in der Gruppe (hoechste ID; sonst das zuletzt angelegte ueberhaupt).
+    lastRedundancyGroups.clear();
+    auto displayName = [this](App::DocumentObject* obj) {
+        std::string name = obj->getDocument() == getDocument() ? std::string(obj->getNameInDocument())
+                                                                : obj->getFullName();
+        if (obj->Label.getStrValue() != obj->getNameInDocument()) {
+            name += " '" + obj->Label.getStrValue() + "'";
+        }
+        if (auto* type = dynamic_cast<App::PropertyEnumeration*>(obj->getPropertyByName("JointType"))) {
+            name += " (" + std::string(type->getValueAsString()) + ")";
+        }
+        return name;
+    };
+    std::set<std::vector<App::DocumentObject*>> reportedGroups;
+    for (const auto& [removed, members] : mbdAssembly->mbdSystem->redundancyGroups) {
+        std::vector<App::DocumentObject*> group;
+        for (std::string member : members) {
+            if (member.rfind(solverPathPrefix, 0) == 0) {
+                member = member.substr(solverPathPrefix.size());
+            }
+            auto mapped = solverNameToJoint.find(member);
+            if (mapped != solverNameToJoint.end() && mapped->second
+                && std::find(group.begin(), group.end(), mapped->second) == group.end()) {
+                group.push_back(mapped->second);
+            }
+        }
+        if (group.size() < 2) {
+            continue;
+        }
+        std::sort(group.begin(), group.end());
+        if (!reportedGroups.insert(group).second) {
+            continue;
+        }
+        auto rank = [this](App::DocumentObject* obj) {
+            return std::make_pair(obj->getDocument() == getDocument(), obj->getID());
+        };
+        std::sort(group.begin(), group.end(), [&rank](App::DocumentObject* a, App::DocumentObject* b) {
+            return rank(a) > rank(b);
+        });
+        std::string line = displayName(group.front()) + ", zusammen mit:";
+        for (std::size_t i = 1; i < group.size(); ++i) {
+            line += (i == 1 ? " " : ", ") + displayName(group[i]);
+        }
+        lastRedundancyGroups.push_back(line);
+    }
 
     // Update the summary boolean flag
     if (!lastRedundantJoints.empty()) {
@@ -782,6 +885,12 @@ void AssemblyObject::updateSolveStatus()
 
 int AssemblyObject::generateSimulation(App::DocumentObject* sim)
 {
+    // FCPROJECT-PATCH (2026-10-10, Plan plans/2026-10-10-simulation-an-struktur-anpassen.md,
+    // Schritt 2): ein IdentityGraph fuer den ganzen Modellaufbau, wie in solve(). Gemessen an BG22
+    // ohne spuerbaren Zeitgewinn - die ~10s liegen zu 97% in runKINEMATIC() selbst (101 Zeitschritte
+    // ueber das ganze Modell) -, aber derselbe Graph fuer alle Aufloesungen eines Modellaufbaus.
+    ScopedIdentityGraph graphScope(this, scopedGraph, /*fresh=*/true);
+
     mbdAssembly = makeMbdAssembly();
     objectPartMap.clear();
 
@@ -877,6 +986,7 @@ void AssemblyObject::preDrag(std::vector<App::DocumentObject*> dragParts)
     bundleFixed = false;
 
     draggedParts.clear();
+    std::vector<App::DocumentObject*> bundledDragParts;
 
     for (auto part : dragParts) {
         const bool isRigidClustered = getRigidRepresentative(part) != nullptr;
@@ -911,10 +1021,32 @@ void AssemblyObject::preDrag(std::vector<App::DocumentObject*> dragParts)
             // If not identity, then it's a bundled object. Some bundled objects may
             // have identity placement if they have the same position as the main object of
             // the bundle. But they're not going to be a problem.
+            bundledDragParts.push_back(part);
             continue;
         }
 
         draggedParts.push_back(part);
+    }
+
+    // FCPROJECT-PATCH (2026-10-11, live an BG22 gefunden: Halteplatte von BG75 gezogen, sie
+    // loeste sich 150mm vom Motor): ein gebuendeltes Teil (offsetPlc != Identitaet) wurde oben
+    // immer verworfen - upstream noetig, weil doDragStep() dort die Teil-Placement direkt auf den
+    // Buendel-Koerper setzt. War es das EINZIGE gezogene Teil, blieb draggedParts leer,
+    // doDragStep() kehrte sofort zurueck, und das Teil folgte der Maus ohne Solver. Unser
+    // doDragStep() rechnet das Ziel ueber offsetPlc auf den Buendel-Koerper um; ein gebuendeltes
+    // Teil darf diesen Koerper deshalb fuehren - aber nur, wenn kein anderes gezogenes Teil ihn
+    // schon fuehrt (das Buendel-Hauptteil hat Vorrang).
+    for (auto* part : bundledDragParts) {
+        auto body = getMbDPart(part);
+        if (!body) {
+            continue;
+        }
+        const bool covered = std::ranges::any_of(draggedParts, [this, &body](App::DocumentObject* p) {
+            return getMbDPart(p) == body;
+        });
+        if (!covered) {
+            draggedParts.push_back(part);
+        }
     }
 }
 
@@ -970,6 +1102,9 @@ void AssemblyObject::doDragStep()
     try {
         std::vector<std::shared_ptr<MbD::ASMTPart>> dragMbdParts;
         std::unordered_set<ASMTPart*> seenMbdParts;
+        // Zielplacement je gezogenem Koerper im Solver-Rahmen, in der Reihenfolge von
+        // draggedParts - der erste Eintrag ist das Leitteil (siehe Anschlag-Korrektur unten).
+        std::vector<std::pair<std::shared_ptr<MbD::ASMTPart>, Base::Placement>> dragTargets;
 
         for (auto& part : draggedParts) {
             if (!part) {
@@ -1005,23 +1140,53 @@ void AssemblyObject::doDragStep()
                     plc = it->second.containerChainPlc * plc;
                 }
             }
-            Base::Vector3d pos = plc.getPosition();
-            mbdPart->updateMbDFromPosition3D(
-                std::make_shared<FullColumn<double>>(ListD {pos.x, pos.y, pos.z})
-            );
-
-            Base::Rotation rot = plc.getRotation();
-            Base::Matrix4D mat;
-            rot.getValue(mat);
-            Base::Vector3d r0 = mat.getRow(0);
-            Base::Vector3d r1 = mat.getRow(1);
-            Base::Vector3d r2 = mat.getRow(2);
-            mbdPart->updateMbDFromRotationMatrix(r0.x, r0.y, r0.z, r1.x, r1.y, r1.z, r2.x, r2.y, r2.z);
+            dragTargets.push_back({mbdPart, plc});
         }
+
+        auto applyDragTargets = [&dragTargets]() {
+            for (const auto& [mbdPart, plc] : dragTargets) {
+                Base::Vector3d pos = plc.getPosition();
+                mbdPart->updateMbDFromPosition3D(
+                    std::make_shared<FullColumn<double>>(ListD {pos.x, pos.y, pos.z})
+                );
+
+                Base::Rotation rot = plc.getRotation();
+                Base::Matrix4D mat;
+                rot.getValue(mat);
+                Base::Vector3d r0 = mat.getRow(0);
+                Base::Vector3d r1 = mat.getRow(1);
+                Base::Vector3d r2 = mat.getRow(2);
+                mbdPart->updateMbDFromRotationMatrix(r0.x, r0.y, r0.z, r1.x, r1.y, r1.z, r2.x, r2.y, r2.z);
+            }
+        };
+        applyDragTargets();
 
         // Timing mbdAssembly->runDragStep()
         auto dragPartsVec = std::make_shared<std::vector<std::shared_ptr<ASMTPart>>>(dragMbdParts);
         mbdAssembly->runDragStep(dragPartsVec);
+
+        // FCPROJECT-PATCH (2026-10-10, "Rotor dreht beim Schieben des Traegers", BG22): die GUI
+        // gibt JEDEM mitgezogenen Koerper als Ziel "Startlage + Mausweg" vor. Erreicht das
+        // Leitteil sein Ziel nicht, weil ein Gelenk-Anschlag (Slider-Limit) es festhaelt, laufen
+        // die Ziele der Mitlaeufer trotzdem weiter - der Solver muss den Widerspruch aufloesen und
+        // tut das ueber freie Freiheitsgrade (live: Rotor um 9 Grad und mehr gedreht). Dann die
+        // Ziele der Mitlaeufer an die TATSAECHLICH erreichte Bewegung des Leitteils anpassen und
+        // den Schritt einmal wiederholen. Vor dem Anschlag (Ziel erreicht) kein Zusatzaufwand.
+        // Beschrieben in docs/ARCHITECTURE.md Abschnitt 3.2a.
+        if (dragTargets.size() > 1) {
+            constexpr double leaderReachedTolerance = 1e-4;
+            const Base::Placement leaderTarget = dragTargets.front().second;
+            const Base::Placement leaderReached = getMbdPlacement(dragTargets.front().first);
+            if (!leaderReached.isSame(leaderTarget, leaderReachedTolerance)) {
+                const Base::Placement correction = leaderReached * leaderTarget.inverse();
+                dragTargets.front().second = leaderReached;
+                for (std::size_t i = 1; i < dragTargets.size(); ++i) {
+                    dragTargets[i].second = correction * dragTargets[i].second;
+                }
+                applyDragTargets();
+                mbdAssembly->runDragStep(dragPartsVec);
+            }
+        }
 
         // Timing the validation and placement setting
         if (validateNewPlacements()) {
@@ -1495,7 +1660,11 @@ void AssemblyObject::setNewPlacements()
             );
             continue;
         }
-        if (!propPlacement->getValue().isSame(newPlacement)) {
+        // FCPROJECT-PATCH (2026-10-03, Nutzerregel "zeigt ja, aendert nein"): nur schreiben, wenn
+        // sich wirklich etwas bewegt hat - reines Rechenrauschen (live an BG22: 1e-12 mm an einem
+        // Winkel in BG11 beim Abhaengigkeits-Recompute) markierte sonst ein Dokument als geaendert.
+        constexpr double placementWriteTolerance = 1e-9;
+        if (!propPlacement->getValue().isSame(newPlacement, placementWriteTolerance)) {
             propPlacement->setValue(newPlacement);
             obj->purgeTouched();
         }
@@ -1513,25 +1682,12 @@ void AssemblyObject::setNewPlacements()
             obj->purgeTouched();
         }
 
-        // FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix,
-        // 2026-09-03, erweitert 2026-09-04 - live durch Nutzer aufgedeckt: "Boxen nach dem
-        // Laden werden bei Taste Z nicht linear/korrekt platziert"): bewusst AUSSERHALB des
-        // obigen isSame()-Checks aufgerufen, nicht nur wenn sich das kanonische (echte) Objekt
-        // selbst aendert. 'obj' ist hier der kanonische, ECHTE Pointer (dank
-        // canonicalizeForMbD() in getMbDData()) - die lokale Spiegel-Kopie, die tatsaechlich in
-        // DIESER Baugruppe gerendert/gezogen wird, ist ein SEPARATES Dokumentobjekt mit ihrem
-        // EIGENEN, unabhaengig gespeicherten Placement-Wert. Steht das echte Objekt (z.B. weil
-        // geerdet) schon VOR diesem solve() korrekt an seiner Zielposition, aendert sich
-        // 'propPlacement' hier gar nicht - der alte Code rief syncLocalMirrorPlacement() dann
-        // NIE auf, wodurch eine veraltete, direkt aus der Datei geladene lokale Spiegel-Kopie
-        // (z.B. vom letzten Speichern VOR einer Bearbeitung an der echten Baugruppe) dauerhaft
-        // falsch stehen blieb - sichtbar als "Box springt beim ersten Z auf unerwartete
-        // Position", weil eine ANDERE, tatsaechlich verschobene Box (hier: BoxD) ueber ihren
-        // Fixed-Joint an die inzwischen korrekt/aber-nie-synchronisierte lokale Kopie gekoppelt
-        // wird. syncLocalMirrorPlacement() hat selbst bereits einen eigenen isSame()-Check,
-        // unnoetige Schreibvorgaenge auf bereits korrekte lokale Kopien bleiben also trotzdem
-        // aus - nur der FEHLENDE erste Sync-Versuch wird hier nachgeholt.
-        syncLocalMirrorPlacement(obj, newPlacement);
+        // FCPROJECT-PATCH (2026-10-03, Plan plans/2026-10-03-solver-nur-auf-spiegeln.md): kein
+        // syncLocalMirrorPlacement() mehr. 'obj' ist jetzt die INSTANZ im Kontext dieser
+        // Baugruppe (IdentityGraph::instanceOf(), siehe materializeForObjectPartMap()) - also genau
+        // das Objekt, das hier gerendert und gezogen wird. Es gibt keinen weiteren Spiegel in diesem
+        // Kontext; Originale und Spiegel anderer Dokumente gehoeren nicht zu diesem Solve und werden
+        // nicht mehr beschrieben (Nutzerregel: Original darf von aussen nie geaendert werden).
     }
 
     // Nutzerbefund 2026-09-27 ("still touched after recompute" bei geerdeten Teilen wie
@@ -1543,20 +1699,10 @@ void AssemblyObject::setNewPlacements()
     // verarbeitetes und schon gesaeubertes Teil (bzw. dessen lokalen Spiegel) im selben Dokument
     // erneut beruehrt. Ein abschliessender, zweiter Durchlauf ueber ALLE Eintraege nach der
     // Hauptschleife faengt genau das ab, unabhaengig von der Bearbeitungsreihenfolge.
-    IdentityGraph finalSweepGraph(this);
     for (auto& pair : objectPartMap) {
         App::DocumentObject* obj = pair.first;
-        if (!obj) {
-            continue;
-        }
-        if (obj->isTouched()) {
+        if (obj && obj->isTouched()) {
             obj->purgeTouched();
-        }
-        IdentityHandle handle = finalSweepGraph.resolveObject(obj);
-        for (auto* mirror : finalSweepGraph.mirrorsOf(handle)) {
-            if (mirror && mirror != obj && mirror->isTouched()) {
-                mirror->purgeTouched();
-            }
         }
     }
 }
@@ -1662,35 +1808,6 @@ void AssemblyObject::syncLocalMirrorPlacement(App::DocumentObject* realObj, cons
     }
 }
 
-// FCPROJECT-PATCH (2026-09-27, siehe Deklaration in AssemblyObject.h): siehe dortigen Kommentar
-// fuer die volle Begruendung - schliesst die Spiegel-Sync-Luecke fuer solveHiddenFlexibleUnderRigid().
-void AssemblyObject::propagateSolvedPlacementsTo(AssemblyLink* mirrorLink)
-{
-    if (!mirrorLink) {
-        return;
-    }
-    for (auto& [realObj, data] : objectPartMap) {
-        (void)data;
-        if (!realObj) {
-            continue;
-        }
-        auto it = mirrorLink->objLinkMap.find(realObj);
-        if (it == mirrorLink->objLinkMap.end() || !it->second) {
-            continue;
-        }
-        auto* propPlc = realObj->getPlacementProperty();
-        auto* mirrorPropPlc = it->second->getPlacementProperty();
-        if (!propPlc || !mirrorPropPlc) {
-            continue;
-        }
-        Base::Placement plc = propPlc->getValue();
-        if (!mirrorPropPlc->getValue().isSame(plc)) {
-            mirrorPropPlc->setValue(plc);
-            it->second->purgeTouched();
-        }
-    }
-}
-
 // FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix, 2026-09-03):
 // siehe ausfuehrliche Begruendung am Deklarationsort in AssemblyObject.h.
 bool AssemblyObject::hasRealObject(App::DocumentObject* obj)
@@ -1761,8 +1878,97 @@ void AssemblyObject::redrawJointPlacement(App::DocumentObject* joint)
     }
 }
 
+// FCPROJECT-PATCH (2026-10-10): Weltlage des Gelenk-Bezugssystems im AKTUELLEN Kontext - Marker
+// relativ zum Teil, mit der Lage des MbD-Koerpers (Instanz samt Container-Kette, offsetPlc) in die
+// Welt gebracht. Gilt fuer Spiegel wie fuer lokale Teile (Regel C2); nach einem Solve also der
+// geloeste Stand.
+std::optional<Base::Placement> AssemblyObject::getJcsInContext(
+    App::DocumentObject* joint,
+    const char* refName,
+    const char* plcName,
+    const std::string& nestingPrefix
+)
+{
+    App::DocumentObject* part = resolvePartForMbD(joint, refName, nestingPrefix);
+    auto* ref = dynamic_cast<App::PropertyXLinkSub*>(joint->getPropertyByName(refName));
+    if (!part || !ref) {
+        return std::nullopt;
+    }
+    MbDPartData data = getMbDData(part, /*alreadyResolved=*/true);
+    if (!data.part) {
+        return std::nullopt;
+    }
+    Base::Placement plc = getPlacementFromProp(joint, plcName);
+    plc = getJcsReferenceGlobalPlacement(ref) * plc;
+    plc = getGlobalPlacement(part, ref).inverse() * plc;
+    return getMbdPlacement(data.part) * data.offsetPlc * plc;
+}
+
+// FCPROJECT-PATCH (2026-10-13, Nutzerentscheidung "Aenderung im Original"): Aenderungen im
+// Original werden in eingebauten Instanzen nicht nachgezogen (C2) - ausser Gelenkgrenzen: der
+// Grenz-Durchgang in solve() zieht die Instanz in die neue Grenze. Laesst sich eine Grenze nicht
+// einhalten (z.B. weil aeussere Gelenke das Teil festhalten), verwirft OndselSolver den Durchgang
+// still (ASMTAssembly::runDragStep() -> restorePosRot()). Deshalb hier jede angelegte Grenze am
+// Ergebnis nachmessen und verletzte melden.
+void AssemblyObject::reportUnsatisfiedLimits()
+{
+    lastLimitViolations.clear();
+    constexpr double lengthTol = 1e-6;
+    constexpr double angleTolDeg = 1e-4;
+    for (const auto& check : activeLimits) {
+        const auto jcs1 = getJcsInContext(check.joint, "Reference1", "Placement1", check.nestingPrefix);
+        const auto jcs2 = getJcsInContext(check.joint, "Reference2", "Placement2", check.nestingPrefix);
+        if (!jcs1 || !jcs2) {
+            continue;
+        }
+        double value = getJointValueFromJcs(*jcs1, *jcs2, check.isAngle);
+        const double tol = check.isAngle ? angleTolDeg : lengthTol;
+        if (check.isAngle) {
+            value = Base::toDegrees(value);
+            // atan2 liefert -180..180; Grenzen jenseits davon ueber die naechste Umdrehung messen.
+            const double mid = check.minEnabled && check.maxEnabled ? (check.min + check.max) / 2.0
+                : check.minEnabled                                   ? check.min
+                                                                     : check.max;
+            value += 360.0 * std::round((mid - value) / 360.0);
+            if (check.minEnabled && check.maxEnabled && value > check.max + tol) {
+                value -= 360.0;
+            }
+        }
+        const bool belowMin = check.minEnabled && value < check.min - tol;
+        const bool aboveMax = check.maxEnabled && value > check.max + tol;
+        if (!belowMin && !aboveMax) {
+            continue;
+        }
+        const char* unit = check.isAngle ? "deg" : "mm";
+        std::string name = check.joint->getDocument() == getDocument()
+            ? std::string(check.joint->getNameInDocument())
+            : check.joint->getFullName();
+        if (check.joint->Label.getStrValue() != check.joint->getNameInDocument()) {
+            name += " '" + check.joint->Label.getStrValue() + "'";
+        }
+        std::ostringstream line;
+        line.precision(4);
+        line << std::fixed << name << ": " << value << " " << unit << ", erlaubt ";
+        if (check.minEnabled) {
+            line << check.min;
+        }
+        line << " .. ";
+        if (check.maxEnabled) {
+            line << check.max;
+        }
+        line << " " << unit;
+        lastLimitViolations.push_back(line.str());
+        Base::Console().warning(
+            "Assembly: Gelenkgrenze in '{}' nicht einhaltbar: {}\n",
+            getFullName(),
+            line.str()
+        );
+    }
+}
+
 std::shared_ptr<ASMTAssembly> AssemblyObject::makeMbdAssembly()
 {
+    activeLimits.clear();
     auto assembly = CREATE<ASMTAssembly>::With();
     assembly->externalSystem->freecadAssemblyObject = this;
     assembly->setName("OndselAssembly");
@@ -1778,7 +1984,8 @@ std::shared_ptr<ASMTAssembly> AssemblyObject::makeMbdAssembly()
 App::DocumentObject* AssemblyObject::getJointOfPartConnectingToGround(
     App::DocumentObject* part,
     std::string& name,
-    const std::vector<App::DocumentObject*>& excludeJoints
+    const std::vector<App::DocumentObject*>& excludeJoints,
+    std::string* nestingPrefixOut
 )
 {
     if (!part) {
@@ -1797,6 +2004,10 @@ App::DocumentObject* AssemblyObject::getJointOfPartConnectingToGround(
     // den "ungeerdet frei ziehen"-Zweig zurueck, obwohl ein Fixed-Joint zu einem geerdeten
     // Nachbarn existiert (live beobachtet: BG47 direkt anklicken+ziehen loeste sich vom Rotor,
     // obwohl derselbe Fixed-Joint beim Ziehen ueber den Rotor korrekt gefunden wird).
+    // FCPROJECT-PATCH (2026-10-10, Drag-Start-Latenz): ein gemeinsamer IdentityGraph fuer die
+    // Pruefung aller Joints des Teils (isJointConnectingPartToGround() je Joint).
+    ScopedIdentityGraph graphScope(this, scopedGraph);
+
     App::DocumentObject* canonicalPart = canonicalizeForMbD(part);
     if (!canonicalPart) {
         canonicalPart = part;
@@ -1825,11 +2036,17 @@ App::DocumentObject* AssemblyObject::getJointOfPartConnectingToGround(
         if (canonicalPart == part1
             && isJointConnectingPartToGround(joint, "Reference1", jr.nestingPrefix)) {
             name = "Reference1";
+            if (nestingPrefixOut) {
+                *nestingPrefixOut = jr.nestingPrefix;
+            }
             return joint;
         }
         if (canonicalPart == part2
             && isJointConnectingPartToGround(joint, "Reference2", jr.nestingPrefix)) {
             name = "Reference2";
+            if (nestingPrefixOut) {
+                *nestingPrefixOut = jr.nestingPrefix;
+            }
             return joint;
         }
     }
@@ -1980,7 +2197,7 @@ std::vector<JointRef> AssemblyObject::getJoints(
         if (joint->isError() || !prop || prop->getValue()) {
             // Filter grounded joints and deactivated joints.
             if (verboseLog) {
-                Base::Console().message(
+                Base::Console().log(
                     "Assembly: getJoints('{}') - Joint '{}' uebersprungen (isError={}, "
                     "Suppressed={}).\n",
                     getFullName(),
@@ -2006,7 +2223,7 @@ std::vector<JointRef> AssemblyObject::getJoints(
             // Remove incomplete joints. Left-over when the user deletes a part.
             // Remove incoherent joints (self-pointing joints)
             if (verboseLog) {
-                Base::Console().message(
+                Base::Console().log(
                     "Assembly: getJoints('{}') - Joint '{}' uebersprungen: part1='{}', "
                     "part2='{}' (unvollstaendig oder BEIDE Referenzen zeigen auf dasselbe "
                     "aeussere Bauteil - z.B. weil beide innerhalb derselben Rigid-Unterbaugruppe "
@@ -2027,7 +2244,7 @@ std::vector<JointRef> AssemblyObject::getJoints(
         if (proxy) {
             if (proxy->getValue().hasAttr("setJointConnectors")) {
                 if (verboseLog) {
-                    Base::Console().message(
+                    Base::Console().log(
                         "Assembly: getJoints('{}') - Joint '{}' UEBERNOMMEN: part1='{}', "
                         "part2='{}'.\n",
                         getFullName(),
@@ -2044,7 +2261,7 @@ std::vector<JointRef> AssemblyObject::getJoints(
                 joints.push_back({joint, nestingPrefix});
             }
             else if (verboseLog) {
-                Base::Console().message(
+                Base::Console().log(
                     "Assembly: getJoints('{}') - Joint '{}' uebersprungen: Proxy hat keine "
                     "setJointConnectors-Methode (kein normaler beweglicher Joint, z.B. Grounded/"
                     "RigidGroup).\n",
@@ -2236,7 +2453,86 @@ std::vector<JointRef> AssemblyObject::getJointsOfPart(App::DocumentObject* part)
     return jointsOf;
 }
 
-std::unordered_set<App::DocumentObject*> AssemblyObject::getGroundedParts()
+namespace
+{
+// FCPROJECT-PATCH (2026-10-13, live an BG22 gefunden: BG73 und BG75 enthalten beide den Motor
+// BG67, beide erden dessen Stator; in BG22 landete die Erdung von BG73 beim Stator der
+// BG75-Instanz - BG73 schwamm, BG75 war doppelt gehalten): die Instanz eines Objekts aus dem
+// Dokumentbaum der von 'link' verlinkten Baugruppe in DIESEM Kontext. Der Weg von 'obj' durch die
+// Spiegel-Container der Quelle wird Ebene fuer Ebene durch die Spiegel unter 'link' nachgegangen
+// - eindeutig fuer genau diese Einbau-Instanz, gleich wie oft die innere Baugruppe sonst noch
+// vorkommt. nullptr, wenn 'obj' dort nicht vorkommt.
+App::DocumentObject* mirrorChildFor(AssemblyLink* mirrorContainer, App::DocumentObject* source)
+{
+    auto it = mirrorContainer->objLinkMap.find(source);
+    if (it != mirrorContainer->objLinkMap.end() && it->second) {
+        return it->second;
+    }
+    for (auto* child : mirrorContainer->Group.getValues()) {
+        App::DocumentObject* linked = nullptr;
+        if (auto* asmLink = freecad_cast<AssemblyLink*>(child)) {
+            linked = asmLink->getLinkedObject2(false);
+        }
+        else if (auto* link = dynamic_cast<App::Link*>(child)) {
+            linked = link->getLinkedObject(false);
+        }
+        if (linked == source) {
+            return child;
+        }
+    }
+    return nullptr;
+}
+
+App::DocumentObject* findInstanceUnder(
+    App::DocumentObject* sourceContainer,  // AssemblyObject oder Spiegel-AssemblyLink der Quelle
+    AssemblyLink* mirrorContainer,
+    App::DocumentObject* obj,
+    int depth
+)
+{
+    constexpr int maxDepth = 16;
+    if (!sourceContainer || !mirrorContainer || depth > maxDepth) {
+        return nullptr;
+    }
+    auto* sourceLink = freecad_cast<AssemblyLink*>(sourceContainer);
+    auto* groupExt = sourceContainer->getExtensionByType<App::GroupExtension>(true);
+    if (!groupExt) {
+        return nullptr;
+    }
+    for (auto* child : groupExt->Group.getValues()) {
+        if (!child) {
+            continue;
+        }
+        // Schluessel im Spiegel: auf oberster Ebene das Objekt selbst, darunter dessen Quelle
+        // (die Spiegel unter 'mirrorContainer' verweisen auf dieselbe innerste Quelle).
+        App::DocumentObject* key = child;
+        if (sourceLink) {
+            if (auto* src = sourceLink->getSourceForMirror(child)) {
+                key = src;
+            }
+        }
+        App::DocumentObject* mirrorChild = mirrorChildFor(mirrorContainer, key);
+        if (!mirrorChild) {
+            continue;
+        }
+        if (child == obj) {
+            return mirrorChild;
+        }
+        auto* childLink = freecad_cast<AssemblyLink*>(child);
+        auto* mirrorChildLink = freecad_cast<AssemblyLink*>(mirrorChild);
+        if (childLink && mirrorChildLink) {
+            if (auto* found = findInstanceUnder(childLink, mirrorChildLink, obj, depth + 1)) {
+                return found;
+            }
+        }
+    }
+    return nullptr;
+}
+}  // namespace
+
+std::unordered_set<App::DocumentObject*> AssemblyObject::getGroundedParts(
+    std::vector<std::pair<App::DocumentObject*, App::DocumentObject*>>* ignoredNestedRoots
+)
 {
     std::unordered_set<App::DocumentObject*> groundedSet;
     std::vector<App::DocumentObject*> allParts = getAssemblyComponents(this);
@@ -2312,15 +2608,57 @@ std::unordered_set<App::DocumentObject*> AssemblyObject::getGroundedParts()
     // Eintrag, keine Redundanz). Nur wenn ein verschachteltes Teil auf KEINE andere Weise
     // erreichbar waere, zaehlt seine eigene Erdung weiterhin (z.B. wenn die betroffene
     // Unterbaugruppe gar nicht an die aeussere Kette angebunden ist).
-    std::vector<JointRef> reachabilityJoints = getJoints();
-    std::vector<ObjRef> reachableFromLocalGrounding;
-    for (auto* g : groundedSet) {
-        reachableFromLocalGrounding.push_back({g, nullptr});
-    }
-    for (auto* g : groundedSet) {
-        traverseAndMarkConnectedParts(g, reachableFromLocalGrounding, reachabilityJoints);
-    }
-
+    //
+    // FCPROJECT-PATCH (2026-10-03, "Erdung ist Kontext-Eigenschaft", live an BG43/BG67/BG47
+    // gefunden, Nutzerauftrag "mit System, fuer alle verschachtelten BGs allgemein", Plan
+    // plans/2026-10-03-erdung-als-kontext-eigenschaft.md): der obige Erreichbarkeits-Filter ist
+    // hier zu einer allgemeinen Cluster-Aufloesung verallgemeinert und ERSETZT die bisherige
+    // "Doppel-Anker-Abschaltung" in syncGroundedJoints() (2026-09-29). Jene schaltete ueberzaehlige
+    // verschachtelte Erdungen ab, indem sie das ReadOnly-Flag der Placement IM DOKUMENT DER
+    // UNTERBAUGRUPPE loeschte - genau das Flag, aus dem jede Ebene (auch die Unterbaugruppe fuer
+    // sich allein) ihre Erdung ableitet. Folge: BG67 galt nach einem Recompute von BG43 auch
+    // eigenstaendig als ungeerdet, alle Joints bekamen das Part_Detached-Overlay (Verstoss gegen
+    // requirement-activated-bg-independent-of-loaded-context). Jetzt ist getGroundedParts() eine
+    // REINE Funktion des Kontexts: jede Ebene behaelt ihre eigene Erdung im Dokument, die aeussere
+    // Ebene IGNORIERT ueberzaehlige innere Erdungen nur fuer ihren eigenen Solve.
+    //
+    // Rekursive Komposition: nestedAssembly->getGroundedParts() liefert bereits die AUFGELOESTEN,
+    // wirksamen Wurzeln dieser Unterbaugruppe - hier werden nur noch Konflikte zwischen den
+    // LOKALEN Wurzeln dieser Ebene und den Wurzeln der direkten flexiblen Unterbaugruppen
+    // aufgeloest. Damit ist jede Verschachtelungstiefe abgedeckt. Regeln pro Zusammenhangs-
+    // komponente (Cluster, ueber echte Joints dieser Ebene inkl. verschachtelter Joints):
+    //   - gleiche kanonische Identitaet (z.B. lokaler Spiegel und echtes Teil) -> ein Eintrag,
+    //     der lokale gewinnt;
+    //   - Cluster mit mindestens einer lokalen Wurzel -> alle lokalen bleiben, alle
+    //     verschachtelten werden ignoriert (die aeussere, "weltnaehere" Erdung ist massgeblich);
+    //   - Cluster nur aus verschachtelten Wurzeln -> die Wurzeln der ERSTEN beteiligten
+    //     Unterbaugruppe (getSubAssemblies()-Reihenfolge, deterministisch) bleiben, die der
+    //     uebrigen werden ignoriert (zwei unabhaengig verankerte Strukturen + Kreuz-Joint).
+    // Umsetzung komplett ueber den IdentityGraph (Nutzerauftrag "mehr ueber IdentityGraph und
+    // seine Funktionen"): EIN Graph fuer den ganzen Aufruf, Wurzeln ueber resolveObject()
+    // (instanzbewusst), Zusammenhang ueber jointEdges() - dieselben, per resolveJointRef()
+    // aufgeloesten Kanten, die auch der Solver sieht. Verglichen wird ueber
+    // materializeForObjectPartMap(), also exakt den Schluessel, unter dem der Solver einen
+    // Koerper fuehrt: ein roher lokaler Spiegel und das echte Teil landen so auf demselben
+    // Koerper, zwei Instanzen derselben Unterbaugruppe (MidLink1/MidLink2) bleiben getrennt.
+    // Verglichen wird bewusst ueber den Solver-Koerper, nicht ueber IdentityHandle-Gleichheit -
+    // die Frage hier ist genau "derselbe Koerper?". (Anlass war ein inzwischen behobener
+    // Handle-Split in refineNestedMirrorTarget(), siehe dortigen Kommentar; die Invariante
+    // "ein Koerper = ein Handle" prueft jetzt verifyHandleConsistency() bzw. der Test
+    // test_identitygraph_handle_consistency.)
+    // Achtung: graph.isGrounded()/groundedHandles() rufen selbst getGroundedParts() auf und
+    // duerfen hier deshalb NICHT benutzt werden.
+    // Erst die verschachtelten Erdungs-Kandidaten einsammeln (billig, ohne Graph) - der
+    // IdentityGraph wird nur gebaut, wenn es ueberhaupt welche gibt. getGroundedParts() liegt im
+    // Drag-Heisspfad (isPartConnected() pro Mausereignis), eine flache Baugruppe zahlt so nichts.
+    struct NestedCandidate
+    {
+        AssemblyLink* link;
+        int subIndex;
+        App::DocumentObject* obj;
+    };
+    std::vector<NestedCandidate> nestedCandidates;
+    int subIndex = 0;
     for (auto* assembly : getSubAssemblies()) {
         if (!assembly || assembly->isRigid()) {
             continue;
@@ -2329,10 +2667,183 @@ std::unordered_set<App::DocumentObject*> AssemblyObject::getGroundedParts()
         if (!nestedAssembly || nestedAssembly == this) {
             continue;
         }
-        auto nestedGrounded = nestedAssembly->getGroundedParts();
-        for (auto* g : nestedGrounded) {
-            if (!isObjInSetOfObjRefs(g, reachableFromLocalGrounding)) {
-                groundedSet.insert(g);
+        // FCPROJECT-PATCH (2026-10-03, "Original-PLC aendert sich/Motor bewegt sich bei jedem
+        // Solve" - live an BG43/BG67/BG47 gefunden): nestedAssembly->getGroundedParts() liefert
+        // IMMER auch nestedAssembly->Origin.getValue() mit (vanilla-Logik weiter oben in dieser
+        // Funktion, "Origin is not in Group so we add it separately" - fuer einen EIGENSTAENDIGEN
+        // Solve von nestedAssembly selbst korrekt: sein Origin IST per Definition sein eigener,
+        // fixer Nullpunkt). Hier, beim rekursiven Einsammeln FREMDER Erdungen fuer DIESE (aeussere)
+        // Ebene, ist das falsch: Origin ist kein echtes, ueber Gelenke verbundenes Teil, sondern
+        // nur ein interner Referenzpunkt der verschachtelten Baugruppe - OHNE diesen Ausschluss
+        // landet es trotzdem in objectPartMap/fixGroundedPart() und bekommt vom AEUSSEREN
+        // kombinierten Solve bei JEDEM Aufruf eine neu berechnete, nie konvergierende Placement
+        // direkt in SEINEM EIGENEN Dokument verpasst (Verstoss gegen die Regel "Original darf
+        // nie veraendert werden", siehe requirement-original-template-plc-never-changed.md) -
+        // sichtbar als minimales, aber bei jedem Solve weiterdriftendes Zittern.
+        App::DocumentObject* nestedOrigin = nestedAssembly->Origin.getValue();
+        bool hasOwnGround = false;
+        for (auto* g : nestedAssembly->getGroundedParts()) {
+            if (g && g != nestedOrigin) {
+                nestedCandidates.push_back({assembly, subIndex, g});
+                hasOwnGround = true;
+            }
+        }
+        // FCPROJECT-PATCH (2026-10-13, Regel C5 in docs/CONSTRAINTS.md): eine eingebaute flexible
+        // Unterbaugruppe OHNE eigene Erdung wurde, solange sie unverbunden ist, gar nicht geloest
+        // (ihre Gelenke fielen als unverbunden heraus) - neue oder verschobene Teile blieben
+        // liegen, wo sie waren. Jetzt haelt ihr erstes Teil sie an ihrer Ablage-Position, genau
+        // wie eine eigene Erdung: dieselbe Gruppierung unten verwirft diesen Anker, sobald ein
+        // Gelenk die Unterbaugruppe mit der restlichen Baugruppe verbindet.
+        if (!hasOwnGround) {
+            for (auto* obj : nestedAssembly->Group.getValues()) {
+                auto* objLink = freecad_cast<AssemblyLink*>(obj);
+                const bool isPart = obj
+                    && (obj->isDerivedFrom<App::Link>() || obj->isDerivedFrom<PartApp::Feature>()
+                        || obj->isDerivedFrom<App::Part>())
+                    && obj != nestedOrigin && !obj->isDerivedFrom<JointGroup>();
+                if (isPart && (!objLink || objLink->isRigid()) && obj->getPlacementProperty()) {
+                    nestedCandidates.push_back({assembly, subIndex, obj});
+                    break;
+                }
+            }
+        }
+        ++subIndex;
+    }
+
+    // FCPROJECT-PATCH (2026-10-10, Drag-Start-Latenz): einen bereits laufenden
+    // ScopedIdentityGraph mitbenutzen (z.B. aus getDownstreamParts()/getJointOfPartConnecting-
+    // ToGround()), statt bei jedem Aufruf einen neuen Graphen aufzubauen.
+    std::optional<IdentityGraph> ownGraph;
+    IdentityGraph& graph = scopedGraph ? *scopedGraph : ownGraph.emplace(this);
+    struct GroundRoot
+    {
+        App::DocumentObject* obj;
+        App::DocumentObject* key;  // graph.materializeForObjectPartMap(...) = Solver-Koerper
+        int source;  // -1 = lokale Wurzel dieser Ebene, sonst Index der Unterbaugruppe
+    };
+    std::vector<GroundRoot> roots;
+    auto solverKey = [&graph](const IdentityHandle& h, App::DocumentObject* fallback) {
+        App::DocumentObject* key = graph.materializeForObjectPartMap(h);
+        return key ? key : fallback;
+    };
+    std::unordered_set<App::DocumentObject*> rootKeys;
+    bool anyNestedRoot = false;
+    if (!nestedCandidates.empty()) {
+        for (auto* g : groundedSet) {
+            App::DocumentObject* key = solverKey(graph.resolveObject(g), g);
+            if (rootKeys.insert(key).second) {
+                roots.push_back({g, key, -1});
+            }
+        }
+    }
+    for (const auto& candidate : nestedCandidates) {
+        App::DocumentObject* g = candidate.obj;
+        // 'g' liegt im Identitaetsraum der Unterbaugruppe - bei mehrfach eingefuegter
+        // Unterbaugruppe fuer alle Instanzen derselbe Zeiger. Die Identitaet(en) DIESER Instanz
+        // sind die Graph-Knoten mit derselben Vorlage, deren duplicateInstancePath diese
+        // AssemblyLink enthaelt; ohne Duplikation genuegt resolveObject().
+        // FCPROJECT-PATCH (2026-10-13): ohne Instanz-Kontext loeste resolveObject(g) auf die
+        // erstbeste Instanz auf - bei einer Unterbaugruppe, die ueber VERSCHIEDENE Eltern im Baum
+        // steckt (BG67 in BG73 und BG75), steht im duplicateInstancePath nicht dieser Link, und es
+        // traf die falsche. Zuerst die Instanz unter genau diesem Einbau-Link suchen.
+        App::DocumentObject* instance
+            = findInstanceUnder(candidate.link->getLinkedAssembly(), candidate.link, g, 0);
+        IdentityHandle base = graph.resolveObject(instance ? instance : g);
+        std::vector<IdentityHandle> instanceHandles;
+        for (const auto& edge : graph.jointEdges()) {
+            for (const IdentityHandle* h : {&edge.a, &edge.b}) {
+                if (h->templateObj == base.templateObj
+                    && std::ranges::find(h->duplicateInstancePath, candidate.link)
+                        != h->duplicateInstancePath.end()
+                    && std::ranges::find(instanceHandles, *h) == instanceHandles.end()) {
+                    instanceHandles.push_back(*h);
+                }
+            }
+        }
+        if (instanceHandles.empty()) {
+            instanceHandles.push_back(std::move(base));
+        }
+        for (const auto& h : instanceHandles) {
+            App::DocumentObject* key = solverKey(h, g);
+            if (rootKeys.insert(key).second) {
+                roots.push_back({g, key, candidate.subIndex});
+                anyNestedRoot = true;
+            }
+        }
+    }
+
+    if (anyNestedRoot) {
+        // Kanten einmal auf Solver-Koerper abbilden (nur verbindende Jointtypen).
+        std::vector<std::pair<App::DocumentObject*, App::DocumentObject*>> bodyEdges;
+        for (const auto& edge : graph.jointEdges()) {
+            if (!isJointTypeConnecting(edge.joint)) {
+                continue;
+            }
+            App::DocumentObject* a = graph.materializeForObjectPartMap(edge.a);
+            App::DocumentObject* b = graph.materializeForObjectPartMap(edge.b);
+            if (a && b) {
+                bodyEdges.emplace_back(a, b);
+            }
+        }
+
+        std::vector<int> clusterOf(roots.size(), -1);
+        for (std::size_t i = 0; i < roots.size(); ++i) {
+            if (clusterOf[i] != -1) {
+                continue;
+            }
+            // Breitensuche ueber die verbindenden Kanten des Graphen.
+            std::unordered_set<App::DocumentObject*> reached {roots[i].key};
+            std::vector<App::DocumentObject*> queue {roots[i].key};
+            while (!queue.empty()) {
+                App::DocumentObject* current = queue.back();
+                queue.pop_back();
+                for (const auto& [a, b] : bodyEdges) {
+                    App::DocumentObject* other = a == current ? b : b == current ? a : nullptr;
+                    if (other && reached.insert(other).second) {
+                        queue.push_back(other);
+                    }
+                }
+            }
+            for (std::size_t k = i; k < roots.size(); ++k) {
+                if (clusterOf[k] == -1 && reached.count(roots[k].key)) {
+                    clusterOf[k] = static_cast<int>(i);
+                }
+            }
+        }
+
+        for (std::size_t i = 0; i < roots.size(); ++i) {
+            if (clusterOf[i] != static_cast<int>(i)) {
+                continue;  // nur einmal pro Cluster (i = erstes Mitglied)
+            }
+            // Massgebliche Quelle: lokal, falls vorhanden, sonst die erste Unterbaugruppe.
+            int keepSource = std::numeric_limits<int>::max();
+            for (std::size_t k = i; k < roots.size(); ++k) {
+                if (clusterOf[k] == static_cast<int>(i)) {
+                    keepSource = std::min(keepSource, roots[k].source);
+                }
+            }
+            App::DocumentObject* winner = nullptr;
+            for (std::size_t k = i; k < roots.size(); ++k) {
+                if (clusterOf[k] == static_cast<int>(i) && roots[k].source == keepSource) {
+                    winner = roots[k].obj;
+                    break;
+                }
+            }
+            for (std::size_t k = i; k < roots.size(); ++k) {
+                if (clusterOf[k] != static_cast<int>(i)) {
+                    continue;
+                }
+                if (roots[k].source == keepSource) {
+                    // FCPROJECT-PATCH (2026-10-13): fuer eine verschachtelte Erdung die INSTANZ in
+                    // diesem Kontext (key), nicht das Objekt aus dem Dokument der Unterbaugruppe -
+                    // das wurde spaeter ohne Instanz-Kontext neu aufgeloest und landete bei einer
+                    // Unterbaugruppe, die ueber mehrere Eltern im Baum steckt, wieder bei der
+                    // falschen Instanz (BG73-Erdung beim Motor der BG75).
+                    groundedSet.insert(roots[k].source >= 0 && roots[k].key ? roots[k].key : roots[k].obj);
+                }
+                else if (ignoredNestedRoots) {
+                    ignoredNestedRoots->emplace_back(roots[k].obj, winner);
+                }
             }
         }
     }
@@ -2386,32 +2897,43 @@ std::unordered_set<App::DocumentObject*> AssemblyObject::fixGroundedParts()
         }
     }
 
+    // FCPROJECT-PATCH (2026-10-03, "BG43-Drift", live gefunden per ASMT-Export: 048 tauchte als
+    // ZWEI Solver-Koerper auf - "043#048" geerdet aber an keinem Joint, "067#048" an allen
+    // Motor-Joints aber nicht geerdet): getGroundedParts() liefert lokale Wurzeln als ROHE
+    // Objekte, z.B. BG43s Spiegel von BG67s 048. Die Joints dagegen landen ueber
+    // resolvePartForMbD() -> materializeForObjectPartMap() auf dem Solver-Koerper (hier: das
+    // echte 048). Mit dem rohen Spiegel als Schluessel entstand ein zweiter, isolierter Koerper -
+    // der Motor war im Solve in Wahrheit gar nicht verankert, das Ergebnis hing vom Startzustand
+    // ab (Drift ueber mehrere Solves), und computeGroundCorrection() griff ebenfalls ins Leere.
+    // Fix: jedes geerdete Objekt ueber DENSELBEN IdentityGraph-Weg auf seinen Solver-Koerper
+    // abbilden wie die Joints; Ziel-Placement, Fixierung und Ground-Korrektur haengen damit am
+    // selben Koerper. Mehrere Erdungen desselben Koerpers werden nur einmal fixiert.
+    IdentityGraph graph(this);
+    std::unordered_set<App::DocumentObject*> fixedBodies;
     for (auto obj : groundedParts) {
         if (!obj) {
             continue;
         }
 
-        // FCPROJECT-PATCH (2026-09-28, siehe ausfuehrliche Begruendung an
-        // fixGroundedPart()s getMbDPart(obj, alreadyResolved=true)-Aufruf): 'obj' kommt aus der
-        // rekursiven getGroundedParts() - fuer ein Teil, das mehrere echte Dokumentgrenzen tiefer
-        // liegt (z.B. ein Motor-Getriebeteil in einer verschachtelten flexiblen Unterbaugruppe),
-        // ist seine rohe 'Placement'-Property nur LOKAL (relativ zu seinem eigenen Container),
-        // nicht die tatsaechliche Weltposition. Ohne diese Umrechnung bekommt der Ground-Marker
-        // (das Fixierungsziel des Solvers) das FALSCHE Ziel - Newton-Raphson versucht dann, das
-        // (korrekt Welt-positionierte) MbD-Teil auf diese falsche, nur lokale Zielposition
-        // zurueckzuzwingen, was bei ausreichendem Abstand nicht mehr konvergiert.
-        Base::Placement plc = getPlacementFromProp(obj, "Placement");
-        IdentityGraph groundChainGraph(this);
-        Base::Placement groundContainerChainPlc = groundChainGraph.containerChainPlacement(obj);
+        App::DocumentObject* body = graph.materializeForObjectPartMap(graph.resolveObject(obj));
+        if (!body) {
+            body = obj;
+        }
+        if (!fixedBodies.insert(body).second) {
+            continue;
+        }
+
+        Base::Placement plc = getPlacementFromProp(body, "Placement");
+        Base::Placement groundContainerChainPlc = graph.containerChainPlacement(body);
         if (!groundContainerChainPlc.isIdentity()) {
             plc = groundContainerChainPlc * plc;
         }
         if (!groundedTargetObj && explicitlyGroundedTargets.count(obj)) {
-            groundedTargetObj = obj;
+            groundedTargetObj = body;
             groundedTargetPlc = plc;
         }
-        std::string str = obj->getFullName();
-        fixGroundedPart(obj, plc, str);
+        std::string str = body->getFullName();
+        fixGroundedPart(body, plc, str);
     }
     return groundedParts;
 }
@@ -2492,33 +3014,17 @@ bool AssemblyObject::isJointConnectingPartToGround(
     }
 
     // to know if a joint is connecting to ground we disable all the other joints
-    std::vector<JointRef> jointsOfPart = getJointsOfPart(part);
-    std::vector<bool> activatedStates;
-
-    for (auto& jri : jointsOfPart) {
-        App::DocumentObject* jointi = jri.joint;
-        if (jointi->getFullName() == joint->getFullName()) {
-            continue;
+    // FCPROJECT-PATCH (2026-10-04): Erreichbarkeit NUR ueber 'joint', gemessen an der JETZT
+    // gueltigen Erdung - die anderen Joints des Teils werden beim Durchlaufen ausgeblendet statt per
+    // Suppressed deaktiviert (siehe isPartConnectedExcluding()).
+    const auto groundedObjs = getGroundedParts();
+    std::vector<JointRef> otherJoints;
+    for (auto& jri : getJointsOfPart(part)) {
+        if (jri.joint && jri.joint->getFullName() != joint->getFullName()) {
+            otherJoints.push_back(jri);
         }
-
-        activatedStates.push_back(getJointActivated(jointi));
-        setJointActivated(jointi, false);
     }
-
-    isConnected = isPartConnected(part);
-
-    // restore activation states
-    for (auto& jri : jointsOfPart) {
-        App::DocumentObject* jointi = jri.joint;
-        if (jointi->getFullName() == joint->getFullName() || activatedStates.empty()) {
-            continue;
-        }
-
-        setJointActivated(jointi, activatedStates[0]);
-        activatedStates.erase(activatedStates.begin());
-    }
-
-    return isConnected;
+    return isPartConnectedExcluding(part, groundedObjs, otherJoints);
 }
 
 bool AssemblyObject::isJointTypeConnecting(App::DocumentObject* joint)
@@ -2582,7 +3088,7 @@ void AssemblyObject::removeUnconnectedJoints(
     // FCPROJECT-PATCH (16): siehe getJoints() weiter oben - gleiches Prinzip, zweite Filterstufe.
     // Hier faellt ein Joint raus, wenn eine seiner beiden Seiten NICHT ueber eine Kette von
     // Joints von einem geerdeten Teil aus erreichbar ist (traverseAndMarkConnectedParts()).
-    Base::Console().message(
+    Base::Console().log(
         "Assembly: removeUnconnectedJoints('{}') - {} geerdete(s) Teil(e), {} erreichbare(s) "
         "Teil(e), pruefe {} Joint(s).\n",
         getFullName(),
@@ -2616,7 +3122,7 @@ void AssemblyObject::removeUnconnectedJoints(
                 bool obj1Connected = isObjInSetOfObjRefs(obj1, connectedParts);
                 bool obj2Connected = isObjInSetOfObjRefs(obj2, connectedParts);
                 if (!obj1Connected || !obj2Connected) {
-                    Base::Console().message(
+                    Base::Console().log(
                         "Assembly: removeUnconnectedJoints('{}') - Joint '{}' entfernt: "
                         "part1='{}' (erreichbar={}), part2='{}' (erreichbar={}).\n",
                         getFullName(),
@@ -2641,14 +3147,57 @@ void AssemblyObject::traverseAndMarkConnectedParts(
     const std::vector<JointRef>& joints
 )
 {
-    // getConnectedParts returns the objs connected to the currentObj by any joint
-    auto connectedObjs = getConnectedParts(currentObj, joints);
-    for (auto& nextObjRef : connectedObjs) {
-        if (!isObjInSetOfObjRefs(nextObjRef.obj, connectedParts)) {
-            // Create a new ObjRef with the nextObj and a nullptr for PropertyXLinkSub*
-            connectedParts.push_back(nextObjRef);
-            traverseAndMarkConnectedParts(nextObjRef.obj, connectedParts, joints);
+    // FCPROJECT-PATCH (2026-10-09, BG22-Leistung, gdb-Stichproben): bisher rief die Traversierung
+    // fuer JEDES erreichte Teil getConnectedParts() auf, das jedes Mal ALLE Joints neu per
+    // resolvePartForMbD() aufloeste - Teile x Joints Aufloesungen pro Aufruf. Das Baum-Overlay
+    // ("Part_Detached") ruft isPartConnected() fuer jeden Joint im Baum auf; in BG22 lag damit rund
+    // die Haelfte der Zeit nach dem Oeffnen in dieser Schleife. Jetzt wird jede Joint-Kante genau
+    // einmal aufgeloest, danach nur noch die Nachbarschaftsliste durchlaufen. Reihenfolge und
+    // Inhalt der Nachbarn wie in getConnectedParts() (Joint-Reihenfolge, dann rigide Mitglieder),
+    // damit connectedParts dieselben ObjRefs in derselben Reihenfolge erhaelt.
+    std::unordered_map<App::DocumentObject*, std::vector<ObjRef>> neighbors;
+    for (const auto& jr : joints) {
+        App::DocumentObject* joint = jr.joint;
+        if (!isJointTypeConnecting(joint)) {
+            continue;
         }
+        App::DocumentObject* obj1 = resolvePartForMbD(joint, "Reference1", jr.nestingPrefix);
+        App::DocumentObject* obj2 = resolvePartForMbD(joint, "Reference2", jr.nestingPrefix);
+        if (!obj1 || !obj2) {
+            continue;
+        }
+        auto* ref1 = dynamic_cast<App::PropertyXLinkSub*>(joint->getPropertyByName("Reference1"));
+        auto* ref2 = dynamic_cast<App::PropertyXLinkSub*>(joint->getPropertyByName("Reference2"));
+        if (ref2) {
+            neighbors[obj1].push_back({obj2, ref2});
+        }
+        if (ref1 && obj2 != obj1) {
+            neighbors[obj2].push_back({obj1, ref1});
+        }
+    }
+
+    std::function<void(App::DocumentObject*)> visit = [&](App::DocumentObject* part) {
+        std::vector<ObjRef> next;
+        if (auto it = neighbors.find(part); it != neighbors.end()) {
+            next = it->second;
+        }
+        if (const auto* members = getRigidMembers(part)) {
+            for (auto* member : *members) {
+                if (!member || member == part || isObjInSetOfObjRefs(member, next)) {
+                    continue;
+                }
+                next.push_back({member, nullptr});
+            }
+        }
+        for (auto& nextObjRef : next) {
+            if (!isObjInSetOfObjRefs(nextObjRef.obj, connectedParts)) {
+                connectedParts.push_back(nextObjRef);
+                visit(nextObjRef.obj);
+            }
+        }
+    };
+    if (currentObj) {
+        visit(currentObj);
     }
 }
 
@@ -2729,11 +3278,61 @@ bool AssemblyObject::isPartGrounded(App::DocumentObject* obj)
     return false;
 }
 
+// FCPROJECT-PATCH (2026-10-04, "Traeger reisst beim Ziehen aus BG37 heraus"): wie
+// isPartConnected(), aber mit einer vom Aufrufer VORGEGEBENEN Erdung und ausgeblendeten Joints.
+// isJointConnectingPartToGround() deaktivierte bisher alle anderen Joints des Teils per Suppressed
+// und fragte isPartConnected() - dabei (a) aenderte es kurzzeitig Joints in fremden Dokumenten
+// (Originale einer Unterbaugruppe) und (b) rechnete isPartConnected() die Erdung NEU: ein von der
+// aeusseren Erdung abgetrenntes Teil einer flexiblen Unterbaugruppe bekam dadurch die EIGENE Erdung
+// seiner Unterbaugruppe zurueck (getGroundedParts(), "Erdung ist Kontext-Eigenschaft") und galt
+// faelschlich als verbunden - jeder beliebige Joint wurde so als "verbindet zur Erdung" gemeldet.
+bool AssemblyObject::isPartConnectedExcluding(
+    App::DocumentObject* obj,
+    const std::unordered_set<App::DocumentObject*>& groundedObjs,
+    const std::vector<JointRef>& excludedJoints
+)
+{
+    if (!obj) {
+        return false;
+    }
+    ScopedIdentityGraph graphScope(this, scopedGraph);
+
+    App::DocumentObject* canonicalObj = canonicalizeForMbD(obj);
+
+    std::vector<JointRef> joints;
+    for (const auto& jr : getJoints()) {
+        const bool excluded = std::ranges::any_of(excludedJoints, [&jr](const JointRef& e) {
+            return e.joint == jr.joint && e.nestingPrefix == jr.nestingPrefix;
+        });
+        if (!excluded) {
+            joints.push_back(jr);
+        }
+    }
+
+    std::vector<ObjRef> connectedParts;
+    std::unordered_set<App::DocumentObject*> canonicalGroundedObjs;
+    for (auto* groundedObj : groundedObjs) {
+        if (auto* canonical = canonicalizeForMbD(groundedObj)) {
+            canonicalGroundedObjs.insert(canonical);
+        }
+    }
+    for (auto* groundedObj : canonicalGroundedObjs) {
+        connectedParts.push_back({groundedObj, nullptr});
+    }
+    for (auto* groundedObj : canonicalGroundedObjs) {
+        traverseAndMarkConnectedParts(groundedObj, connectedParts, joints);
+    }
+    return std::ranges::any_of(connectedParts, [canonicalObj](const ObjRef& r) {
+        return r.obj == canonicalObj;
+    });
+}
+
 bool AssemblyObject::isPartConnected(App::DocumentObject* obj, bool verboseLog)
 {
     if (!obj) {
         return false;
     }
+    ScopedIdentityGraph graphScope(this, scopedGraph);
 
     // FCPROJECT-PATCH (Befund 3, "Adressieren statt Kopieren", solver-root-cause-fix, 2026-09-03,
     // live durch Nutzer-Maus-Drag aufgedeckt): dieselbe Identitaetsraum-Luecke wie in
@@ -2822,6 +3421,12 @@ std::string AssemblyObject::verifyIdentityGraphAgainstAsmt()
 {
     IdentityGraph graph(this);
     return graph.verifyAgainstAsmt();
+}
+
+std::vector<std::string> AssemblyObject::verifyIdentityGraphHandleConsistency()
+{
+    IdentityGraph graph(this);
+    return graph.verifyHandleConsistency();
 }
 
 // FCPROJECT-PATCH (Fix-Ansatz D, "flexible Unterbaugruppe als Ganzes ziehbar, wenn unverbunden",
@@ -3207,6 +3812,11 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(
                     minEnabled = maxEnabled;
                     maxEnabled = pMaxEnabled->getValue();
                 }
+                if (minEnabled || maxEnabled) {
+                    activeLimits.push_back(
+                        {joint, nestingPrefix, false, minEnabled, maxEnabled, minLength, maxLength}
+                    );
+                }
 
                 if (minEnabled) {
                     auto limit = ASMTTranslationLimit::With();
@@ -3258,6 +3868,11 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(
                     minEnabled = maxEnabled;
                     maxEnabled = pMaxEnabled->getValue();
                 }
+                if (minEnabled || maxEnabled) {
+                    activeLimits.push_back(
+                        {joint, nestingPrefix, true, minEnabled, maxEnabled, minAngle, maxAngle}
+                    );
+                }
 
                 if (minEnabled) {
                     auto limit = ASMTRotationLimit::With();
@@ -3285,10 +3900,26 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(
     }
     std::vector<App::DocumentObject*> done;
 
+    // FCPROJECT-PATCH (2026-10-10, Plan plans/2026-10-10-simulation-an-struktur-anpassen.md,
+    // Schritt 1): "initialValue" ist der AKTUELLE Gelenkwert in DIESEM Kontext. Bisher kam er aus
+    // getJointCurrentValue(), das ueber getGlobalPlacement(nullptr, ref) die ORIGINALE im
+    // Dokument des Gelenks misst - im Kontext einer aeusseren BG gilt aber der Stand der Spiegel
+    // (Regel C2). Folge war ein Sprung beim ersten Simulationsbild (BG43: -30 Grad). Jetzt wie
+    // handleOneSideOfJoint() den Marker relativ zum Teil bestimmen und mit der Startlage des
+    // MbD-Koerpers (Instanz samt Container-Kette, offsetPlc) in die Welt bringen.
+    auto jcsInContext = [&](const char* refName,
+                            const char* plcName) -> std::optional<Base::Placement> {
+        return getJcsInContext(joint, refName, plcName, nestingPrefix);
+    };
+
     auto replaceInitialValue =
-        [](std::string& form, App::DocumentObject* jnt, const std::string& mType) {
+        [&jcsInContext](std::string& form, App::DocumentObject* jnt, const std::string& mType) {
             if (form.find("initialValue") != std::string::npos) {
-                double val = getJointCurrentValue(jnt, mType == "Angular");
+                const bool isAngle = mType == "Angular";
+                const auto jcs1 = jcsInContext("Reference1", "Placement1");
+                const auto jcs2 = jcsInContext("Reference2", "Placement2");
+                double val = (jcs1 && jcs2) ? getJointValueFromJcs(*jcs1, *jcs2, isAngle)
+                                            : getJointCurrentValue(jnt, isAngle);
 
                 std::ostringstream out;
                 out.precision(10);
@@ -3313,7 +3944,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(
             continue;
         }
         App::DocumentObject* motionJoint = pJoint->getValue();
-        if (joint != motionJoint) {
+        if (joint != motionJoint || !motionMatchesJointInstance(pJoint, nestingPrefix)) {
             continue;
         }
 
@@ -3338,7 +3969,8 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(
                 continue;
             }
             motionJoint = pJoint->getValue();
-            if (joint != motionJoint || motion2 == motion) {
+            if (joint != motionJoint || motion2 == motion
+                || !motionMatchesJointInstance(pJoint, nestingPrefix)) {
                 continue;
             }
 
@@ -3431,10 +4063,38 @@ std::string AssemblyObject::handleOneSideOfJoint(
     // This plc adjustment should be necessary only if obj != part. But for some objects like
     // draft links, we can have obj == part and still need to get global placement to adjust
     // by the element placement.
-    Base::Placement obj_global_plc = getGlobalPlacement(nullptr, ref);
+    Base::Placement obj_global_plc = getJcsReferenceGlobalPlacement(ref);
     plc = obj_global_plc * plc;
     // Note part is supposed to be root of ref, so we could use part.Placement directly.
-    Base::Placement part_global_plc = getGlobalPlacement(part, ref);
+    // FCPROJECT-PATCH (2026-10-11, live an BG22 gefunden: BG75 mit starrem Motor 067 flexibel
+    // eingebaut, Marker des Joints Motor<->Buchse 6mm/70 Grad daneben): bei einem verschachtelten
+    // Joint ist part der Solver-Koerper in DIESEM Dokument (z.B. BG22s Spiegel 067_001), der
+    // Referenzpfad des Joints liegt aber im Dokument des Joints (BG75s 067 -> 054). part kommt
+    // darauf nicht vor; getPlacementOf() laeuft dann bis zum Ende des Pfads, und der Marker wird
+    // relativ zum referenzierten Teil (Rotor 054) statt zum starren Koerper (067) gesetzt.
+    // Bezugsrahmen ist deshalb das Gegenstueck von part auf dem Pfad: das Objekt mit derselben
+    // Identitaet (AssemblyLink: dieselbe verlinkte Baugruppe, sonst dasselbe verlinkte Objekt).
+    App::DocumentObject* placementTarget = part;
+    if (App::DocumentObject* refRoot = ref->getValue(); refRoot && !ref->getSubValues().empty()) {
+        const std::vector<App::DocumentObject*> refPath
+            = refRoot->getSubObjectList(ref->getSubValues()[0].c_str());
+        if (std::find(refPath.begin(), refPath.end(), part) == refPath.end()) {
+            auto identityOf = [](App::DocumentObject* o) -> App::DocumentObject* {
+                if (auto* asmLink = freecad_cast<AssemblyLink*>(o)) {
+                    return asmLink->getLinkedAssembly();
+                }
+                return o->getLinkedObject(true);
+            };
+            App::DocumentObject* partIdentity = identityOf(part);
+            for (auto* pathObj : refPath) {
+                if (pathObj && partIdentity && identityOf(pathObj) == partIdentity) {
+                    placementTarget = pathObj;
+                    break;
+                }
+            }
+        }
+    }
+    Base::Placement part_global_plc = getGlobalPlacement(placementTarget, ref);
     plc = part_global_plc.inverse() * plc;
 
     // check if we need to add an offset in case of bundled parts.
@@ -3842,7 +4502,8 @@ App::DocumentObject* AssemblyObject::canonicalizeForMbD(App::DocumentObject* obj
     if (!obj) {
         return obj;
     }
-    IdentityGraph graph(this);
+    std::optional<IdentityGraph> ownGraph;
+    IdentityGraph& graph = scopedGraph ? *scopedGraph : ownGraph.emplace(this);
     IdentityHandle handle = graph.resolveObject(obj);
     App::DocumentObject* materialized = materializeForObjectPartMap(graph, handle);
     return materialized ? materialized : obj;
@@ -3875,7 +4536,8 @@ App::DocumentObject* AssemblyObject::resolvePartForMbD(
     const std::string& nestingPrefix
 )
 {
-    IdentityGraph graph(this);
+    std::optional<IdentityGraph> ownGraph;
+    IdentityGraph& graph = scopedGraph ? *scopedGraph : ownGraph.emplace(this);
     IdentityHandle handle = graph.resolveJointRef(joint, propRefName, nestingPrefix);
     if (handle.templateObj) {
         return materializeForObjectPartMap(graph, handle);
@@ -4027,7 +4689,8 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
     // AssemblyIdentityGraph.cpp).
     Base::Placement containerChainPlc;
     if (alreadyResolved) {
-        IdentityGraph graph(this);
+        std::optional<IdentityGraph> ownGraph;
+        IdentityGraph& graph = scopedGraph ? *scopedGraph : ownGraph.emplace(this);
         containerChainPlc = graph.containerChainPlacement(part);
     }
     Base::Placement localPlc = getPlacementFromProp(part, "Placement");
@@ -4080,51 +4743,17 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
                         continue;
                     }
 
-                    // FCPROJECT-PATCH (2026-09-20, live am echten BG22-Projekt gefunden: "Slider
-                    // auf Slider fixiert" - eine Schiene komplett unbeweglich, die andere frei im
-                    // Raum schwebend): eine erste Fassung dieses Fixes prüfte NUR, ob 'partToAdd'
-                    // irgendein anderes, nicht-starres Gelenk hat - das erwies sich beim
-                    // doppelt-verschachtelten Repro (Assembly_top.FCStd, siehe
-                    // standalone-check/diagnose-two-sliders-fixed/double_nested_bug/) als zu
-                    // grob: JEDE Fuehrung (Schiene) hat per Konstruktion ein Slider-Gelenk zu
-                    // ihrem eigenen freien Ende (Halterbaugruppe Slot 2) - mit der ersten Fassung
-                    // wurde deshalb auch die bisher korrekt gebuendelte Kette
-                    // Rahmen-Fixed-Halterbaugruppe(Slot1)-Fixed-Fuehrung nicht mehr gebuendelt
-                    // (debugCheckBundled(Halter,Fuehrung) lieferte faelschlich 0), obwohl das
-                    // physikalisch unproblematisch ist: Fuehrung selbst braucht keinen eigenen
-                    // Freiheitsgrad, nur ihr Slider-Partner (Halterbaugruppe Slot 2) - und der
-                    // wird ueber addConnectedFixedParts() ohnehin NIE mit hereingezogen (die
-                    // Rekursion folgt ausschliesslich Fixed-Gelenken).
-                    //
-                    // Der eigentliche Gefahrenfall (Halterbaugruppe003<->005) ist NICHT "partToAdd
-                    // hat irgendein anderes Gelenk", sondern: BEIDE Seiten dieses EINEN
-                    // Fixed-Gelenks sind UNABHAENGIG VONEINANDER bereits die freie
-                    // Bewegungsseite eines EIGENEN, JEWEILS ANDEREN nicht-starren Gelenks (hier:
-                    // Halterbaugruppe003 gleitet auf Fuehrung331, Halterbaugruppe005 unabhaengig
-                    // davon auf Fuehrung332) - erst DAS zwaenge den gebuendelten Koerper, zwei
-                    // widerspruechliche Gleitachsen relativ zu zwei verschiedenen, unabhaengig
-                    // geerdeten Bezugskoerpern gleichzeitig einzuhalten. Hat dagegen nur EINE
-                    // Seite ein solches Gelenk (Fuehrung/Halter001-Fall: nur Fuehrung hat eines,
-                    // Halter selbst keins), bleibt die gebuendelte Gruppe weiterhin
-                    // freiheitsgradlos, und das eine externe Gelenk wirkt einfach normal gegen
-                    // den (jetzt groesseren) starren Koerper - unproblematisch. Fix: nur dann
-                    // NICHT buendeln, wenn SOWOHL 'currentPart' ALS AUCH 'partToAdd' (jeweils
-                    // ueber ein ANDERES als das hier betrachtete Gelenk) ein nicht-starres Gelenk
-                    // haben.
-                    auto hasOtherNonFixedJoint = [&](App::DocumentObject* p) {
-                        for (auto& otherJr : getJointsOfPart(p)) {
-                            if (otherJr.joint == joint) {
-                                continue;
-                            }
-                            if (getJointType(otherJr.joint) != JointType::Fixed) {
-                                return true;
-                            }
-                        }
-                        return false;
-                    };
-                    if (hasOtherNonFixedJoint(currentPart) && hasOtherNonFixedJoint(partToAdd)) {
-                        continue;
-                    }
+                    // FCPROJECT-PATCH (2026-10-11, BG75 "Halteplatte wird mitgezogen"): die hier
+                    // bis dahin stehende Ausnahme (2026-09-20, 4299590bf8) - "nicht buendeln, wenn
+                    // BEIDE Seiten noch ein eigenes nicht-starres Gelenk haben" - ist entfernt. Ein
+                    // Fixed-Gelenk macht beide Teile ohnehin zu EINEM starren Koerper; das Buendeln
+                    // aendert die Kinematik nicht, es macht sie nur robust. Die Ausnahme liess
+                    // dagegen in BG75 die Halteplatte (Fixed am geerdeten Motor, Slider zur Scheibe)
+                    // als eigenen Koerper stehen, der beim Ziehen der Scheibe bis an deren Anschlag
+                    // nachgab (Joint003 um 12.8mm verletzt). Der damalige BG22-Fall (zwei fest
+                    // verbundene Halterbaugruppen auf verschiedenen Schienen) war seither durch die
+                    // Identitaets-/Drag-Fixes behoben; per Drag-Rundumtest ueber BG75/25/32/37/43/22
+                    // ohne die Ausnahme nachgeprueft.
 
                     // FCPROJECT-PATCH (2026-09-20, "BG25 Slider-Drag Achse verschoben,
                     // Teil 2" - siehe todo-bg25-slider-drag-two-instances): 'partToAdd' kann,
@@ -4142,7 +4771,8 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
                     // oben): graph.containerChainPlacement() statt der rein lokalen
                     // findLocalGroupPath()-Suche - tiefengenerell durch beliebig viele echte
                     // Dokumentgrenzen.
-                    IdentityGraph graph(this);
+                    std::optional<IdentityGraph> ownGraph;
+                    IdentityGraph& graph = scopedGraph ? *scopedGraph : ownGraph.emplace(this);
                     Base::Placement partToAddContainerChainPlc = graph.containerChainPlacement(partToAdd);
                     Base::Placement plciLocal = getPlacementFromProp(partToAdd, "Placement");
                     Base::Placement plci = partToAddContainerChainPlc.isIdentity()
@@ -4225,7 +4855,8 @@ std::shared_ptr<ASMTMarker> AssemblyObject::makeMbdMarker(std::string& name, Bas
 
 std::vector<ObjRef> AssemblyObject::getDownstreamParts(
     App::DocumentObject* part,
-    App::DocumentObject* joint
+    App::DocumentObject* joint,
+    const std::vector<App::DocumentObject*>& alsoIgnore
 )
 {
     if (!part) {
@@ -4250,12 +4881,31 @@ std::vector<ObjRef> AssemblyObject::getDownstreamParts(
         canonicalPart = part;
     }
 
+    // FCPROJECT-PATCH (2026-10-10, Regel C3 "Erdung ist Kontext-Eigenschaft"): die Erdung VOR dem
+    // Deaktivieren des Joints bestimmen. Danach berechnet, fiel eine flexible Unterbaugruppe, die
+    // nur ueber diesen Joint mit der aeusseren Erdung verbunden ist, auf ihre EIGENE Erdung zurueck
+    // (getGroundedParts(): unverbundene Unter-BG behaelt ihren Anker) und galt damit als
+    // "verbunden" - Beispiel BG43: Rotor drehen, Buchse/Gewindestange (BG47 mit eigener Erdung)
+    // wurden nicht als mitzuziehend erkannt. Gleiches Prinzip wie isPartConnectedExcluding().
+    const auto contextGroundedObjs = getGroundedParts();
+
     // First we deactivate the joint
     bool state = false;
     if (joint) {
         state = getJointActivated(joint);
         setJointActivated(joint, false);
     }
+    std::vector<std::pair<App::DocumentObject*, bool>> alsoIgnoreStates;
+    for (auto* ignored : alsoIgnore) {
+        if (ignored && ignored != joint) {
+            alsoIgnoreStates.emplace_back(ignored, getJointActivated(ignored));
+            setJointActivated(ignored, false);
+        }
+    }
+
+    // FCPROJECT-PATCH (2026-10-10, Drag-Start-Latenz): ein gemeinsamer IdentityGraph fuer alle
+    // Aufloesungen unten (erst NACH dem Deaktivieren des Joints angelegt).
+    ScopedIdentityGraph graphScope(this, scopedGraph);
 
     // FCPROJECT-PATCH (Mehrfachinstanz-Fix): direkt der
     // JointRef-Vektor statt extractJointObjects() - siehe isPartConnected() fuer die Begruendung.
@@ -4264,13 +4914,37 @@ std::vector<ObjRef> AssemblyObject::getDownstreamParts(
     std::vector<ObjRef> connectedParts = {{canonicalPart, nullptr}};
     traverseAndMarkConnectedParts(canonicalPart, connectedParts, joints);
 
+    // FCPROJECT-PATCH (2026-10-10, Drag-Start-Latenz): vorher isPartConnected() je gefundenem
+    // Teil - jedes Mal eine komplette Suche ab Erdung (plus getGroundedParts()/getJoints()).
+    // Dieselbe Suche jetzt EINMAL, danach nur nachschlagen; Ergebnis identisch, da
+    // isPartConnected() genau diese Erdung, diese Joints und diese Traversierung verwendet.
+    std::vector<ObjRef> groundConnected;
+    {
+        std::unordered_set<App::DocumentObject*> canonicalGrounded;
+        for (auto* groundedObj : contextGroundedObjs) {
+            if (auto* canonical = canonicalizeForMbD(groundedObj)) {
+                canonicalGrounded.insert(canonical);
+            }
+        }
+        for (auto* groundedObj : canonicalGrounded) {
+            groundConnected.push_back({groundedObj, nullptr});
+        }
+        for (auto* groundedObj : canonicalGrounded) {
+            traverseAndMarkConnectedParts(groundedObj, groundConnected, joints);
+        }
+    }
+
     std::vector<ObjRef> downstreamParts;
     for (auto& parti : connectedParts) {
-        if (!isPartConnected(parti.obj) && (parti.obj != canonicalPart)) {
+        if (parti.obj != canonicalPart
+            && !isObjInSetOfObjRefs(canonicalizeForMbD(parti.obj), groundConnected)) {
             downstreamParts.push_back(parti);
         }
     }
 
+    for (const auto& [ignored, ignoredState] : alsoIgnoreStates) {
+        setJointActivated(ignored, ignoredState);
+    }
     if (joint) {
         setJointActivated(joint, state);
     }
@@ -4288,13 +4962,8 @@ std::vector<ObjRef> AssemblyObject::getDownstreamParts(
 // weiterverwendet wird (ViewProviderAssembly.cpp liest direkt dessen Placement-Property) - nicht
 // als Solver-Identitaet.
 //
-// Bewusst nestingPrefix="" (unveraendert gegenueber dem Altverhalten): getJointOfPartConnectingToGround()
-// gibt das nestingPrefix eines ueber subJoints() erreichten Joints nicht an den Aufrufer zurueck
-// (nur 'joint'+'name') - ein gefundener, tief verschachtelter Joint wuerde deshalb schon vor
-// diesem Umbau mit dem falschen (leeren) Kontext weiterverarbeitet. Das ist eine eigene,
-// vorbestehende Luecke (Signaturerweiterung noetig, betrifft auch ViewProviderAssembly.cpp's
-// eigenen getJointOfPartConnectingToGround()-Aufruf) - bewusst NICHT Teil dieser isolierten,
-// risikoarmen Phase, siehe Projekt-Memory fuer den Stand.
+// Seit 2026-10-04 mit dem Verschachtelungspfad des gefundenen Joints (frueher bewusst leer, siehe
+// Kommentar im Funktionsrumpf) - getJointOfPartConnectingToGround() gibt ihn dafuer zurueck.
 App::DocumentObject* AssemblyObject::getUpstreamMovingPart(
     App::DocumentObject* part,
     App::DocumentObject*& joint,
@@ -4302,25 +4971,144 @@ App::DocumentObject* AssemblyObject::getUpstreamMovingPart(
     std::vector<App::DocumentObject*> excludeJoints
 )
 {
+    // FCPROJECT-PATCH (2026-10-10, Drag-Start-Latenz): ein gemeinsamer IdentityGraph fuer die
+    // ganze (rekursive) Suche entlang der Fixed-Kette.
+    ScopedIdentityGraph graphScope(this, scopedGraph);
+
     if (!part || isPartGrounded(part)) {
         return nullptr;
     }
 
     excludeJoints.push_back(joint);
 
-    joint = getJointOfPartConnectingToGround(part, name, excludeJoints);
+    std::string nestingPrefix;
+    joint = getJointOfPartConnectingToGround(part, name, excludeJoints, &nestingPrefix);
     JointType jointType = getJointType(joint);
     if (jointType != JointType::Fixed) {
         return part;
     }
 
+    // FCPROJECT-PATCH (2026-10-04, "Traeger reisst beim Ziehen aus BG37 heraus"): die andere Seite
+    // mit dem Verschachtelungspfad DIESES Joints aufloesen (bisher bewusst leer) - ein Fixed-Joint
+    // INNERHALB einer flexiblen Unterbaugruppe (z.B. BG37: Traeger <-> LM10UU) wurde sonst ohne
+    // Pfad falsch aufgeloest, die Fixed-Kette brach ab, findDragMode() fand keinen beweglichen Joint
+    // und das Teil liess sich frei aus der Unterbaugruppe ziehen. resolvePartForMbD() liefert, wie
+    // beim Solver, die Instanz in diesem Kontext.
     const char* otherProp = (name == "Reference1") ? "Reference2" : "Reference1";
-    IdentityGraph graph(this);
-    IdentityHandle handle = graph.resolveJointRef(joint, otherProp, std::string());
-    part = handle.templateObj ? graph.materialize(graph.resolveForUi(handle))
-                               : getMovingPartFromRef(joint, otherProp);
+    App::DocumentObject* other = resolvePartForMbD(joint, otherProp, nestingPrefix);
+    part = other ? other : getMovingPartFromRef(joint, otherProp);
 
     return getUpstreamMovingPart(part, joint, name);
+}
+
+// FCPROJECT-PATCH (2026-10-11/12, live an BG22 gefunden): welches Gelenk bestimmt die Zieh-Art,
+// wenn ein Teil ueber MEHRERE Gelenke mit Masse verbunden ist? getJointOfPartConnectingToGround()
+// liefert das erste - das passte zweimal nicht:
+//   - Halteplatte (BG75): erstes Gelenk Distance zum Rahmen (kein Zieh-Modus, nur freies
+//     Verschieben); die Drehung um die Gewindestange gibt die Zylinderfuehrung vor, ueber Fixed.
+//   - Traeger (BG37): erstes Gelenk die Zylinderfuehrung zur BG75-Stange (Verschieben UND
+//     Drehen); der Slider an der Fuehrung (ueber Fixed) sperrt aber jede Drehung. Die Maus gab
+//     trotzdem Drehziele vor, ab 90 Grad sprang der Traeger auf die zweite Slider-Loesung (180
+//     Grad um die eigene Achse, #32477).
+// Regel: das Teil muss ALLE seine Verbindungen zur Masse erfuellen; am naechsten an seiner
+// tatsaechlichen Bewegung ist das Bewegungsgelenk mit den WENIGSTEN Freiheitsgraden. Fixed wird
+// dabei ueber die starre Kette verfolgt (gleiche Regel auf jeder Ebene). Gleichstand: das zuerst
+// gefundene (bisheriges Verhalten). Alle uebrigen gefundenen Verbindungen liefert bypassed - sie
+// zaehlen beim Bestimmen der mitbewegten Teile nicht als Erdung (getDownstreamParts()).
+namespace
+{
+int dragDegreesOfFreedom(JointType type)
+{
+    switch (type) {
+        case JointType::Revolute:
+        case JointType::Slider:
+            return 1;
+        case JointType::Cylindrical:
+            return 2;
+        case JointType::Ball:
+            return 3;
+        default:
+            return 6;  // kein eigener Zieh-Modus (Distance, Parallel, ...)
+    }
+}
+}  // namespace
+
+AssemblyObject::DragChoice AssemblyObject::findDragChoice(
+    App::DocumentObject* part,
+    const std::vector<App::DocumentObject*>& excludeJoints,
+    std::set<App::DocumentObject*>& visited,
+    std::vector<App::DocumentObject*>& found
+)
+{
+    DragChoice best;
+    if (!part || isPartGrounded(part) || !visited.insert(part).second) {
+        return best;
+    }
+
+    std::vector<App::DocumentObject*> exclude = excludeJoints;
+    constexpr int maxJointsPerPart = 64;
+    for (int i = 0; i < maxJointsPerPart; ++i) {
+        std::string name;
+        std::string nestingPrefix;
+        App::DocumentObject* joint = getJointOfPartConnectingToGround(part, name, exclude, &nestingPrefix);
+        if (!joint) {
+            break;
+        }
+        exclude.push_back(joint);
+        found.push_back(joint);
+
+        DragChoice candidate;
+        if (getJointType(joint) == JointType::Fixed) {
+            const char* otherProp = (name == "Reference1") ? "Reference2" : "Reference1";
+            App::DocumentObject* other = resolvePartForMbD(joint, otherProp, nestingPrefix);
+            if (!other) {
+                other = getMovingPartFromRef(joint, otherProp);
+            }
+            candidate = findDragChoice(other, {joint}, visited, found);
+            if (candidate.joint) {
+                candidate.chain.insert(candidate.chain.begin(), joint);
+            }
+        }
+        else {
+            candidate.part = part;
+            candidate.joint = joint;
+            candidate.name = name;
+            candidate.dof = dragDegreesOfFreedom(getJointType(joint));
+            candidate.chain = {joint};
+        }
+        if (candidate.joint && candidate.dof < best.dof) {
+            best = std::move(candidate);
+        }
+    }
+    return best;
+}
+
+App::DocumentObject* AssemblyObject::getDragJointOfPart(
+    App::DocumentObject* part,
+    App::DocumentObject*& joint,
+    std::string& name,
+    std::vector<App::DocumentObject*>& bypassed
+)
+{
+    joint = nullptr;
+    bypassed.clear();
+    ScopedIdentityGraph graphScope(this, scopedGraph);
+
+    std::set<App::DocumentObject*> visited;
+    std::vector<App::DocumentObject*> found;
+    DragChoice best = findDragChoice(part, {}, visited, found);
+    if (!best.joint) {
+        return nullptr;
+    }
+    for (auto* j : found) {
+        if (std::find(best.chain.begin(), best.chain.end(), j) == best.chain.end()
+            && std::find(bypassed.begin(), bypassed.end(), j) == bypassed.end()) {
+            bypassed.push_back(j);
+        }
+    }
+    joint = best.joint;
+    name = best.name;
+    return best.part;
 }
 
 double AssemblyObject::getObjMass(App::DocumentObject* obj)
@@ -4344,18 +5132,19 @@ void AssemblyObject::setObjMasses(std::vector<std::pair<App::DocumentObject*, do
 
 std::vector<AssemblyLink*> AssemblyObject::getSubAssemblies() const
 {
-    std::vector<AssemblyLink*> subAssemblies = {};
-
-    App::Document* doc = getDocument();
-
-    std::vector<DocumentObject*> assemblies = doc->getObjectsOfType(
-        Assembly::AssemblyLink::getClassTypeId()
-    );
-    for (auto assembly : assemblies) {
-        if (hasObject(assembly)) {
-            subAssemblies.push_back(freecad_cast<AssemblyLink*>(assembly));
+    // FCPROJECT-PATCH (2026-10-09, BG22-Leistung, gdb-Stichproben): vorher durchsuchte jeder
+    // Aufruf das ganze Dokument (getObjectsOfType) und pruefte je Treffer per hasObject() die
+    // Group - im Overlay-/IdentityGraph-Pfad tausendfach pro Baum-Aktualisierung. Jetzt direkt
+    // ueber die eigene Group. Reihenfolge wie bisher die Dokument-Reihenfolge (getObjectsOfType
+    // liefert in Anlege-Reihenfolge, getID() steigt mit jedem angelegten Objekt), weil
+    // Aufrufer wie getGroundedParts() bei Konflikten die "erste" Unterbaugruppe waehlen.
+    std::vector<AssemblyLink*> subAssemblies;
+    for (auto* obj : Group.getValues()) {
+        if (auto* asmLink = freecad_cast<AssemblyLink*>(obj)) {
+            subAssemblies.push_back(asmLink);
         }
     }
+    std::ranges::sort(subAssemblies, {}, [](const AssemblyLink* l) { return l->getID(); });
 
     return subAssemblies;
 }
@@ -4528,170 +5317,13 @@ void AssemblyObject::syncGroundedJoints()
         collectGroundedPartsRecursive(nested, groundedAnywhere);
     }
 
-    // FCPROJECT-PATCH (2026-09-29, live an BG37->BG43->BG67 gefunden, Nutzerauftrag "mit System,
-    // nicht nur fuer diese Baugruppe"): generelle Erkennung "mehrere unabhaengige Erdungswurzeln
-    // landen im selben Zusammenhangskomponenten" - ersetzt den bisherigen, auf den Sonderfall
-    // "identisches physisches Ziel doppelt geerdet" beschraenkten Block (2026-09-28-Fund).
-    //
-    // Zwei strukturell verschiedene Ausloeser, EINE gemeinsame Erkennung:
-    // (a) Dasselbe physische Teil ist sowohl LOKAL (an dieser Ebene) als auch VERSCHACHTELT
-    //     geerdet - typischerweise ein Nebenprodukt von CommandInsertLink.py::
-    //     handleFirstInsertion()s "ground first part"-Komfortlogik beim ersten Einfuegen einer
-    //     flexiblen Unterbaugruppe (legt eine lokale Erdung auf dem Spiegel des ohnehin schon
-    //     intern geerdeten Ziels an). Hier ist die INNERE (tiefer verschachtelte, urspruenglich
-    //     vom Nutzer/Insert-Mechanismus gesetzte) Erdung die massgebliche - die AEUSSERE, spaeter
-    //     hinzugekommene lokale Kopie ist die ueberzaehlige.
-    // (b) ZWEI VERSCHIEDENE physische Teile sind je EIGENSTAENDIG geerdet (z.B. ein Motorgehaeuse
-    //     innerhalb einer eigens testbaren Unterbaugruppe UND der Maschinenrahmen einer
-    //     uebergeordneten Baugruppe), werden aber durch einen ECHTEN Joint (z.B. eine
-    //     Motor-Rahmen-Verschraubung) nachtraeglich zu EINEM zusammenhaengenden Mechanismus
-    //     verbunden. Live gefunden: BG67s eigene interne Erdung von 048 (Motor-Stator) UND BG37s
-    //     eigene Erdung von 036 (Rahmen), verbunden ueber einen neu hinzugefuegten Fixed-Joint -
-    //     exakt die Topologie aus reference-closed-loop-rotation-ambiguity-32477-addendum.md
-    //     (zwei unabhaengig verankerte Strukturen + Kreuz-Fixed-Joint = nachweislich instabile
-    //     Solver-Wurzelwahl, dort bereits als Bugreport-Addendum eingereicht). Hier ist die
-    //     AEUSSERE (der eigentlichen "Welt" naeherstehende, z.B. der reale Maschinenrahmen)
-    //     Erdung die massgebliche - die TIEFER verschachtelte, urspruenglich nur fuer isolierte
-    //     Tests der Unterbaugruppe gedachte Erdung wird durch die echte externe Befestigung
-    //     ueberfluessig.
-    //
-    // Die Tie-Break-Regel ist deshalb BEWUSST gegensaetzlich zu (a) und (b): bei identischem Ziel
-    // gewinnt die TIEFERE Erdung, bei verschiedenen ueber einen echten Joint verbundenen Zielen
-    // gewinnt die FLACHERE (aeussere) Erdung. Unterscheidbar rein an der Graphtopologie (gleiches
-    // Ziel vs. verschiedene, ueber echte Joints verbundene Ziele) - kein Spezialfall fuer
-    // bestimmte Objektnamen oder Baugruppen.
-    //
-    // WICHTIG (Nutzerauftrag): nie loeschen, nur ueber die vorhandene Suppressed-Eigenschaft
-    // abschalten - der Nutzer moechte eine ueberzaehlige Erdung jederzeit wieder aktivieren
-    // koennen, z.B. wenn eine Unterbaugruppe spaeter wieder eigenstaendig getestet wird.
-    std::vector<GroundedRootInfo> allRoots;
-    for (auto& [target, joint] : groundedMap) {
-        if (target) {
-            allRoots.push_back({target, joint, 0});
-        }
-    }
-    for (auto* subAssembly : getSubAssemblies()) {
-        if (!subAssembly || subAssembly->isRigid()) {
-            continue;
-        }
-        AssemblyObject* nested = subAssembly->getLinkedAssembly();
-        if (!nested || nested == this) {
-            continue;
-        }
-        collectGroundedJointsRecursive(nested, allRoots, 1);
-    }
-
-    if (allRoots.size() > 1) {
-        std::vector<JointRef> allJoints = getJoints();
-        std::vector<bool> visited(allRoots.size(), false);
-        for (std::size_t i = 0; i < allRoots.size(); ++i) {
-            if (visited[i] || !allRoots[i].target) {
-                continue;
-            }
-            App::DocumentObject* canonicalI = canonicalizeForMbD(allRoots[i].target);
-            if (!canonicalI) {
-                canonicalI = allRoots[i].target;
-            }
-            std::vector<ObjRef> reachable = {{canonicalI, nullptr}};
-            traverseAndMarkConnectedParts(canonicalI, reachable, allJoints);
-
-            std::vector<std::size_t> cluster;
-            bool sameTargetOnly = true;
-            for (std::size_t j = 0; j < allRoots.size(); ++j) {
-                if (visited[j] || !allRoots[j].target) {
-                    continue;
-                }
-                App::DocumentObject* canonicalJ = canonicalizeForMbD(allRoots[j].target);
-                if (!canonicalJ) {
-                    canonicalJ = allRoots[j].target;
-                }
-                if (canonicalJ == canonicalI || isObjInSetOfObjRefs(canonicalJ, reachable)) {
-                    cluster.push_back(j);
-                    visited[j] = true;
-                    if (canonicalJ != canonicalI) {
-                        sameTargetOnly = false;
-                    }
-                }
-            }
-            if (cluster.size() <= 1) {
-                continue;
-            }
-
-            // Tie-break: identisches Ziel -> tiefste Erdung gewinnt; verschiedene, ueber echte
-            // Joints verbundene Ziele -> flachste (aeusserste) Erdung gewinnt.
-            std::size_t keepIdx = cluster[0];
-            for (std::size_t idx : cluster) {
-                bool better = sameTargetOnly ? (allRoots[idx].depth > allRoots[keepIdx].depth)
-                                              : (allRoots[idx].depth < allRoots[keepIdx].depth);
-                if (better) {
-                    keepIdx = idx;
-                }
-            }
-            for (std::size_t idx : cluster) {
-                if (idx == keepIdx) {
-                    continue;
-                }
-                App::DocumentObject* redundantJoint = allRoots[idx].joint;
-                App::DocumentObject* redundantTarget = allRoots[idx].target;
-                if (!redundantJoint || !redundantTarget) {
-                    continue;
-                }
-                // FCPROJECT-PATCH (2026-09-29): GroundedJoint (JointObject.py) hat KEINE
-                // "Suppressed"-Eigenschaft (nur normale Joints) - getJointActivated()/
-                // setJointActivated() greifen hier ins Leere. Der tatsaechliche "Erdungs-Effekt"
-                // ist stattdessen die ReadOnly-Sperre auf ObjectToGround's Placement/LinkPlacement
-                // (siehe JointObject.py GroundedJoint.setReadOnly()) - "abschalten" heisst daher
-                // hier: ueber denselben Proxy-Code-Pfad die Sperre aufheben (Ziel wieder
-                // beschreibbar machen), OHNE das GroundedJoint-Objekt selbst zu loeschen oder eine
-                // neue persistente Eigenschaft anzulegen (Nutzerregel: keine neuen persistenten
-                // Eigenschaften ohne Ruecksprache, siehe feedback-fcstd-compatibility-mandatory).
-                // Da diese Entscheidung bei JEDEM solve() aus der aktuellen Joint-Topologie neu
-                // hergeleitet wird (nicht persistiert), ist sie automatisch reversibel: entfaellt
-                // die aeussere Verbindung wieder, faellt auch die Abschaltung beim naechsten
-                // solve() weg und die bestehende "braucht dieses Teil eine neue Erdung"-Logik
-                // weiter unten uebernimmt wieder.
-                auto* targetPlc = redundantTarget->getPlacementProperty();
-                if (!targetPlc || !targetPlc->isReadOnly()) {
-                    continue;  // bereits abgeschaltet (oder nie aktiv)
-                }
-                Base::Console().warning(
-                    "Assembly: '{}' schaltet redundante Erdung '{}' (Ziel '{}') ab - {} bereits "
-                    "mit der massgeblichen Erdung '{}' (Ziel '{}') verbunden.\n",
-                    getFullName(),
-                    redundantJoint->getFullName(),
-                    redundantTarget->getFullName(),
-                    sameTargetOnly ? "dasselbe physische Teil ist" : "dieses Teil ist ueber einen echten Joint",
-                    allRoots[keepIdx].joint ? allRoots[keepIdx].joint->getFullName() : "?",
-                    allRoots[keepIdx].target->getFullName()
-                );
-
-                Base::PyGILStateLocker lock;
-                try {
-                    App::Document* jointDoc = redundantJoint->getDocument();
-                    if (jointDoc) {
-                        std::string jointDocName = jointDoc->getName();
-                        std::string jointName = redundantJoint->getNameInDocument();
-                        std::string code = "import FreeCAD\n"
-                                           "try:\n"
-                                           "    doc = FreeCAD.getDocument('"
-                            + jointDocName
-                            + "')\n"
-                              "    j = doc.getObject('"
-                            + jointName
-                            + "')\n"
-                              "    if j and hasattr(j, 'Proxy') and hasattr(j.Proxy, 'setReadOnly'):\n"
-                              "        j.Proxy.setReadOnly(j, False)\n"
-                              "except Exception as e:\n"
-                              "    FreeCAD.Console.PrintError(str(e) + '\\n')\n";
-                        Base::Interpreter().runString(code.c_str());
-                    }
-                }
-                catch (...) {
-                }
-                groundedMap.erase(redundantTarget);
-            }
-        }
-    }
+    // FCPROJECT-PATCH (2026-10-03, "Erdung ist Kontext-Eigenschaft", Plan
+    // plans/2026-10-03-erdung-als-kontext-eigenschaft.md): hier stand bis heute die
+    // "Doppel-Anker-Abschaltung" (2026-09-29), die ueberzaehlige verschachtelte Erdungen durch
+    // Loeschen des ReadOnly-Flags IM DOKUMENT DER UNTERBAUGRUPPE abschaltete - damit verlor die
+    // Unterbaugruppe auch fuer sich allein ihre Erdung. Ersetzt durch die seiteneffektfreie
+    // Cluster-Aufloesung in getGroundedParts(): keine Ebene veraendert mehr den Erdungszustand
+    // eines Objekts in einem fremden Dokument.
 
     std::vector<App::DocumentObject*> allParts = getAssemblyComponents(this);
 

@@ -777,6 +777,46 @@ void ViewProviderAssembly::doubleClickedIn3dView()
     }
 }
 
+namespace
+{
+// FCPROJECT-PATCH (2026-10-04, "BG37 per Maus nicht ziehbar", Plan
+// plans/2026-10-03-solver-nur-auf-spiegeln.md): getMovingPartFromSel() steigt bei einer flexiblen
+// Unterbaugruppe bis zum ORIGINAL im Unterdokument hinab. Seit dem Umbau "Solver nur auf Spiegeln"
+// ist der Solver-Koerper aber die INSTANZ in der aktiven Baugruppe (ihr Spiegel); das Original wurde
+// von canDragObjectIn3d() abgelehnt und duerfte von aussen ohnehin nicht bewegt werden. Deshalb den
+// Ziehkandidaten ueber den vollstaendigen Auswahlpfad auf die Instanz abbilden (IdentityGraph::
+// resolve() + instanceOf(), bei Duplikaten instanzgenau); ohne Instanz bleibt es beim Objekt selbst.
+App::DocumentObject* instanceForDrag(
+    AssemblyObject* assembly,
+    App::DocumentObject* selRoot,
+    const std::string& sub,
+    App::DocumentObject* candidate
+)
+{
+    if (!assembly || !selRoot || !candidate) {
+        return candidate;
+    }
+    Assembly::IdentityGraph graph(assembly);
+    Assembly::IdentityHandle handle = graph.resolve(selRoot, sub);
+    if (!handle.templateObj) {
+        return candidate;
+    }
+    App::DocumentObject* instance = graph.instanceOf(handle);
+    return instance ? instance : candidate;
+}
+
+// FCPROJECT-PATCH (2026-10-03): liegt 'obj' direkt in der Gruppe der aktiven Baugruppe? Nur dann
+// ist seine Placement Instanzzustand dieses Kontexts (Plan plans/2026-10-03-solver-nur-auf-spiegeln.md).
+bool isDirectAssemblyChild(const AssemblyObject* assembly, const App::DocumentObject* obj)
+{
+    if (!assembly || !obj) {
+        return false;
+    }
+    const auto group = assembly->Group.getValues();
+    return std::find(group.begin(), group.end(), obj) != group.end();
+}
+}  // namespace
+
 bool ViewProviderAssembly::canDragObjectIn3d(App::DocumentObject* obj) const
 {
     if (!obj) {
@@ -795,7 +835,12 @@ bool ViewProviderAssembly::canDragObjectIn3d(App::DocumentObject* obj) const
         // isSubAssemblyFullyUnconnected() statt isPartConnected(asmLink) direkt - ein Joint
         // referenziert nie den Container selbst, sondern immer ein Kind darin, siehe Deklaration
         // in AssemblyObject.h.
-        if (!asmLink->isRigid() && !assemblyPart->isSubAssemblyFullyUnconnected(asmLink)) {
+        // FCPROJECT-PATCH (2026-10-03, Plan plans/2026-10-03-solver-nur-auf-spiegeln.md): als
+        // Ganzes nur, wenn der Link DIREKT in der aktiven Baugruppe liegt (siehe
+        // getMovingPartFromSel() in AssemblyUtils.cpp fuer die Begruendung).
+        if (!asmLink->isRigid()
+            && (!isDirectAssemblyChild(assemblyPart, asmLink)
+                || !assemblyPart->isSubAssemblyFullyUnconnected(asmLink))) {
             return false;
         }
     }
@@ -908,7 +953,12 @@ bool ViewProviderAssembly::getSelectedObjectsWithinAssembly(bool addPreselection
         App::DocumentObject* selRoot = Gui::Selection().getPreselection().Object.getObject();
         std::string sub = Gui::Selection().getPreselection().pSubName;
 
-        App::DocumentObject* obj = getMovingPartFromSel(assemblyPart, selRoot, sub);
+        App::DocumentObject* obj = instanceForDrag(
+            assemblyPart,
+            selRoot,
+            sub,
+            getMovingPartFromSel(assemblyPart, selRoot, sub)
+        );
         if (canDragObjectIn3d(obj)) {
 
             bool alreadyIn = false;
@@ -959,8 +1009,12 @@ void ViewProviderAssembly::collectMovableObjects(
     // isSubAssemblyFullyUnconnected() statt isPartConnected(asmLink) direkt (2026-09-17) - ein
     // Joint referenziert nie den Container selbst, sondern immer ein Kind darin, siehe
     // Deklaration in AssemblyObject.h.
+    // FCPROJECT-PATCH (2026-10-03): ein verschachtelter (nicht direkt in der aktiven Baugruppe
+    // liegender) flexibler Container wird immer transparent durchlaufen, nie als Ganzes gezogen.
     auto* asmLink = dynamic_cast<Assembly::AssemblyLink*>(currentObject);
-    if (asmLink && !asmLink->isRigid() && !assemblyPart->isSubAssemblyFullyUnconnected(asmLink)) {
+    if (asmLink && !asmLink->isRigid()
+        && (!isDirectAssemblyChild(assemblyPart, asmLink)
+            || !assemblyPart->isSubAssemblyFullyUnconnected(asmLink))) {
         std::vector<App::DocumentObject*> children = asmLink->Group.getValues();
         for (auto* child : children) {
             // Recurse on children, appending the child's name to the subName prefix
@@ -990,7 +1044,12 @@ void ViewProviderAssembly::collectMovableObjects(
         return;
     }
 
-    App::DocumentObject* part = getMovingPartFromSel(assemblyPart, selRoot, subNamePrefix);
+    App::DocumentObject* part = instanceForDrag(
+        assemblyPart,
+        selRoot,
+        subNamePrefix,
+        getMovingPartFromSel(assemblyPart, selRoot, subNamePrefix)
+    );
 
     if (onlySolids && assemblyPart->isPartConnected(part)) {
         return;  // No dragger for connected parts.
@@ -1058,7 +1117,41 @@ ViewProviderAssembly::DragMode ViewProviderAssembly::findDragMode()
             addPartsToMove(connectedParts);
         }
 
+        // FCPROJECT-PATCH (2026-10-11/12, live an BG22 gefunden): ist das Teil ueber mehrere
+        // Gelenke mit Masse verbunden, bestimmt das Bewegungsgelenk mit den wenigsten
+        // Freiheitsgraden die Zieh-Art (AssemblyObject::getDragJointOfPart(), Fixed ueber die
+        // starre Kette verfolgt). Vorher galt das erste gefundene: die Halteplatte (Distance)
+        // liess sich nur frei verschieben, der Traeger (Zylinderfuehrung statt Slider) bekam
+        // Drehziele und sprang auf 180 Grad. Die uebrigen Verbindungen zur Masse zaehlen beim
+        // Bestimmen der mitbewegten Teile nicht als Erdung.
+        std::vector<App::DocumentObject*> bypassedJoints;
+        if (!ungroundedJointDrag) {
+            App::DocumentObject* dragJoint = nullptr;
+            std::string dragName;
+            auto* dragPart = assemblyPart->getDragJointOfPart(
+                docsToMove[0].obj,
+                dragJoint,
+                dragName,
+                bypassedJoints
+            );
+            auto* pPlc = dragPart ? dragPart->getPlacementProperty() : nullptr;
+            auto* ref = dragJoint
+                ? dynamic_cast<App::PropertyXLinkSub*>(dragJoint->getPropertyByName(dragName.c_str()))
+                : nullptr;
+            if (pPlc && ref && ref->getValue() && !ref->getSubValues().empty()) {
+                movingJoint = dragJoint;
+                pName = dragName;
+                if (dragPart != docsToMove[0].obj) {
+                    docsToMove.clear();
+                    docsToMove.emplace_back(dragPart, pPlc->getValue(), ref->getValue(), ref->getSubValues()[0]);
+                }
+            }
+            else {
+                bypassedJoints.clear();
+            }
+        }
         JointType jointType = getJointType(movingJoint);
+
         if (jointType == JointType::Fixed) {
             // If fixed joint we need to find the upstream joint to find move mode.
             // For example : Gnd -(revolute)- A -(fixed)- B : if user try to move B, then we should
@@ -1138,7 +1231,11 @@ ViewProviderAssembly::DragMode ViewProviderAssembly::findDragMode()
         if (!ungroundedJointDrag) {
             // Add downstream parts so that they move together
             std::vector<Assembly::ObjRef> downstreamParts
-                = assemblyPart->getDownstreamParts(docsToMove[0].obj, movingJoint);
+                = assemblyPart->getDownstreamParts(
+                    docsToMove[0].obj,
+                    movingJoint,
+                    bypassedJoints
+                );
             addPartsToMove(downstreamParts);
         }
 
@@ -2027,6 +2124,22 @@ Base::Vector3d ViewProviderAssembly::getCenterOfBoundingBox(const std::vector<Mo
     return center;
 }
 
+namespace
+{
+// FCPROJECT-PATCH (2026-10-03): Namen aus AssemblyObject::getLastRedundant() & Co. koennen fuer
+// Joints aus verschachtelten Dokumenten die Form "Dokument#Objekt" haben.
+App::DocumentObject* resolveAssemblyReportName(App::Document* doc, const std::string& name)
+{
+    auto hashPos = name.find('#');
+    if (hashPos == std::string::npos) {
+        return doc ? doc->getObject(name.c_str()) : nullptr;
+    }
+    auto* otherDoc = App::GetApplication().getDocument(name.substr(0, hashPos).c_str());
+    return otherDoc ? otherDoc->getObject(name.substr(hashPos + 1).c_str()) : nullptr;
+}
+
+}  // namespace
+
 inline QString objListHelper(const AssemblyObject* assembly, const std::vector<std::string>& names)
 {
     if (!assembly) {
@@ -2036,7 +2149,7 @@ inline QString objListHelper(const AssemblyObject* assembly, const std::vector<s
 
     std::vector<App::DocumentObject*> joints;
     for (const auto& name : names) {
-        if (auto* obj = doc->getObject(name.c_str())) {
+        if (auto* obj = resolveAssemblyReportName(doc, name)) {
             joints.push_back(obj);
         }
     }

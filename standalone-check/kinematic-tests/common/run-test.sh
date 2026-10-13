@@ -17,7 +17,7 @@
 #
 # Beispiel:
 #   ./common/run-test.sh /home/maxx/freecad-sandbox/install test_fixed_joint_flat/test_fixed_joint_flat.py
-#   ./common/run-test.sh /home/maxx/freecad-sandbox/install-clean-test test_fixed_joint_flat/test_fixed_joint_flat.py   # vanilla-Vergleich
+#   ./common/run-test.sh /home/maxx/freecad/App_weekly/freecad.App test_fixed_joint_flat/test_fixed_joint_flat.py   # vanilla-Vergleich (Weekly-AppImage)
 #
 # Exit-Code = Exit-Code des Testfall-Skripts (0 = PASS, sonst FAIL) - fuer Skript-Verkettung.
 
@@ -40,12 +40,23 @@ if [[ ! -f "$TEST_SCRIPT" ]]; then
     exit 2
 fi
 
-FC_BIN="${INSTALL_DIR}/bin/FreeCAD"
-if [[ ! -x "$FC_BIN" ]]; then
-    echo "FEHLER: keine FreeCAD-Gui-Binary unter ${FC_BIN}" >&2
-    exit 2
+# FCPROJECT-PATCH (2026-10-10, Nutzerauftrag): statt eines Installationsordners darf auch direkt
+# eine FreeCAD-AppImage uebergeben werden - als Vanilla-Vergleich dient seitdem die offizielle
+# Weekly (/home/maxx/freecad/App_weekly/freecad.App, aktualisiert per update-weekly-appimage.sh)
+# statt einer selbst gebauten install-clean-test. Die AppImage bringt Qt/PySide/Python selbst mit;
+# unsere Neon-/venv-Umgebung darf dafuer NICHT gesetzt werden.
+APPIMAGE=0
+if [[ -f "$INSTALL_DIR" && -x "$INSTALL_DIR" ]]; then
+    APPIMAGE=1
+    FC_BIN="$INSTALL_DIR"
+else
+    FC_BIN="${INSTALL_DIR}/bin/FreeCAD"
+    if [[ ! -x "$FC_BIN" ]]; then
+        echo "FEHLER: keine FreeCAD-Gui-Binary unter ${FC_BIN}" >&2
+        exit 2
+    fi
+    FC_LIB_DIR="$(cd "$(dirname "$FC_BIN")/../lib" && pwd)"
 fi
-FC_LIB_DIR="$(cd "$(dirname "$FC_BIN")/../lib" && pwd)"
 
 # FCPROJECT-PATCH (2026-09-24, siehe Projekt-Memory "reference-neon-qt6-pyside6-environment"):
 # FreeCAD wird jetzt gegen eine eigene, in sich konsistente Qt6/PySide6/Shiboken6-Umgebung
@@ -57,15 +68,17 @@ FC_LIB_DIR="$(cd "$(dirname "$FC_BIN")/../lib" && pwd)"
 # eigener Interpreter.cpp haengt "$VIRTUAL_ENV/lib/pythonX.Y/site-packages" an sys.path an (das
 # .venv verweist dort per Symlinks auf die Neon-Pakete) - PYTHONPATH selbst wird von FreeCADs
 # isoliertem Python-Start ignoriert, deshalb hier bewusst nicht mehr gesetzt.
-VENV_DIR="/home/maxx/Dokumente/FreeCAD-Development/.venv"
-export VIRTUAL_ENV="${VENV_DIR}"
-NEON_ROOT="/home/maxx/Dokumente/FreeCAD-Development/neon-qt6-pyside6/root/usr"
-NEON_LIB="${NEON_ROOT}/lib/x86_64-linux-gnu"
-export QT_PLUGIN_PATH="${NEON_LIB}/qt6/plugins"
-# RUNPATH-Fix (eigener lib-Ordner zuerst) - siehe docs/JOURNAL.md "ROOT CAUSE GEFUNDEN UND
-# BEHOBEN": jede kopierte FreeCAD-Installation traegt sonst ein fest einprogrammiertes RUNPATH
-# auf die urspruengliche Installation.
-export LD_LIBRARY_PATH="${FC_LIB_DIR}:${NEON_LIB}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+if [[ $APPIMAGE -eq 0 ]]; then
+    VENV_DIR="/home/maxx/Dokumente/FreeCAD-Development/.venv"
+    export VIRTUAL_ENV="${VENV_DIR}"
+    NEON_ROOT="/home/maxx/Dokumente/FreeCAD-Development/neon-qt6-pyside6/root/usr"
+    NEON_LIB="${NEON_ROOT}/lib/x86_64-linux-gnu"
+    export QT_PLUGIN_PATH="${NEON_LIB}/qt6/plugins"
+    # RUNPATH-Fix (eigener lib-Ordner zuerst) - siehe docs/JOURNAL.md "ROOT CAUSE GEFUNDEN UND
+    # BEHOBEN": jede kopierte FreeCAD-Installation traegt sonst ein fest einprogrammiertes RUNPATH
+    # auf die urspruengliche Installation.
+    export LD_LIBRARY_PATH="${FC_LIB_DIR}:${NEON_LIB}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
 export PYTHONNOUSERSITE=1
 export QT_QPA_PLATFORM=xcb
 
@@ -99,6 +112,9 @@ case "$(basename "$INSTALL_DIR")" in
     *clean*) INSTALL_TAG="vanilla" ;;
     *)       INSTALL_TAG="patched" ;;
 esac
+if [[ $APPIMAGE -eq 1 ]]; then
+    INSTALL_TAG="weekly"
+fi
 
 export DISPLAY="$DISPLAY_NUM"
 export FREECAD_USER_HOME="/tmp/freecad-kinematic-test-profile-${INSTALL_TAG}"
@@ -126,7 +142,7 @@ LOG_FILE="/tmp/freecad-kinematic-test-${INSTALL_TAG}-$(basename "$TEST_SCRIPT" .
 # WICHTIG (Lektion aus docs/JOURNAL.md): stdout eines Gui-Prozesses ist unzuverlaessig (print()
 # landet ueber die Report-View-Umleitung, nicht garantiert auf dem eigenen stdout) - IMMER das
 # echte --log-file auswerten, nie nur die Bash-Ausgabe.
-timeout 60 "$FC_BIN" -l --log-file "$LOG_FILE" "${SCRIPT_DIR}/run_under_gui.py" >/dev/null 2>&1 || true
+timeout ${KINEMATIC_TEST_TIMEOUT:-60} "$FC_BIN" -l --log-file "$LOG_FILE" "${SCRIPT_DIR}/run_under_gui.py" >/dev/null 2>&1 || true
 
 echo "=== ${INSTALL_DIR} / $(basename "$TEST_SCRIPT") ==="
 grep "^Msg:" "$LOG_FILE" | sed 's/^Msg: //'

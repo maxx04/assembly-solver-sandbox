@@ -422,13 +422,18 @@ class ViewProviderMotion:
             return False
 
         joint = None
+        prefix = ""
         if self.app_obj.Joint is not None:
             joint = self.app_obj.Joint[0]
+            subs = self.app_obj.Joint[1]
+            prefix = subs[0] if subs else ""
 
-        dialog = MotionEditDialog(assembly, self.app_obj.MotionType, joint, self.app_obj.Formula)
+        dialog = MotionEditDialog(
+            assembly, self.app_obj.MotionType, joint, self.app_obj.Formula, prefix
+        )
         if dialog.exec_():
             self.app_obj.MotionType = dialog.motionType
-            self.app_obj.Joint = dialog.joint
+            self.app_obj.Joint = dialog.jointValue()
             self.app_obj.Formula = dialog.formula
 
             self.updateLabel()
@@ -439,8 +444,10 @@ class ViewProviderMotion:
 
         typeStr = "Linear" if self.app_obj.MotionType == "Linear" else "Angular"
 
+        subs = self.app_obj.Joint[1]
+        label = UtilsAssembly.jointInstanceDisplayName(self.app_obj.Joint[0], subs[0] if subs else "")
         self.app_obj.Label = "{label} ({type_})".format(
-            label=self.app_obj.Joint[0].Label, type_=translate("Assembly", typeStr)
+            label=label, type_=translate("Assembly", typeStr)
         )
 
     def getAssembly(self):
@@ -457,11 +464,19 @@ class ViewProviderMotion:
 
 class MotionEditDialog:
     def __init__(
-        self, assembly, motionType=MotionTypes[0], joint=None, formula="initialValue + 5*time"
+        self,
+        assembly,
+        motionType=MotionTypes[0],
+        joint=None,
+        formula="initialValue + 5*time",
+        jointPrefix="",
     ):
         self.assembly = assembly
         self.motionType = motionType
         self.joint = joint
+        # FCPROJECT-PATCH (2026-10-10): nesting prefix of the selected joint INSTANCE ("" for a
+        # joint directly in the assembly) - stored as subname of Motion.Joint, see jointValue().
+        self.jointPrefix = jointPrefix
         self.formula = formula
 
         # Create a non-modal, frameless dialog
@@ -484,7 +499,8 @@ class MotionEditDialog:
         self.motion_type_combo.currentTextChanged.connect(on_motion_type_changed)
 
         def on_joint_changed(index):
-            self.joint = self.joint_combo.itemData(index)
+            data = self.joint_combo.itemData(index)
+            self.joint, self.jointPrefix = data if data else (None, "")
             self.setup_motiontype_combo()  # Refresh the motion combo box based on the new joint type
 
         self.joint_combo.currentIndexChanged.connect(on_joint_changed)
@@ -735,19 +751,43 @@ SLOPE defines the steepness of the transition between 0 and H1 and H2 to 0 about
 
         jointTypes = ["Revolute", "Slider", "Cylindrical"]
 
-        joints = UtilsAssembly.getJointsOfType(self.assembly, jointTypes)
+        # FCPROJECT-PATCH (2026-10-10, plans/2026-10-10-simulation-an-struktur-anpassen.md): one
+        # entry per joint INSTANCE. A sub-assembly inserted twice has two independent joints in
+        # this assembly (own slider, own position) - each must be drivable on its own.
+        instances = UtilsAssembly.getJointInstancesOfType(self.assembly, jointTypes)
 
         # Add joints to the combo box with labels and icons
-        for joint in joints:
-            joint_label = joint.Label
+        for joint, prefix in instances:
+            joint_label = UtilsAssembly.jointInstanceDisplayName(joint, prefix)
             joint_icon = QIcon(joint.ViewObject.Icon)
-            self.joint_combo.addItem(joint_icon, joint_label, userData=joint)
+            self.joint_combo.addItem(joint_icon, joint_label, userData=(joint, prefix))
+            if prefix:
+                self.joint_combo.setItemData(
+                    self.joint_combo.count() - 1, prefix.rstrip(".").replace(".", " / "), Qt.ToolTipRole
+                )
 
-        # Set the current value based on the object's Joint property
-        if self.joint in joints:
-            self.joint_combo.setCurrentText(self.joint.Label)
-        elif len(joints) > 0:
-            self.joint = joints[0]
+        # Set the current value based on the object's Joint property. A motion without instance
+        # path (older files) matches the first instance of its joint.
+        current = next(
+            (i for i, (j, p) in enumerate(instances) if j == self.joint and p == self.jointPrefix),
+            None,
+        )
+        if current is None:
+            current = next((i for i, (j, p) in enumerate(instances) if j == self.joint), None)
+        if current is not None:
+            self.joint_combo.setCurrentIndex(current)
+            self.joint, self.jointPrefix = instances[current]
+        elif len(instances) > 0:
+            self.joint, self.jointPrefix = instances[0]
+
+    def jointValue(self):
+        """Value for the Motion.Joint property: the joint, plus the nesting prefix of the chosen
+        instance as subname (no new property, file-compatible - vanilla ignores the subname)."""
+        if self.joint is None:
+            return None
+        if self.jointPrefix:
+            return (self.joint, [self.jointPrefix])
+        return self.joint
 
     def setup_motiontype_combo(self):
         self.motion_type_combo.clear()  # Clear existing items
@@ -1007,7 +1047,7 @@ class TaskAssemblyCreateSimulation(QtCore.QObject):
     def addMotionClicked(self):
         dialog = MotionEditDialog(self.assembly)
         if dialog.exec_():
-            self.createMotionObject(dialog.motionType, dialog.joint, dialog.formula)
+            self.createMotionObject(dialog.motionType, dialog.jointValue(), dialog.formula)
 
     # Taskbox keyboard event handler
     def eventFilter(self, watched, event):

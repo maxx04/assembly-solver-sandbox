@@ -6,7 +6,7 @@
 #     gegen ein ECHTES Vanilla-Checkout des Ziel-Commits, nicht mehr gegen HEAD - siehe dortige
 #     Kommentare)
 #
-# VANILLA_BASE: e7ee55e026
+# VANILLA_BASE: e5fabddebb
 # ^ Nutzerauftrag 2026-09-27 ("wer prueft, dass alle Commits im Patch landen?"): der Commit,
 # gegen den die Patches oben den Diff bilden (git diff VANILLA_BASE HEAD -- src/Mod/Assembly
 # src/3rdParty/OndselSolver). check-patches.sh liest diese Zeile automatisch und prueft nach dem
@@ -17,6 +17,10 @@
 #
 # Format: eine Zeile = ein Patch-Dateiname (relativ zu patches/), in dieser Reihenfolge
 # anzuwenden. Leerzeilen und Zeilen, die mit # beginnen, werden ignoriert.
+# Zeilen mit dem Praefix "build:" (2026-10-04) sind Patches fuer den BUILD-BAUM
+# (/home/maxx/freecad-sandbox/freecad-source, Dateien ausserhalb von src/Mod/Assembly und
+# src/3rdParty/OndselSolver). update-sandbox.sh nimmt sie in Schritt 8 vor dem Wechsel des
+# Build-Baums zurueck und wendet sie danach neu an; check-patches.sh ueberspringt sie.
 #
 # Namenskonvention: JJJJ.MM.DD-<name>.patch - das Datum ist die letzte inhaltliche
 # Aktualisierung dieses Patches (nicht die Erstellung, falls seitdem neu generiert). Bewusst
@@ -56,7 +60,79 @@
 # Build+volle kinematic-tests-Regressionsmatrix bestaetigt (6/6 erwartete Baseline-Fehler, keine
 # neuen).
 
+# 2026-10-03 (3): Nachtrag ohne Vanilla-Resync - zwei Commits eingepflegt: verschachteltes Origin
+# kontaminierte aeussere Erdung (35eb94de3a) und "Erdung ist Kontext-Eigenschaft" (aca7a7b997,
+# Doppel-Anker-Abschaltung entfernt, getGroundedParts() seiteneffektfrei ueber IdentityGraph).
+# Volle kinematic-tests-Regressionsmatrix: 6/6 erwartete Baseline-Fehler, neuer Test
+# test_nested_grounding_context_isolation PASS.
+
+# 2026-10-03 (4): Nachtrag ohne Vanilla-Resync - IdentityGraph-Handle-Split bei Duplikaten
+# behoben (refineNestedMirrorTarget()), neue Diagnose verifyHandleConsistency() + Test
+# test_identitygraph_handle_consistency. Matrix: 6/6 erwartete Baseline-Fehler.
+
+# 2026-10-03 (5): Nachtrag - fixGroundedParts() bildet geerdete Objekte ueber den IdentityGraph
+# auf ihren Solver-Koerper ab (BG43-Motor war nicht verankert). Matrix: 6/6 Baseline-Fehler.
+
+# 2026-10-03 (6): Nachtrag - Redundanz-Meldung richtigem (verschachteltem) Joint zugeordnet,
+# begrenzte Redundanz-Wiederholung in solve(). Matrix: 6/6 Baseline-Fehler.
+
+# 2026-10-03 (7): Nachtrag - Umbau "Solver nur auf Spiegeln" (9701f5b199): IdentityGraph::
+# instanceOf(), keine Original-Schreibzugriffe aus aeusserem Kontext, flexible Container-Spiegel
+# folgen der Quelle, solveHiddenFlexibleUnderRigid() entfernt. Matrix 20/20 (angepasste
+# Erwartungen). OFFEN: BG22 haengt in der GUI in einer Recompute-Schleife.
+
+# 2026-10-04 (8): Vanilla-Resync auf 7d2c4213e9 (136 Commits seit 454a4b82ce im Build-Baum,
+# keiner davon in src/Mod/Assembly oder src/3rdParty/OndselSolver - Patch inhaltlich unveraendert,
+# nur neu gegen den neuen VANILLA_BASE erzeugt). Neu ab diesem Stand: upstreams FindPySide6.cmake
+# importiert PySide6 beim Konfigurieren - standalone-check/CMakeLists.txt setzt dafuer jetzt den
+# Neon-Bibliothekspfad. Qt6-Build-Patch seither als "build:"-Zeile automatisch verwaltet.
+
+# 2026-10-04 (9): Nachtrag - ScopedIdentityGraph (ein IdentityGraph pro Vorgang), BG22-Recompute
+# 146s -> 7.5s. Matrix 20/20.
+
+# 2026-10-04 (10): Nachtrag - Drag-Zwischenstand (Instanz als Ziehkandidat, Upstream-Suche mit
+# Verschachtelungspfad, FCPROJECT-DRAG-Diagnose). Matrix 20/20; GUI-Ziehen des Traegers noch offen.
+
+# 2026-10-04 (11): Nachtrag - Verbindungspruefung ohne Joint-Deaktivierung (isPartConnectedExcluding),
+# BG37 in BG22 per Maus ziehbar (Nutzer bestaetigt). Matrix 20/20.
+# 2026-10-07 (12): Nachtrag - neu angelegter Spiegel startet in der Lage seiner Quelle
+# (AssemblyLink::synchronizeComponents), BG43 flexibel in BG37 nicht mehr zerwuerfelt. Matrix 20/20.
+# 2026-10-07 (13): Nachtrag - Starr->Flexibel verschiebt Teile statt flexibler Container
+# (applyPlacementKeepingContainers), BG43 kollabiert beim Umschalten nicht mehr. Matrix 20/20.
+# 2026-10-09 (14): Nachtrag - Regel C1 Starr/Flexibel vom einbauenden Dokument (counterpartOf,
+# Rigid-Sync verschachtelter Spiegel) + Leistung Verbindungssuche/getSubAssemblies. Matrix 20/20.
+# 2026-10-10 (15): Vanilla-Resync auf e5fabddebb (78 Commits seit 7d2c4213e9, keiner in
+# Assembly/OndselSolver), Rundum-Patch neu erzeugt.
+# 2026-10-10 (16): Nachtrag - IdentityGraph-Diagramm zeigt starr/flexibel im Kopf jeder Unter-BG.
+# 2026-10-10 (17): Nachtrag - Drag-Start schneller (getDownstreamParts eine Suche, gemeinsamer Graph).
+# 2026-10-10 (18): Nachtrag - Drag: Erdung vor Gelenk-Abschaltung in getDownstreamParts, Anschlag-Korrektur in doDragStep.
+# 2026-10-10 (19): Nachtrag - Simulation: initialValue aus Kontext, Motion pro Gelenk-Instanz, getJointInstances().
+# 2026-10-11 (20): Nachtrag - Startchaos: kein Solve beim Einlesen, Diagnose als Log, PartGui-Import in InitGui.
+# 2026-10-11 (21): Nachtrag - Fixed-Buendelung beim Ziehen ohne Ausnahme (BG75 Halteplatte).
+# 2026-10-11 (22): Nachtrag - Mehrfachinstanz-Erkennung im ganzen Baum (gleiche Unter-BG in verschiedenen Eltern-BGs).
+# 2026-10-11 (23): Nachtrag - Startlage frisch eingefuegter verschachtelter BG (Spiegel aus Gegenstueck, Marker auf starrem Fremd-Koerper).
+# 2026-10-11 (24): Nachtrag - Gelenkgrenzen auch beim normalen Solve (Grenz-Durchgang nach runPreDrag).
+# 2026-10-11 (25): Nachtrag - gebuendeltes Teil allein ziehen fuehrt seinen Solver-Koerper (preDrag).
+# 2026-10-11 (26): Nachtrag - Ziehen ueber das Bewegungsgelenk der starren Kette (findDragMode, getDownstreamParts alsoIgnore).
+# 2026-10-11 (27): Nachtrag - Redundanz-Warnung nennt Verursacher und ueberbestimmte Gruppe (getRedundancyGroups); OndselSolver-Teil im eigenen Patch unten.
+# 2026-10-12 (28): Nachtrag - Zieh-Gelenk = Bewegungsgelenk mit den wenigsten Freiheitsgraden (getDragJointOfPart, BG37 180-Grad-Sprung).
+# 2026-10-12 (29): Nachtrag - verschachtelt starr->flexibel umschalten ohne Sprung (Container-Sync weltlage-erhaltend, kein Kopieren zu flexibel, C1 im Spiegel zuerst).
+# 2026-10-13 (30): Nachtrag - Joint-Bezugssystem bei Referenz in ein Body-Feature mit eigener Placement (getJcsReferenceGlobalPlacement, Upstream-Bug).
+# 2026-10-13 (31): Nachtrag - neues Teil in eingebauter, versetzter Unterbaugruppe startet beim Nachbarn.
+# 2026-10-13 (32): Nachtrag - Erdung je Einbau-Instanz aufgeloest, lose Unterbaugruppe bleibt an Ablage-Position (Regel C5).
+# 2026-10-13 (33): Nachtrag - nicht einhaltbare Gelenkgrenze nach Aenderung im Original melden (reportUnsatisfiedLimits).
+
 2026.10.03-freecad-assembly-full-resync.patch
+
+# 2026-10-11: OndselSolver ist ein Git-Submodul (zeigt auf github.com/FreeCAD/OndselSolver), seine
+# Aenderungen koennen nicht im Sandbox-Repo committet werden und stehen deshalb in einem EIGENEN
+# Patch (erzeugt im Submodul: git -C src/3rdParty/OndselSolver diff
+# --src-prefix=a/src/3rdParty/OndselSolver/ --dst-prefix=b/src/3rdParty/OndselSolver/). Das
+# Submodul bleibt im Arbeitsbaum dauerhaft "modified content" - update-sandbox.sh setzt die
+# Dateien vor dem Update zurueck und wendet den Patch danach neu an.
+# Inhalt: Redundanzgruppen (PosICNewtonRaphson::recordRedundancyGroups(), System::redundancyGroups)
+# - nennt bei einer Ueberbestimmung die minimale abhaengige Gelenk-Gruppe.
+2026.10.11-ondselsolver-redundancy-groups.patch
 
 # NICHT in obiger Liste, weil nicht auf DIESE Sandbox anwendbar (betrifft src/App/*, hier
 # per Sparse-Checkout gar nicht ausgecheckt - nur src/Mod/Assembly + src/3rdParty/
@@ -72,13 +148,14 @@
 # direkt gegen freecad-source pruefen/anwenden, nicht ueber update-sandbox.sh/check-patches.sh:
 #   2026.09.13-freecad-filedialog-search-filter.patch
 #
-# NICHT in obiger Liste, ebenfalls nicht auf DIESE Sandbox anwendbar (betrifft src/Gui/* und
-# src/Mod/Start/Gui/*, ausserhalb des Assembly-Sparse-Checkouts). Nutzerfund 2026-09-27 beim
+# Build-Baum-Patch (betrifft src/Gui/* und src/Mod/Start/Gui/*, ausserhalb des
+# Assembly-Sparse-Checkouts). Nutzerfund 2026-09-27 beim
 # Vorbereiten eines Vollsyncs des Build-Baums (/home/maxx/freecad-sandbox/freecad-source) auf
 # den aktuellen
 # Vanilla-Stand: drei unkommittierte lokale Fixes lagen dort seit einer frueheren Session
 # (QByteArray/QString-Konstruktor-Anpassungen, vermutlich fuer unsere Neon-Qt6-Umgebung
 # noetig) - waeren bei einem naiven "git checkout <neuer-commit>" stillschweigend
-# ueberschrieben worden. Gesichert, BEVOR der Vollsync lief - direkt gegen freecad-source
-# pruefen/anwenden, nicht ueber update-sandbox.sh/check-patches.sh:
-#   2026.09.27-freecad-gui-qt6-qbytearray-qstring-fixes.patch
+# ueberschrieben worden. Gesichert, BEVOR der Vollsync lief. Seit 2026-10-04 als "build:"-Zeile
+# eingetragen (Nutzerhinweis: "wir haben schon PATCHES.txt") - vorher blockierte er jeden
+# update-sandbox.sh-Lauf als "unerwartete lokale Aenderung" im Build-Baum.
+build: 2026.09.27-freecad-gui-qt6-qbytearray-qstring-fixes.patch

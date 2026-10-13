@@ -60,6 +60,12 @@ class AssemblyWorkbench(Workbench):
 
         # load the builtin modules
         import AssemblyGui
+
+        # FCPROJECT-PATCH (2026-10-11, "Startchaos"): the toolbar below contains "Part_LinkArrays",
+        # which is registered by PartGui. Without this import the command is unknown when the
+        # Assembly workbench is initialized before PartGui is loaded, and FreeCAD reports
+        # "Unknown command 'Part_LinkArrays'" (twice) on startup. Same in vanilla.
+        import PartGui  # noqa: F401
         from PySide import QtCore, QtGui
         from PySide.QtCore import QT_TRANSLATE_NOOP
         import CommandCreateAssembly

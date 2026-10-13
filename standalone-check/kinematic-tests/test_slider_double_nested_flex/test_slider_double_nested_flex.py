@@ -154,8 +154,10 @@ def full_check(label, boxC_plc, boxD_mirror_plc, mirror_boxA_plc, mirror_boxB_pl
     print(f"AEUSSERER Joint (BoxC-BoxB, doppelt gespiegelt):  pos={posO:.9f} mm  rot={rotO:.9f} deg")
     print(f"MITTLERER Joint (BoxD-BoxB, einfach gespiegelt):  pos={posM:.9f} mm  rot={rotM:.9f} deg")
 
-    ok_outer = posO <= 1e-6 and rotO <= 1e-4
-    ok_middle = posM <= 1e-6 and rotM <= 1e-4
+    # FCPROJECT-PATCH (2026-10-03): bekannte 180-Grad-Loesung an jedem Joint zulaessig, wenn der
+    # Gelenkpunkt exakt am Ziel liegt (siehe nested_test_utils.fixed_matches()).
+    ok_outer = ntu.fixed_matches(f"{label} aeusserer Joint", outer_expected, mirror_boxB_plc, OUTER_PLC2, 1e-6, 1e-4)
+    ok_middle = ntu.fixed_matches(f"{label} mittlerer Joint", middle_expected, mirror_boxB_plc, MIDDLE_PLC2, 1e-6, 1e-4)
     return ok_outer, ok_middle, ok_inner
 
 

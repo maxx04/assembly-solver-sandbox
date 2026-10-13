@@ -135,6 +135,12 @@ private:
     // any sync that a nested call would have performed happens on the next legitimate
     // execute()/recompute instead.
     static bool updatingContents;
+
+public:
+    // FCPROJECT-PATCH (2026-10-09, Regel C1 in docs/CONSTRAINTS.md): nicht persistent. Gesetzt vom
+    // Eltern-Spiegel, wenn er den Starr/Flexibel-Wert dieses Spiegels von der Quelle uebernommen
+    // hat; synchronizeComponents() setzt daraufhin einmalig alle Lagen aus dem Gegenstueck neu.
+    bool reinitFromCounterpart = false;
 };
 
 

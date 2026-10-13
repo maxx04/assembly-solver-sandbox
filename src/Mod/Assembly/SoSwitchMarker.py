@@ -145,8 +145,8 @@ class SoSwitchMarker(coin.SoSwitch):
 
     def set_marker_placement(self, placement, ref):
         # change plc to be relative to the origin of the document.
-        global_plc = UtilsAssembly.getGlobalPlacement(ref)
-        placement = global_plc * placement
+        # FCPROJECT-PATCH (2026-10-13): dieselbe Weltlage wie der Solver (getJcsGlobalPlc()).
+        placement = UtilsAssembly.getJcsGlobalPlc(placement, ref)
 
         t = placement.Base
         self.transform.translation.setValue(t.x, t.y, t.z)

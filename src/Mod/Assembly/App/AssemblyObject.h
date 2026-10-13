@@ -25,6 +25,8 @@
 #pragma once
 
 #include <boost/signals2.hpp>
+#include <optional>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -63,6 +65,7 @@ namespace Assembly
 
 class AssemblyLink;
 class JointGroup;
+class IdentityGraph;
 class ViewGroup;
 enum class JointType;
 
@@ -288,13 +291,22 @@ public:
     // nestingPrefix jedes Joints (siehe getJoints()) ist jetzt Teil des Rueckgabewerts, damit
     // die Aufrufer resolvePartForMbD() statt der alten Funktionen nutzen koennen.
     std::vector<JointRef> getJointsOfPart(App::DocumentObject* part);
+    // FCPROJECT-PATCH (2026-10-04): 'nestingPrefixOut' (optional) bekommt den Verschachtelungspfad
+    // des gefundenen Joints - noetig, um dessen andere Seite korrekt aufzuloesen (getUpstreamMovingPart()).
     App::DocumentObject* getJointOfPartConnectingToGround(
         App::DocumentObject* part,
         std::string& name,
-        const std::vector<App::DocumentObject*>& excludeJoints = {}
+        const std::vector<App::DocumentObject*>& excludeJoints = {},
+        std::string* nestingPrefixOut = nullptr
     );
     App::DocumentObject* getJointOfPartForUngroundedDrag(App::DocumentObject* part, std::string& name);
-    std::unordered_set<App::DocumentObject*> getGroundedParts();
+    // FCPROJECT-PATCH (2026-10-03, "Erdung ist Kontext-Eigenschaft"): reine Funktion des
+    // Kontexts dieser Ebene, siehe Kommentar in der Implementierung. 'ignoredNestedRoots'
+    // (optional) bekommt die verschachtelten Erdungen, die im Kontext dieser Ebene ignoriert
+    // werden, jeweils mit der massgeblichen Erdung ihres Clusters (nur fuer die Meldung in solve()).
+    std::unordered_set<App::DocumentObject*> getGroundedParts(
+        std::vector<std::pair<App::DocumentObject*, App::DocumentObject*>>* ignoredNestedRoots = nullptr
+    );
     std::unordered_set<App::DocumentObject*> fixGroundedParts();
     void fixGroundedPart(App::DocumentObject* obj, Base::Placement& plc, std::string& jointName);
 
@@ -336,6 +348,13 @@ public:
     // 2026-09-03 unbedingt eingebaut) nicht mehr in jedem preDrag()-Mausereignis unbedingt
     // laufen. Default false, kein bestehender Aufrufer muss angepasst werden.
     bool isPartConnected(App::DocumentObject* part, bool verboseLog = false);
+    // FCPROJECT-PATCH (2026-10-04): Erreichbarkeit von 'part' aus einer VORGEGEBENEN Erdung, mit
+    // ausgeblendeten Joints - ohne Joints zu deaktivieren (siehe isJointConnectingPartToGround()).
+    bool isPartConnectedExcluding(
+        App::DocumentObject* part,
+        const std::unordered_set<App::DocumentObject*>& groundedObjs,
+        const std::vector<JointRef>& excludedJoints
+    );
 
     // FCPROJECT-PATCH (2026-09-21, Nutzerauftrag [[todo-identitygraph-visualization]]): duenner
     // Python-Zugang zu IdentityGraph::exportDot() - baut den Graphen dieser Baugruppe frisch auf
@@ -346,6 +365,9 @@ public:
     // duenner Python-Zugang zu IdentityGraph::verifyAgainstAsmt() - siehe dortigen Kommentar fuer
     // Zweck und Einschraenkungen.
     std::string verifyIdentityGraphAgainstAsmt();
+
+    // FCPROJECT-PATCH (2026-10-03): duenner Python-Zugang zu IdentityGraph::verifyHandleConsistency().
+    std::vector<std::string> verifyIdentityGraphHandleConsistency();
 
     // FCPROJECT-PATCH (Fix-Ansatz D, "flexible Unterbaugruppe als Ganzes ziehbar, wenn
     // unverbunden", Nutzerauftrag 2026-09-16/17): isPartConnected(containerObj) allein reicht
@@ -360,15 +382,30 @@ public:
     // angeschlossen ist.
     bool isSubAssemblyFullyUnconnected(App::DocumentObject* obj);
 
+    // FCPROJECT-PATCH (2026-10-11): alsoIgnore - weitere Gelenke, die beim Bestimmen der
+    // mitbewegten Teile nicht als Verbindung zur Masse zaehlen (siehe findDragMode(): das
+    // umgangene Nicht-Bewegungsgelenk, z.B. Distance).
     std::vector<ObjRef> getDownstreamParts(
         App::DocumentObject* part,
-        App::DocumentObject* joint = nullptr
+        App::DocumentObject* joint = nullptr,
+        const std::vector<App::DocumentObject*>& alsoIgnore = {}
     );
     App::DocumentObject* getUpstreamMovingPart(
         App::DocumentObject* part,
         App::DocumentObject*& joint,
         std::string& name,
         std::vector<App::DocumentObject*> excludeJoints = {}
+    );
+    // FCPROJECT-PATCH (2026-10-11/12): Zieh-Gelenk fuer ein angeklicktes Teil - das
+    // Bewegungsgelenk mit den wenigsten Freiheitsgraden unter allen Verbindungen zur Masse
+    // (Fixed ueber die starre Kette verfolgt). Liefert das Teil an diesem Gelenk, sonst nullptr;
+    // bypassed: die uebrigen gefundenen Verbindungen (fuer getDownstreamParts()). Siehe
+    // ViewProviderAssembly::findDragMode().
+    App::DocumentObject* getDragJointOfPart(
+        App::DocumentObject* part,
+        App::DocumentObject*& joint,
+        std::string& name,
+        std::vector<App::DocumentObject*>& bypassed
     );
 
     double getObjMass(App::DocumentObject* obj);
@@ -488,6 +525,16 @@ public:
     {
         return lastRedundantJoints;
     }
+    // FCPROJECT-PATCH (2026-10-11): siehe lastRedundancyGroups
+    inline const std::vector<std::string>& getLastRedundancyGroups() const
+    {
+        return lastRedundancyGroups;
+    }
+    // FCPROJECT-PATCH (2026-10-13): siehe lastLimitViolations
+    inline const std::vector<std::string>& getLastLimitViolations() const
+    {
+        return lastLimitViolations;
+    }
     inline const std::vector<std::string>& getLastPartiallyRedundant() const
     {
         return lastPartialRedundantJoints;
@@ -498,19 +545,30 @@ public:
     }
     fastsignals::signal<void()> signalSolverUpdate;
 
-    // FCPROJECT-PATCH (2026-09-27, siehe solveHiddenFlexibleUnderRigid()-Kommentar in
-    // AssemblyObject.cpp): nach einem erzwungenen solve() einer flexiblen, hinter einer rigiden
-    // Ebene versteckten Unterbaugruppe muss deren frisch geloestes Placement noch in das
-    // tatsaechlich gerenderte lokale Spiegel-Objekt uebertragen werden. IdentityGraph kann hier
-    // NICHT helfen (bewusst so designed: eine rigide AssemblyLink ist fuer den gesamten Graphen
-    // ein opakes Blatt, der Graph steigt nie in ihr Inneres ab) - stattdessen direkt ueber
-    // 'mirrorLink->objLinkMap' (von AssemblyLink::synchronizeComponents() gepflegt, bildet echtes
-    // Quellobjekt -> lokale Spiegel-Kopie ab), das GENAU fuer diesen Zweck existiert. Public, weil
-    // solveHiddenFlexibleUnderRigid() dies auf einer FREMDEN AssemblyObject-Instanz (nicht 'this')
-    // aufruft.
-    void propagateSolvedPlacementsTo(AssemblyLink* mirrorLink);
 
 private:
+    // FCPROJECT-PATCH (2026-10-12): Kandidat fuer getDragJointOfPart() - Teil am Bewegungsgelenk,
+    // das Gelenk, sein Referenzname, Freiheitsgrade und die Gelenkkette vom angeklickten Teil.
+    struct DragChoice
+    {
+        App::DocumentObject* part = nullptr;
+        App::DocumentObject* joint = nullptr;
+        std::string name;
+        int dof = 1000;
+        std::vector<App::DocumentObject*> chain;
+    };
+    DragChoice findDragChoice(
+        App::DocumentObject* part,
+        const std::vector<App::DocumentObject*>& excludeJoints,
+        std::set<App::DocumentObject*>& visited,
+        std::vector<App::DocumentObject*>& found
+    );
+
+    // FCPROJECT-PATCH (2026-10-04, BG22-Haenger in der GUI): fuer die Dauer EINES Vorgangs
+    // (isPartConnected(), solve()) gemeinsam genutzter IdentityGraph - siehe ScopedIdentityGraph in
+    // AssemblyObject.cpp. Reiner Laufzeitzustand, nicht persistent.
+    IdentityGraph* scopedGraph = nullptr;
+
     void rebuildRigidClusters();
     App::DocumentObject* getRigidRepresentative(App::DocumentObject* part) const;
     const std::vector<App::DocumentObject*>* getRigidMembers(App::DocumentObject* part) const;
@@ -636,6 +694,32 @@ private:
     int lastSolverStatus;
 
     std::vector<std::string> lastRedundantJoints;
+    // FCPROJECT-PATCH (2026-10-11): je ueberbestimmter Gruppe eine Zeile "Verursacher (Typ),
+    // zusammen mit: ..." aus System::redundancyGroups (siehe updateSolveStatus()).
+    std::vector<std::string> lastRedundancyGroups;
+
+    // FCPROJECT-PATCH (2026-10-13, Nutzerentscheidung "Aenderung im Original"): Grenzen, die der
+    // letzte Solve angelegt hat (makeMbdJoint()), und je verletzt gebliebener Grenze eine Zeile
+    // "Gelenk (Typ): Wert ausserhalb min..max" (reportUnsatisfiedLimits()).
+    struct LimitCheck
+    {
+        App::DocumentObject* joint;
+        std::string nestingPrefix;
+        bool isAngle;
+        bool minEnabled;
+        bool maxEnabled;
+        double min;
+        double max;
+    };
+    std::vector<LimitCheck> activeLimits;
+    std::vector<std::string> lastLimitViolations;
+    std::optional<Base::Placement> getJcsInContext(
+        App::DocumentObject* joint,
+        const char* refName,
+        const char* plcName,
+        const std::string& nestingPrefix
+    );
+    void reportUnsatisfiedLimits();
     std::vector<std::string> lastConflictingJoints;
     std::vector<std::string> lastPartialRedundantJoints;
     std::vector<std::string> lastMalformedJoints;

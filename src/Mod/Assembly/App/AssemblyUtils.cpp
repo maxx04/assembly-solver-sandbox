@@ -648,6 +648,18 @@ App::DocumentObject* getObjFromRef(const App::PropertyXLinkSub* prop)
     return getObjFromRef(obj, subs[0]);
 }
 
+// FCPROJECT-PATCH (2026-10-13, live an BG75 gefunden: Schraube per Teiletausch ersetzt, Referenz
+// jetzt "Link.BaseFeature.Edge9", die Schraube lag danach um 90 Grad quer): Placement1/2 eines
+// Joints beziehen sich auf das Objekt, das getObjFromRef() liefert (findPlacement() in
+// UtilsAssembly.py rechnet relativ zu dessen Placement) - bei Link->Body ist das der Link, auch
+// wenn der Unterpfad noch in ein Body-Feature fuehrt. getGlobalPlacement(nullptr, ref) lief
+// dagegen den GANZEN Pfad ab und nahm die Placement des BaseFeature (90 Grad gedreht) ein
+// zweites Mal mit. Jetzt endet die Weltlage genau an diesem Objekt. Ohne Objekt: wie bisher.
+Base::Placement getJcsReferenceGlobalPlacement(App::PropertyXLinkSub* ref)
+{
+    return App::GeoFeature::getGlobalPlacement(getObjFromRef(ref), ref);
+}
+
 App::DocumentObject* getObjFromJointRef(const App::DocumentObject* joint, const char* pName)
 {
     if (!joint) {
@@ -675,6 +687,60 @@ App::DocumentObject* getLinkedObjFromRef(const App::DocumentObject* joint, const
 // Begruendung. Generische Fassung - dies ist seit 2026-09-17 die einzige Implementierung, die
 // AssemblyObject-Fassung darunter ist nur noch ein duenner Wrapper (candidates =
 // solvingAssembly->getSubAssemblies() als oberste Ebene).
+namespace
+{
+// FCPROJECT-PATCH (2026-10-11): oberste Baugruppe im Dokument von obj, ueber die Group-Kette
+// (AssemblyLink-Container) nach oben.
+const AssemblyObject* rootAssemblyOf(const App::DocumentObject* obj)
+{
+    const App::DocumentObject* current = obj;
+    for (int depth = 0; current && depth < 64; ++depth) {
+        const App::DocumentObject* next = nullptr;
+        for (auto* parent : current->getInList()) {
+            if (auto* assembly = freecad_cast<AssemblyObject*>(parent)) {
+                if (assembly->hasObject(current)) {
+                    return assembly;
+                }
+            }
+            if (auto* parentLink = freecad_cast<AssemblyLink*>(parent)) {
+                if (parentLink->hasObject(current)) {
+                    next = parentLink;
+                }
+            }
+        }
+        current = next;
+    }
+    return nullptr;
+}
+
+// Anzahl der AssemblyLinks auf linkedAssembly im Baum von container, abgestiegen nur durch
+// flexible AssemblyLinks.
+int countFlexibleInstancesInTree(const App::DocumentObject* container, const AssemblyObject* linkedAssembly)
+{
+    if (!container) {
+        return 0;
+    }
+    auto* groupExt = container->getExtensionByType<App::GroupExtension>(true);
+    if (!groupExt) {
+        return 0;
+    }
+    int count = 0;
+    for (auto* child : groupExt->Group.getValues()) {
+        auto* childLink = freecad_cast<AssemblyLink*>(child);
+        if (!childLink) {
+            continue;
+        }
+        if (childLink->getLinkedAssembly() == linkedAssembly) {
+            ++count;
+        }
+        if (!childLink->isRigid()) {
+            count += countFlexibleInstancesInTree(childLink, linkedAssembly);
+        }
+    }
+    return count;
+}
+}  // namespace
+
 bool hasSiblingInstances(const std::vector<App::DocumentObject*>& candidates, App::DocumentObject* obj)
 {
     if (!obj) {
@@ -692,6 +758,17 @@ bool hasSiblingInstances(const std::vector<App::DocumentObject*>& candidates, Ap
                         return true;
                     }
                 }
+            }
+            // FCPROJECT-PATCH (2026-10-11, BG75 in BG22): dieselbe Unterbaugruppe kann auch in
+            // VERSCHIEDENEN Eltern-BGs stecken (BG22 -> BG37 -> BG43 -> BG47 und BG22 -> BG75 ->
+            // BG47). Auch dann ist jede Fundstelle eine eigene Instanz mit eigenen Solver-Koerpern.
+            // Nur Geschwister zu zaehlen machte beide Buchsen zu EINER Identitaet - die Joints von
+            // BG75 hingen an der Buchse von BG43, der X-Antrieb war an den Z-Antrieb gekettet.
+            // Deshalb zusaetzlich im ganzen Baum der obersten Baugruppe des Dokuments zaehlen
+            // (ueber flexible Ebenen; eine starre Unter-BG ist ein Koerper, ihr Inneres zaehlt
+            // nicht).
+            if (countFlexibleInstancesInTree(rootAssemblyOf(asmLink), linkedAssembly) >= 2) {
+                return true;
             }
             return false;
         }
@@ -902,7 +979,16 @@ App::DocumentObject* getMovingPartFromSel(
                 // (2026-09-17) - ein Joint referenziert nie den Container selbst, sondern immer
                 // ein Kind darin, siehe Deklaration in AssemblyObject.h.
                 auto* asmLink = freecad_cast<Assembly::AssemblyLink*>(obj);
-                if (asmLink
+                // FCPROJECT-PATCH (2026-10-03, Plan plans/2026-10-03-solver-nur-auf-spiegeln.md):
+                // als Ganzes nur, wenn der Link DIREKT in der aktiven Baugruppe liegt - nur dessen
+                // Placement ist Instanzzustand dieses Kontexts. Ein verschachtelter Container ist
+                // hier entweder ein Original im Unterdokument (der Walk ist nach dem ersten
+                // Container-Sprung dort) oder ein Container-Spiegel, der seiner Quelle folgt (siehe
+                // AssemblyLink::synchronizeComponents()); ihn zu ziehen veraenderte ein Original
+                // bzw. erzeugte genau die Spiegel/Solver-Abweichung, die an BG37 gefunden wurde.
+                const auto topLevel = assemblyObject->Group.getValues();
+                const bool isDirectChild = std::ranges::find(topLevel, obj) != topLevel.end();
+                if (asmLink && isDirectChild
                     && const_cast<AssemblyObject*>(assemblyObject)
                            ->isSubAssemblyFullyUnconnected(asmLink)) {
                     if (verboseLog) {
@@ -1241,12 +1327,20 @@ double getJointCurrentValue(App::DocumentObject* joint, bool isAngle)
     if (!ref1 || !ref2) {
         return 0.0;
     }
-    Base::Placement obj_global_plc1 = App::GeoFeature::getGlobalPlacement(nullptr, ref1);
-    Base::Placement obj_global_plc2 = App::GeoFeature::getGlobalPlacement(nullptr, ref2);
+    Base::Placement obj_global_plc1 = getJcsReferenceGlobalPlacement(ref1);
+    Base::Placement obj_global_plc2 = getJcsReferenceGlobalPlacement(ref2);
 
     plc1 = obj_global_plc1 * plc1;
     plc2 = obj_global_plc2 * plc2;
 
+    return getJointValueFromJcs(plc1, plc2, isAngle);
+}
+
+// FCPROJECT-PATCH (2026-10-10): Formel aus getJointCurrentValue() herausgezogen, damit der
+// Simulations-Pfad (AssemblyObject::makeMbdJoint(), "initialValue") sie mit den JCS DES
+// AKTUELLEN KONTEXTS (Spiegel statt Originale) nutzen kann.
+double getJointValueFromJcs(const Base::Placement& plc1, const Base::Placement& plc2, bool isAngle)
+{
     Base::Placement plc3 = plc1.inverse() * plc2;
 
     if (isAngle) {

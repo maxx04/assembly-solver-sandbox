@@ -111,7 +111,7 @@ class AssemblyObject(Part):
         ...
 
     @constmethod
-    def isPartConnected(self, obj: DocumentObject, /) -> bool:
+    def isPartConnected(self, obj: DocumentObject, verboseLog: bool = False, /) -> bool:
         """
         Check if a part is connected to the ground through joints.
         Returns: True if part is connected to ground.
@@ -139,6 +139,17 @@ class AssemblyObject(Part):
         (a single FreeCAD joint can translate into several MbD joint primitives).
 
         Returns: human-readable report text.
+        """
+        ...
+
+    @constmethod
+    def verifyIdentityGraphHandleConsistency(self) -> list[str]:
+        """
+        Check the IdentityGraph invariant "one solver body = exactly one identity handle": groups
+        all joint-edge endpoints and grounded handles by the solver body they materialize to.
+
+        Returns: one "SPLIT ..." line per body that is represented by more than one handle
+        (empty list = consistent).
         """
         ...
 
@@ -192,8 +203,65 @@ class AssemblyObject(Part):
         ...
 
     @constmethod
+    def getJointInstances(self) -> list[tuple]:
+        """
+        All joints solved in this assembly, one entry per joint INSTANCE, as
+        (joint, nesting prefix). A sub-assembly inserted twice yields its joints twice with
+        different prefixes (e.g. "SubLink001."); joints directly in this assembly have prefix "".
+        Used by the simulation to address a motion to one instance (Motion.Joint subname).
+        """
+        ...
+
+    @constmethod
+    def getJointOfPartConnectingToGround(self, part: DocumentObject, /) -> tuple:
+        """
+        Diagnostic: the joint that connects part towards ground (as used by the GUI drag-mode
+        search), as (joint or None, reference property name, nesting prefix).
+        """
+        ...
+
+    @constmethod
+    def getUpstreamMovingPart(self, part: DocumentObject, /) -> tuple:
+        """
+        Diagnostic: follows fixed joints from part towards ground until a non-fixed joint is found
+        (as ViewProviderAssembly::findDragMode() does), as (part or None, joint or None, name).
+        """
+        ...
+
+    @constmethod
+    def getLimitViolations(self) -> list[str]:
+        """
+        FCProject: joint limits the last solve could not keep, one line per limit:
+        "<joint>: <value> <unit>, erlaubt <min> .. <max> <unit>".
+        """
+        ...
+
+    @constmethod
+    def getRedundancyGroups(self) -> list[str]:
+        """
+        FCProject: over-constrained joint groups of the last solve, one line per group:
+        "<culprit> (<type>), zusammen mit: <other joints>". The culprit is the most recently
+        created joint of this assembly in the group.
+        """
+        ...
+
+    @constmethod
+    def getDragJointOfPart(self, part: DocumentObject, /) -> tuple:
+        """
+        FCProject diagnostic for ViewProviderAssembly::findDragMode(): among all joints that
+        connect part to ground (fixed joints followed along the rigid chain), the motion joint
+        with the fewest degrees of freedom. Returns (part at that joint or None, joint or None,
+        reference name, [other ground connections found]).
+        """
+        ...
+
+    @constmethod
     def getDownstreamParts(
-        self, start_part: DocumentObject, joint_to_ignore: DocumentObject, /
+        self,
+        start_part: DocumentObject,
+        joint_to_ignore: DocumentObject,
+        also_ignore: list[DocumentObject] = [],
+        /,
     ) -> list[DocumentObject]:
         """
         Finds all parts connected to a start_part that are not connected to ground
@@ -206,6 +274,8 @@ class AssemblyObject(Part):
             start_part: The App.DocumentObject to begin the search from.
             joint_to_ignore: The App.DocumentObject (a joint) to temporarily
                              suppress during the connectivity check.
+            also_ignore: Further joints to suppress (FCProject, 2026-10-11: the bypassed
+                         non-motion joint when dragging via an upstream motion joint).
 
         Returns:
             A list of App.DocumentObject instances representing the downstream parts.
