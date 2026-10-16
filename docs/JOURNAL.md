@@ -3670,3 +3670,46 @@ Zwischenebenen-Gap) - betrifft nur den Fall, dass `Top` UNABHAENGIG von `GrandTo
 geoeffnet/angezeigt wird. Fuer `GrandTop`s eigene 3D-Ansicht irrelevant. Nicht weiter verfolgt.
 
 **Status:** Fix im Baum, Patch (v8) aktualisiert und per Worktree-Test verifiziert, committed.
+
+## 2026-10-16: Tangent-Gelenk, erster Schritt "Vertex auf Kurve"
+
+Nutzerauftrag: neues Gelenk wie das Tangent-Mate in Onshape; Entscheidung "zuerst reicht
+Vertex auf Spline". Plan mit allen Entscheidungen: `plans/2026-10-16-tangent-joint.md`
+(Drehung frei, am offenen Kurvenende stehen bleiben, vorerst nur Solve/Ziehen, genau eine Kante).
+
+**Befund:** Distance mit Vertex + Kurve (`DistanceType::PointCurve`) hält den Punkt nur in der
+Ebene der Kurve. OndselSolver hat keine Kurvengeometrie (`ASMTRefCurve` wirft "To be
+implemented"), `GeneralSpline` ist eine 1D-Funktion für Motion-Formeln.
+
+**Umsetzung:** Solver-Erweiterung "Punkt auf Kurve" ohne zusätzliche Unbekannte: ein End-Frame
+am Kurven-Marker wandert pro Newton-Iteration auf den Fußpunkt (z = Tangente), darauf zwei
+gewöhnliche Translations-Bedingungen (x/y = 0). Details: ARCHITECTURE.md §1.2. Kurvenenden über
+zwei Translations-Limits im MbD-System. FreeCAD: `JointType::Tangent` am Enum-Ende,
+`makeMbdJointTangent()`, `getEdgeBSplineInJcs()`, Befehl `Assembly_CreateJointTangent` (Icon lag
+schon in `Assembly.qrc`), Auswahlprüfung im Dialog, Simulation lehnt Tangent ab.
+
+**Nebenbefunde in OndselSolver (Upstream, nicht von uns):**
+- `ASMTJoint::storeOnLevel()` leitet den Typnamen aus `typeid().name()` ab und schneidet fest
+  11 + 4 Zeichen ab - das passt nur zu MSVC. Unter GCC wird z.B. "PinionJointE" geschrieben,
+  für alle Gelenke. Das neue Gelenk schreibt seinen Namen deshalb explizit.
+- `ASMTAssembly::assemblyFromFile()` stürzte im Solver-Test beim Einlesen eines Markers auf
+  Baugruppenebene ab (`readRefPoints` -> `readMarker`, "free(): invalid size"), unabhängig vom
+  neuen Gelenk. Ursache nicht weiter untersucht; der Test prüft deshalb nur Speichern/Einlesen
+  des Gelenks selbst.
+- `CREATE<T>::ConstraintWith()` kennt nur fest verdrahtete Klassennamen und liefert sonst einen
+  Nullzeiger (Absturz in `initialize()`); neue Constraint-Klassen deshalb mit `CREATE<T>::With()`.
+
+**Verifikation:**
+- `standalone-check/solver-tests/run-solver-tests.sh` (OndselSolver eigenständig gebaut, ohne
+  FreeCAD): Kurvenauswertung (rationaler Kreis, Ableitungen gegen finite Differenzen,
+  Fußpunkt), Solve auf ebener/räumlicher Spline, mit verschobenem/gedrehtem Kurventeil und
+  Marker-Versatz, Ziehen entlang der Kurve, Ziehen über das offene Ende (bleibt am Endpunkt),
+  einmal um einen geschlossenen Kreis über die Naht, ASMT-Speichern/Einlesen des Gelenks.
+  Alle bestanden, Abstand Punkt-Kurve < 1e-13.
+- Die FreeCAD-Seite konnte in der Cloud-Session nicht gebaut werden (kein FreeCAD/OCC
+  installiert). Neuer Kinematiktest `test_tangent_vertex_spline_flat` liegt bereit, noch nicht
+  gelaufen.
+
+**Status:** Code und Patches (`2026.10.16-ondselsolver-point-on-curve.patch`,
+`2026.10.16-freecad-assembly-tangent-joint.patch`) committed; Build und Kinematiktest lokal
+ausstehend.

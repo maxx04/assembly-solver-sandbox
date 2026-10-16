@@ -1,0 +1,458 @@
+diff --git a/src/Mod/Assembly/App/AssemblyIdentityGraph.cpp b/src/Mod/Assembly/App/AssemblyIdentityGraph.cpp
+index e1f1fd3..c7ab0ae 100644
+--- a/src/Mod/Assembly/App/AssemblyIdentityGraph.cpp
++++ b/src/Mod/Assembly/App/AssemblyIdentityGraph.cpp
+@@ -1176,6 +1176,8 @@ std::string jointTypeName(JointType type)
+             return "Gears";
+         case JointType::Belt:
+             return "Belt";
++        case JointType::Tangent:
++            return "Tangent";
+     }
+     return "Unknown";
+ }
+diff --git a/src/Mod/Assembly/App/AssemblyObject.cpp b/src/Mod/Assembly/App/AssemblyObject.cpp
+index ba42dd2..18912e7 100644
+--- a/src/Mod/Assembly/App/AssemblyObject.cpp
++++ b/src/Mod/Assembly/App/AssemblyObject.cpp
+@@ -68,6 +68,7 @@
+ #include <OndselSolver/ASMTPerpendicularJoint.h>
+ #include <OndselSolver/ASMTPointInPlaneJoint.h>
+ #include <OndselSolver/ASMTPointInLineJoint.h>
++#include <OndselSolver/ASMTPointOnCurveJoint.h>
+ #include <OndselSolver/ASMTLineInPlaneJoint.h>
+ #include <OndselSolver/ASMTPlanarJoint.h>
+ #include <OndselSolver/ASMTRevCylJoint.h>
+@@ -593,7 +594,9 @@ int AssemblyObject::solve(bool enableRedo)
+         // Grenzen werden aktiviert und nachgeloest. Lassen sie sich nicht erfuellen, setzt
+         // runDragStep() selbst auf das Ergebnis von runPreDrag() zurueck. Upstream identisch
+         // ohne diesen Durchgang.
+-        if (!mbdAssembly->limits->empty()) {
++        // Tangent-Gelenk an offener Kurve: Endanschlaege liegen nur im MbD-System (siehe
++        // hasCurveEndStops).
++        if (!mbdAssembly->limits->empty() || hasCurveEndStops) {
+             mbdAssembly->runDragStep(std::make_shared<std::vector<std::shared_ptr<ASMTPart>>>());
+         }
+         reportUnsatisfiedLimits();
+@@ -906,6 +909,20 @@ int AssemblyObject::generateSimulation(App::DocumentObject* sim)
+ 
+     removeUnconnectedJoints(jointRefs, groundedObjs);
+ 
++    // FCPROJECT-PATCH (2026-10-16, Tangent-Gelenk, Nutzerentscheidung): Tangent wirkt vorerst
++    // nur bei Solve und Ziehen. Fuer die Simulation fehlen im Solver noch die
++    // Beschleunigungsterme (Kruemmung der Kurve), deshalb hier ablehnen statt falsch rechnen.
++    for (auto* jt : extractJointObjects(jointRefs)) {
++        if (getJointType(jt) == JointType::Tangent) {
++            Base::Console().error(
++                "Assembly: Simulation nicht moeglich - Tangent-Gelenk '{}' wird in der Simulation "
++                "noch nicht unterstuetzt.\n",
++                getJointContextName(jt)
++            );
++            return -1;
++        }
++    }
++
+     jointParts(jointRefs);
+ 
+     create_mbdSimulationParameters(sim);
+@@ -1969,6 +1986,7 @@ void AssemblyObject::reportUnsatisfiedLimits()
+ std::shared_ptr<ASMTAssembly> AssemblyObject::makeMbdAssembly()
+ {
+     activeLimits.clear();
++    hasCurveEndStops = false;
+     auto assembly = CREATE<ASMTAssembly>::With();
+     assembly->externalSystem->freecadAssemblyObject = this;
+     assembly->setName("OndselAssembly");
+@@ -3579,6 +3597,9 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointOfType(App::DocumentObjec
+             return mbdJoint;
+         }
+ 
++        case JointType::Tangent:
++            return makeMbdJointTangent(joint);
++
+         default:
+             return nullptr;
+     }
+@@ -3743,6 +3764,48 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointDistance(App::DocumentObj
+     }
+ }
+ 
++std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointTangent(App::DocumentObject* joint)
++{
++    // FCPROJECT-PATCH (2026-10-16, plans/2026-10-16-tangent-joint.md, Nutzerentscheidung
++    // "zuerst reicht Vertex auf Spline"): der Vertex bleibt auf der Kante, gleitet frei an ihr
++    // entlang, die Drehung bleibt frei. Die Kante geht als B-Spline in den Koordinaten ihres
++    // JCS an den Solver (OndselSolver PointOnCurveJoint, Marker I = Kante, Marker J = Vertex).
++    // An einer offenen Kurve bleibt der Punkt am Ende stehen (Endanschlaege im Solver).
++    std::string type1 = getElementTypeFromProp(joint, "Reference1");
++    std::string type2 = getElementTypeFromProp(joint, "Reference2");
++    if (type1 == "Vertex" && type2 == "Edge") {
++        swapJCS(joint);  // Kante muss Referenz 1 sein, wie bei Distance PointCurve.
++        std::swap(type1, type2);
++    }
++    if (type1 != "Edge" || type2 != "Vertex") {
++        Base::Console().warning(
++            "Assembly: Tangent-Gelenk '{}' ignoriert - bisher wird nur Vertex auf Kante "
++            "unterstuetzt (gewaehlt: {} und {}).\n",
++            getJointContextName(joint),
++            type1.empty() ? "?" : type1,
++            type2.empty() ? "?" : type2
++        );
++        return nullptr;
++    }
++
++    EdgeBSpline curve;
++    if (!getEdgeBSplineInJcs(joint, "Reference1", "Placement1", curve)) {
++        Base::Console().warning(
++            "Assembly: Tangent-Gelenk '{}' ignoriert - die Kante laesst sich nicht als Kurve "
++            "auslesen.\n",
++            getJointContextName(joint)
++        );
++        return nullptr;
++    }
++
++    auto mbdJoint = CREATE<ASMTPointOnCurveJoint>::With();
++    mbdJoint->setCurve(curve.degree, curve.knots, curve.weights, curve.poles, curve.closed);
++    if (!curve.closed) {
++        hasCurveEndStops = true;
++    }
++    return mbdJoint;
++}
++
+ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(
+     App::DocumentObject* joint,
+     const std::string& nestingPrefix
+diff --git a/src/Mod/Assembly/App/AssemblyObject.h b/src/Mod/Assembly/App/AssemblyObject.h
+index 69be0e1..3887496 100644
+--- a/src/Mod/Assembly/App/AssemblyObject.h
++++ b/src/Mod/Assembly/App/AssemblyObject.h
+@@ -212,6 +212,9 @@ public:
+     );
+     std::shared_ptr<MbD::ASMTJoint> makeMbdJointOfType(App::DocumentObject* joint, JointType jointType);
+     std::shared_ptr<MbD::ASMTJoint> makeMbdJointDistance(App::DocumentObject* joint);
++    // FCPROJECT-PATCH (2026-10-16, plans/2026-10-16-tangent-joint.md): Tangent, erster Schritt
++    // "Vertex auf Kurve" (OndselSolver PointOnCurveJoint).
++    std::shared_ptr<MbD::ASMTJoint> makeMbdJointTangent(App::DocumentObject* joint);
+     std::string handleOneSideOfJoint(
+         App::DocumentObject* joint,
+         const char* propRefName,
+@@ -712,6 +715,10 @@ private:
+         double max;
+     };
+     std::vector<LimitCheck> activeLimits;
++    // FCPROJECT-PATCH (2026-10-16, Tangent-Gelenk): ein Tangent-Gelenk an einer offenen Kurve
++    // bringt im Solver eigene Endanschlaege mit (Limits, die nicht in mbdAssembly->limits
++    // stehen). solve() braucht dann trotzdem den Grenz-Durchgang.
++    bool hasCurveEndStops = false;
+     std::vector<std::string> lastLimitViolations;
+     std::optional<Base::Placement> getJcsInContext(
+         App::DocumentObject* joint,
+diff --git a/src/Mod/Assembly/App/AssemblyUtils.cpp b/src/Mod/Assembly/App/AssemblyUtils.cpp
+index b61874a..42b7a09 100644
+--- a/src/Mod/Assembly/App/AssemblyUtils.cpp
++++ b/src/Mod/Assembly/App/AssemblyUtils.cpp
+@@ -23,6 +23,14 @@
+ 
+ #include <BRepAdaptor_Curve.hxx>
+ #include <BRepAdaptor_Surface.hxx>
++#include <BRep_Tool.hxx>
++#include <GeomConvert.hxx>
++#include <Geom_BSplineCurve.hxx>
++#include <Geom_TrimmedCurve.hxx>
++#include <Precision.hxx>
++#include <Standard_Failure.hxx>
++#include <TColStd_Array1OfReal.hxx>
++#include <gp_Pnt.hxx>
+ #include <TopoDS.hxx>
+ #include <TopoDS_Face.hxx>
+ #include <gp_Circ.hxx>
+@@ -37,6 +45,7 @@
+ #include <App/PropertyStandard.h>
+ #include <App/Link.h>
+ 
++#include <Base/Exception.h>
+ #include <Base/Placement.h>
+ #include <Base/Tools.h>
+ #include <Base/Interpreter.h>
+@@ -161,6 +170,88 @@ double getEdgeRadius(const App::DocumentObject* obj, const std::string& elt)
+     return sf.GetType() == GeomAbs_Circle ? sf.Circle().Radius() : 0.0;
+ }
+ 
++bool getEdgeBSplineInJcs(
++    const App::DocumentObject* joint,
++    const char* propRefName,
++    const char* propPlcName,
++    EdgeBSpline& out
++)
++{
++    // Wie UtilsAssembly.findPlacement(): die Elemente von obj.Shape liegen in den Koordinaten
++    // MIT obj.Placement, das JCS (Placement1/2) ist relativ zu obj. Ein App::Link hat selbst
++    // keine Shape; dann Shape und Placement des verlinkten Objekts (dessen lokale Koordinaten
++    // sind die des Links).
++    // Dasselbe Objekt wie handleOneSideOfJoint()/getEdgeRadius() (Elementname relativ dazu).
++    auto* obj = getObjFromJointRef(joint, propRefName);
++    auto* base = dynamic_cast<const PartApp::Feature*>(obj);
++    if (!base && obj) {
++        base = dynamic_cast<const PartApp::Feature*>(obj->getLinkedObject(true));
++    }
++    if (!base) {
++        return false;
++    }
++    const std::string elt = getElementFromProp(joint, propRefName);
++    if (elt.rfind("Edge", 0) != 0) {
++        return false;
++    }
++
++    try {
++        const TopoDS_Shape sub = base->Shape.getShape().getSubShape(elt.c_str());
++        if (sub.IsNull() || sub.ShapeType() != TopAbs_EDGE) {
++            return false;
++        }
++        const TopoDS_Edge edge = TopoDS::Edge(sub);
++        double first = 0.0;
++        double last = 0.0;
++        // Mit Location der Kante angewendet.
++        Handle(Geom_Curve) curve = BRep_Tool::Curve(edge, first, last);
++        if (curve.IsNull()) {
++            return false;
++        }
++        Handle(Geom_TrimmedCurve) trimmed = new Geom_TrimmedCurve(curve, first, last);
++        Handle(Geom_BSplineCurve) bspline = GeomConvert::CurveToBSplineCurve(trimmed);
++        if (bspline.IsNull()) {
++            return false;
++        }
++        out.closed = bspline->IsClosed()
++            || bspline->StartPoint().Distance(bspline->EndPoint()) < Precision::Confusion();
++        if (bspline->IsPeriodic()) {
++            bspline->SetNotPeriodic();
++        }
++
++        const auto* jcsProp = joint->getPropertyByName<App::PropertyPlacement>(propPlcName);
++        if (!jcsProp) {
++            return false;
++        }
++        const Base::Placement toJcs
++            = jcsProp->getValue().inverse() * base->Placement.getValue().inverse();
++
++        out.degree = bspline->Degree();
++        TColStd_Array1OfReal knotSequence(1, bspline->NbPoles() + bspline->Degree() + 1);
++        bspline->KnotSequence(knotSequence);
++        out.knots.clear();
++        for (int i = knotSequence.Lower(); i <= knotSequence.Upper(); i++) {
++            out.knots.push_back(knotSequence(i));
++        }
++        out.weights.clear();
++        out.poles.clear();
++        for (int i = 1; i <= bspline->NbPoles(); i++) {
++            const gp_Pnt pole = bspline->Pole(i);
++            Base::Vector3d v(pole.X(), pole.Y(), pole.Z());
++            toJcs.multVec(v, v);
++            out.poles.insert(out.poles.end(), {v.x, v.y, v.z});
++            out.weights.push_back(bspline->Weight(i));
++        }
++    }
++    catch (const Standard_Failure&) {
++        return false;
++    }
++    catch (const Base::Exception&) {
++        return false;
++    }
++    return true;
++}
++
+ DistanceType getDistanceType(App::DocumentObject* joint)
+ {
+     if (!joint) {
+diff --git a/src/Mod/Assembly/App/AssemblyUtils.h b/src/Mod/Assembly/App/AssemblyUtils.h
+index f219291..81065a2 100644
+--- a/src/Mod/Assembly/App/AssemblyUtils.h
++++ b/src/Mod/Assembly/App/AssemblyUtils.h
+@@ -24,6 +24,8 @@
+ 
+ #pragma once
+ 
++#include <vector>
++
+ #include <GeomAbs_CurveType.hxx>
+ #include <GeomAbs_SurfaceType.hxx>
+ 
+@@ -64,6 +66,9 @@ enum class JointType
+     Screw,
+     Gears,
+     Belt,
++    // FCPROJECT-PATCH (2026-10-16, plans/2026-10-16-tangent-joint.md): erster Schritt "Vertex
++    // auf Kurve". Am Ende angehaengt, damit die Indizes bestehender Dateien gleich bleiben (C4).
++    Tangent,
+ };
+ 
+ enum class GeometryType
+@@ -150,6 +155,25 @@ AssemblyExport bool isFaceType(
+ AssemblyExport double getFaceRadius(const App::DocumentObject* obj, const std::string& elName);
+ AssemblyExport double getEdgeRadius(const App::DocumentObject* obj, const std::string& elName);
+ 
++// FCPROJECT-PATCH (2026-10-16, Tangent-Gelenk): die Kante von propRefName als (rationale)
++// B-Spline in den Koordinaten des JCS propPlcName, also des Solver-Markers dieser Seite.
++// poles: x, y, z je Pol hintereinander; knots: volle Knotenfolge. false, wenn die Referenz keine
++// Kante ist oder sich nicht umwandeln laesst.
++struct EdgeBSpline
++{
++    int degree = 0;
++    std::vector<double> knots;
++    std::vector<double> weights;
++    std::vector<double> poles;
++    bool closed = false;
++};
++AssemblyExport bool getEdgeBSplineInJcs(
++    const App::DocumentObject* joint,
++    const char* propRefName,
++    const char* propPlcName,
++    EdgeBSpline& out
++);
++
+ AssemblyExport DistanceType getDistanceType(App::DocumentObject* joint);
+ AssemblyExport JointGroup* getJointGroup(const App::Part* part);
+ 
+diff --git a/src/Mod/Assembly/CommandCreateJoint.py b/src/Mod/Assembly/CommandCreateJoint.py
+index b5e2164..0e922c6 100644
+--- a/src/Mod/Assembly/CommandCreateJoint.py
++++ b/src/Mod/Assembly/CommandCreateJoint.py
+@@ -379,6 +379,32 @@ class CommandCreateJointBelt:
+         activateJoint(12)
+ 
+ 
++class CommandCreateJointTangent:
++    # FCPROJECT-PATCH (2026-10-16, plans/2026-10-16-tangent-joint.md): Tangent, erster Schritt
++    # "Vertex auf Kurve".
++    def __init__(self):
++        pass
++
++    def GetResources(self):
++        return {
++            "Pixmap": "Assembly_CreateJointTangent",
++            "MenuText": QT_TRANSLATE_NOOP("Assembly_CreateJointTangent", "Tangent Joint"),
++            "Accel": "K",
++            "ToolTip": QT_TRANSLATE_NOOP(
++                "Assembly_CreateJointTangent",
++                "<p>Creates a tangent joint that keeps a vertex on a curve (spline, arc, line). The vertex slides along the curve and stops at the ends of an open curve; the rotation stays free.</p>"
++                "<p>Select a vertex and an edge.</p>",
++            ),
++            "CmdType": "ForEdit",
++        }
++
++    def IsActive(self):
++        return isCreateJointActive()
++
++    def Activated(self):
++        activateJoint(13)
++
++
+ class CommandGroupGearBelt:
+     def GetCommands(self):
+         return ("Assembly_CreateJointGears", "Assembly_CreateJointBelt")
+@@ -590,4 +616,5 @@ if App.GuiUp:
+     Gui.addCommand("Assembly_CreateJointGears", CommandCreateJointGears())
+     Gui.addCommand("Assembly_CreateJointBelt", CommandCreateJointBelt())
+     Gui.addCommand("Assembly_CreateJointGearBelt", CommandGroupGearBelt())
++    Gui.addCommand("Assembly_CreateJointTangent", CommandCreateJointTangent())
+     Gui.addCommand("Assembly_CreateJointRigidGroup", CommandCreateJointRigidGroup())
+diff --git a/src/Mod/Assembly/InitGui.py b/src/Mod/Assembly/InitGui.py
+index 11d2db7..faea750 100644
+--- a/src/Mod/Assembly/InitGui.py
++++ b/src/Mod/Assembly/InitGui.py
+@@ -121,6 +121,7 @@ class AssemblyWorkbench(Workbench):
+             "Assembly_CreateJointParallel",
+             "Assembly_CreateJointPerpendicular",
+             "Assembly_CreateJointAngle",
++            "Assembly_CreateJointTangent",
+             "Separator",
+             "Assembly_CreateJointRackPinion",
+             "Assembly_CreateJointScrew",
+diff --git a/src/Mod/Assembly/JointObject.py b/src/Mod/Assembly/JointObject.py
+index 765c8a0..a76a674 100644
+--- a/src/Mod/Assembly/JointObject.py
++++ b/src/Mod/Assembly/JointObject.py
+@@ -60,6 +60,7 @@ TranslatedJointTypes = [
+     translate("Assembly", "Screw"),
+     translate("Assembly", "Gears"),
+     translate("Assembly", "Belt"),
++    translate("Assembly", "Tangent"),
+ ]
+ 
+ JointTypes = [
+@@ -76,8 +77,15 @@ JointTypes = [
+     "Screw",
+     "Gears",
+     "Belt",
++    # FCPROJECT-PATCH (2026-10-16, plans/2026-10-16-tangent-joint.md): am Ende angehaengt, damit
++    # die Indizes bestehender Dateien gleich bleiben (muss zu JointType in AssemblyUtils.h passen).
++    "Tangent",
+ ]
+ 
++# FCPROJECT-PATCH (2026-10-16): Tangent, erster Schritt "Vertex auf Kurve" - genau ein Vertex und
++# eine Kante.
++JointTangentElementTypes = ["Vertex", "Edge"]
++
+ JointUsingAngle = [
+     "Angle",
+ ]
+@@ -780,6 +788,12 @@ class Joint:
+     def setJointType(self, joint, newType):
+         oldType = joint.JointType
+         if newType != oldType:
++            # FCPROJECT-PATCH (2026-10-16, Tangent-Gelenk): Joints aus aelteren Dateien tragen die
++            # Typliste ihres Erstellungsstands, ohne die spaeter angehaengten Typen. Liste erst
++            # erneuern, die bestehenden Indizes bleiben dabei gleich.
++            if newType not in joint.getEnumerationsOfProperty("JointType"):
++                joint.JointType = JointTypes
++                joint.JointType = oldType
+             joint.JointType = newType
+ 
+     def onChanged(self, joint, prop):
+@@ -1283,6 +1297,8 @@ class ViewProviderJoint:
+             return ":/icons/Assembly_CreateJointGears.svg"
+         elif self.app_obj.JointType == "Belt":
+             return ":/icons/Assembly_CreateJointPulleys.svg"
++        elif self.app_obj.JointType == "Tangent":
++            return ":/icons/Assembly_CreateJointTangent.svg"
+ 
+         return ":/icons/Assembly_CreateJoint.svg"
+ 
+@@ -2613,6 +2629,11 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+                 # Can't join a solid to itself. So the user need to select 2 different parts.
+                 acceptable = False
+ 
++        # FCPROJECT-PATCH (2026-10-16, Tangent-Gelenk, erster Schritt): nur ein Vertex und eine
++        # Kante, je eins.
++        if acceptable and self.jType == "Tangent":
++            acceptable = self.isTangentSelectionAcceptable(ref)
++
+         if not acceptable:
+             self.addition_rejected = True
+             Gui.Selection.removeSelection(doc_name, obj_name, sub_name)
+@@ -2632,6 +2653,26 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+         # We hide the preview JCS if we just added to the selection
+         self.joint.ViewObject.Proxy.showPreviewJCS(False)
+ 
++    def isTangentSelectionAcceptable(self, ref):
++        def elementType(reference):
++            elt_type, _ = UtilsAssembly.extract_type_and_number(
++                UtilsAssembly.getElementName(reference[1][0])
++            )
++            return elt_type
++
++        new_type = elementType(ref)
++        taken = [elementType(reference) for reference in self.refs]
++        if new_type not in JointTangentElementTypes or new_type in taken:
++            App.Console.PrintWarning(
++                translate(
++                    "Assembly",
++                    "Tangent joint: select one vertex and one edge (for now only vertex on curve).",
++                )
++                + "\n"
++            )
++            return False
++        return True
++
+     def removeSelection(self, doc_name, obj_name, sub_name, mousePos=None):
+         if self.addition_rejected:
+             self.addition_rejected = False

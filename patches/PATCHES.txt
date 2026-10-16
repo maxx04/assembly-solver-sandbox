@@ -134,6 +134,19 @@
 # - nennt bei einer Ueberbestimmung die minimale abhaengige Gelenk-Gruppe.
 2026.10.11-ondselsolver-redundancy-groups.patch
 
+# 2026-10-16: Tangent-Gelenk, erster Schritt "Vertex auf Kurve" (plans/2026-10-16-tangent-joint.md).
+# Zwei eigene Patches AUF den obigen Stand, entstanden in der Cloud-Session ohne lokalen
+# FreeCAD-Checkout (dort fehlt VANILLA_BASE, der Rundum-Patch liess sich nicht neu erzeugen).
+# Beim naechsten lokalen Patch-Export in den Rundum-Patch bzw. den OndselSolver-Patch
+# einpflegen und diese beiden Zeilen dann entfernen.
+#   ondselsolver-point-on-curve: neue Klassen NurbsCurve, EndFrameqcOffset, EndFrameqcCurve,
+#     PointOnCurveConstraintIqcJqc, PointOnCurveJoint, ASMTPointOnCurveJoint (+ Parser, CMake).
+#     Tests: standalone-check/solver-tests/run-solver-tests.sh (ohne FreeCAD).
+#   freecad-assembly-tangent-joint: JointType Tangent (am Ende angehaengt), makeMbdJointTangent(),
+#     getEdgeBSplineInJcs(), Befehl/Icon/Auswahlpruefung, Simulation lehnt Tangent ab.
+2026.10.16-ondselsolver-point-on-curve.patch
+2026.10.16-freecad-assembly-tangent-joint.patch
+
 # NICHT in obiger Liste, weil nicht auf DIESE Sandbox anwendbar (betrifft src/App/*, hier
 # per Sparse-Checkout gar nicht ausgecheckt - nur src/Mod/Assembly + src/3rdParty/
 # OndselSolver sind es). Gehoert inhaltlich trotzdem zum selben Fix-Komplex, wird separat
