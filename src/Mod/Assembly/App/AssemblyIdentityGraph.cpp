@@ -1176,6 +1176,8 @@ std::string jointTypeName(JointType type)
             return "Gears";
         case JointType::Belt:
             return "Belt";
+        case JointType::Tangent:
+            return "Tangent";
     }
     return "Unknown";
 }

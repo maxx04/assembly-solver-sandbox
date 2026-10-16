@@ -24,6 +24,8 @@
 
 #pragma once
 
+#include <vector>
+
 #include <GeomAbs_CurveType.hxx>
 #include <GeomAbs_SurfaceType.hxx>
 
@@ -64,6 +66,9 @@ enum class JointType
     Screw,
     Gears,
     Belt,
+    // FCPROJECT-PATCH (2026-10-16, plans/2026-10-16-tangent-joint.md): erster Schritt "Vertex
+    // auf Kurve". Am Ende angehaengt, damit die Indizes bestehender Dateien gleich bleiben (C4).
+    Tangent,
 };
 
 enum class GeometryType
@@ -149,6 +154,25 @@ AssemblyExport bool isFaceType(
 );
 AssemblyExport double getFaceRadius(const App::DocumentObject* obj, const std::string& elName);
 AssemblyExport double getEdgeRadius(const App::DocumentObject* obj, const std::string& elName);
+
+// FCPROJECT-PATCH (2026-10-16, Tangent-Gelenk): die Kante von propRefName als (rationale)
+// B-Spline in den Koordinaten des JCS propPlcName, also des Solver-Markers dieser Seite.
+// poles: x, y, z je Pol hintereinander; knots: volle Knotenfolge. false, wenn die Referenz keine
+// Kante ist oder sich nicht umwandeln laesst.
+struct EdgeBSpline
+{
+    int degree = 0;
+    std::vector<double> knots;
+    std::vector<double> weights;
+    std::vector<double> poles;
+    bool closed = false;
+};
+AssemblyExport bool getEdgeBSplineInJcs(
+    const App::DocumentObject* joint,
+    const char* propRefName,
+    const char* propPlcName,
+    EdgeBSpline& out
+);
 
 AssemblyExport DistanceType getDistanceType(App::DocumentObject* joint);
 AssemblyExport JointGroup* getJointGroup(const App::Part* part);

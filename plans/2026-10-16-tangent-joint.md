@@ -1,6 +1,7 @@
 # Plan: neues Gelenk „Tangent“, erster Schritt: Vertex auf Spline
 
-Stand: 2026-10-16. Nur Plan, noch keine Umsetzung. Bezug: docs/CONSTRAINTS.md (C2, C4).
+Stand: 2026-10-16. Umgesetzt (Solver getestet, FreeCAD-Seite noch nicht gebaut, siehe „Stand der
+Umsetzung“). Bezug: docs/CONSTRAINTS.md (C2, C4).
 
 ## Ziel
 
@@ -125,15 +126,33 @@ Vergleich läuft dort analytisch (Abstand Punkt–Kurve).
   Abstand ≠ 0 als Rohr um die Kurve). Ändert das Verhalten bestehender Dateien → Rücksprache.
 - Kurve–Fläche, Fläche–Fläche (Nocken).
 
-## Offene Fragen an dich
+## Entscheidungen (Nutzer, 2026-10-16)
 
-1. **Ausrichtung:** Soll Teil A sich beim Gleiten auch an der Kurve ausrichten (z.B. x-Achse
-   des Vertex-Markers entlang der Tangente, wie ein Wagen auf der Schiene)? Oder bleibt die
-   Drehung frei (nur Punkt auf Kurve, mein Vorschlag für Schritt 1)?
-2. **Offenes Kurvenende:** Was passiert, wenn man über das Ende zieht? Vorschlag: Der Punkt
-   bleibt am Endpunkt stehen (Fußpunkt wird auf [u0, u1] begrenzt).
-3. **Simulation:** Reicht es für den ersten Schritt, wenn Tangent nur bei Solve und Drag
-   wirkt und die Simulation mit einer Meldung ablehnt? Geschwindigkeit/Beschleunigung
-   kämen dann als zweiter Schritt.
-4. **Mehrere Kanten:** Soll man eine Kette verbundener Kanten (z.B. Spline + Bogen +
-   Gerade als eine Bahn) auswählen können, oder vorerst genau eine Kante?
+1. **Ausrichtung:** Drehung bleibt frei, nur der Punkt liegt auf der Kurve.
+2. **Offenes Kurvenende:** der Punkt bleibt am Endpunkt stehen.
+3. **Simulation:** vorerst nur Solve und Ziehen; die Simulation lehnt Tangent mit Meldung ab.
+4. **Kanten:** vorerst genau eine Kante.
+
+## Stand der Umsetzung (2026-10-16)
+
+Abweichungen vom Plan oben:
+- Statt einer eigenen Constraint-Klasse mit neuen Gleichungen: ein **mitwandernder End-Frame**
+  (`EndFrameqcCurve`, z = Tangente am Fußpunkt) plus die vorhandenen Translations-Bedingungen
+  (x/y = 0). Mathematisch dasselbe (g1/g2 oben), aber ohne neue Ableitungen; die Aktualisierung
+  pro Iteration sitzt in `DispCompIeqcJeqcKeqcCurve`.
+- **Kurvenende** über zwei Translations-Limits im MbD-System (Ebene durch den Endpunkt senkrecht
+  zur Endtangente), aktiv im Grenz-Durchgang wie Slider-Grenzen. Ohne Limit gleitet der Punkt
+  sonst auf der Verlängerung der Endtangente.
+- Der Kurvenmarker bleibt das normale JCS (Placement1); die Kurve wird in dessen Koordinaten
+  übergeben, `findPlacement()` musste deshalb nicht geändert werden.
+- Solver-Tests liegen unter `standalone-check/solver-tests/` (eigenständig, ohne FreeCAD).
+
+Erledigt:
+- [x] Schritt 1 Solver-Patch (`patches/2026.10.16-ondselsolver-point-on-curve.patch`), alle
+  Solver-Tests grün.
+- [x] Schritt 2–4 FreeCAD (`patches/2026.10.16-freecad-assembly-tangent-joint.patch`).
+- [x] Schritt 6 Doku (ARCHITECTURE §1.2, JOURNAL), `PATCHES.txt`.
+- [ ] FreeCAD lokal bauen und `test_tangent_vertex_spline_flat` laufen lassen (in der
+  Cloud-Session ohne FreeCAD/OCC nicht möglich). Die übrigen Testfälle aus Schritt 5
+  (3D-Spline, Bogen, verschachtelt) sind bisher nur im Solver-Test abgedeckt.
+- [ ] Prüfen im GUI: Gelenk anlegen (Vertex + Kante), Ziehen, Ende, Speichern/Laden.

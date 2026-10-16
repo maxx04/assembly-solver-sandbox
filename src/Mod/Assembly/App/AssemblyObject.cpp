@@ -68,6 +68,7 @@
 #include <OndselSolver/ASMTPerpendicularJoint.h>
 #include <OndselSolver/ASMTPointInPlaneJoint.h>
 #include <OndselSolver/ASMTPointInLineJoint.h>
+#include <OndselSolver/ASMTPointOnCurveJoint.h>
 #include <OndselSolver/ASMTLineInPlaneJoint.h>
 #include <OndselSolver/ASMTPlanarJoint.h>
 #include <OndselSolver/ASMTRevCylJoint.h>
@@ -593,7 +594,9 @@ int AssemblyObject::solve(bool enableRedo)
         // Grenzen werden aktiviert und nachgeloest. Lassen sie sich nicht erfuellen, setzt
         // runDragStep() selbst auf das Ergebnis von runPreDrag() zurueck. Upstream identisch
         // ohne diesen Durchgang.
-        if (!mbdAssembly->limits->empty()) {
+        // Tangent-Gelenk an offener Kurve: Endanschlaege liegen nur im MbD-System (siehe
+        // hasCurveEndStops).
+        if (!mbdAssembly->limits->empty() || hasCurveEndStops) {
             mbdAssembly->runDragStep(std::make_shared<std::vector<std::shared_ptr<ASMTPart>>>());
         }
         reportUnsatisfiedLimits();
@@ -905,6 +908,20 @@ int AssemblyObject::generateSimulation(App::DocumentObject* sim)
     auto jointRefs = getJoints();
 
     removeUnconnectedJoints(jointRefs, groundedObjs);
+
+    // FCPROJECT-PATCH (2026-10-16, Tangent-Gelenk, Nutzerentscheidung): Tangent wirkt vorerst
+    // nur bei Solve und Ziehen. Fuer die Simulation fehlen im Solver noch die
+    // Beschleunigungsterme (Kruemmung der Kurve), deshalb hier ablehnen statt falsch rechnen.
+    for (auto* jt : extractJointObjects(jointRefs)) {
+        if (getJointType(jt) == JointType::Tangent) {
+            Base::Console().error(
+                "Assembly: Simulation nicht moeglich - Tangent-Gelenk '{}' wird in der Simulation "
+                "noch nicht unterstuetzt.\n",
+                getJointContextName(jt)
+            );
+            return -1;
+        }
+    }
 
     jointParts(jointRefs);
 
@@ -1969,6 +1986,7 @@ void AssemblyObject::reportUnsatisfiedLimits()
 std::shared_ptr<ASMTAssembly> AssemblyObject::makeMbdAssembly()
 {
     activeLimits.clear();
+    hasCurveEndStops = false;
     auto assembly = CREATE<ASMTAssembly>::With();
     assembly->externalSystem->freecadAssemblyObject = this;
     assembly->setName("OndselAssembly");
@@ -3579,6 +3597,9 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointOfType(App::DocumentObjec
             return mbdJoint;
         }
 
+        case JointType::Tangent:
+            return makeMbdJointTangent(joint);
+
         default:
             return nullptr;
     }
@@ -3741,6 +3762,48 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointDistance(App::DocumentObj
             return mbdJoint;
         }
     }
+}
+
+std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointTangent(App::DocumentObject* joint)
+{
+    // FCPROJECT-PATCH (2026-10-16, plans/2026-10-16-tangent-joint.md, Nutzerentscheidung
+    // "zuerst reicht Vertex auf Spline"): der Vertex bleibt auf der Kante, gleitet frei an ihr
+    // entlang, die Drehung bleibt frei. Die Kante geht als B-Spline in den Koordinaten ihres
+    // JCS an den Solver (OndselSolver PointOnCurveJoint, Marker I = Kante, Marker J = Vertex).
+    // An einer offenen Kurve bleibt der Punkt am Ende stehen (Endanschlaege im Solver).
+    std::string type1 = getElementTypeFromProp(joint, "Reference1");
+    std::string type2 = getElementTypeFromProp(joint, "Reference2");
+    if (type1 == "Vertex" && type2 == "Edge") {
+        swapJCS(joint);  // Kante muss Referenz 1 sein, wie bei Distance PointCurve.
+        std::swap(type1, type2);
+    }
+    if (type1 != "Edge" || type2 != "Vertex") {
+        Base::Console().warning(
+            "Assembly: Tangent-Gelenk '{}' ignoriert - bisher wird nur Vertex auf Kante "
+            "unterstuetzt (gewaehlt: {} und {}).\n",
+            getJointContextName(joint),
+            type1.empty() ? "?" : type1,
+            type2.empty() ? "?" : type2
+        );
+        return nullptr;
+    }
+
+    EdgeBSpline curve;
+    if (!getEdgeBSplineInJcs(joint, "Reference1", "Placement1", curve)) {
+        Base::Console().warning(
+            "Assembly: Tangent-Gelenk '{}' ignoriert - die Kante laesst sich nicht als Kurve "
+            "auslesen.\n",
+            getJointContextName(joint)
+        );
+        return nullptr;
+    }
+
+    auto mbdJoint = CREATE<ASMTPointOnCurveJoint>::With();
+    mbdJoint->setCurve(curve.degree, curve.knots, curve.weights, curve.poles, curve.closed);
+    if (!curve.closed) {
+        hasCurveEndStops = true;
+    }
+    return mbdJoint;
 }
 
 std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(

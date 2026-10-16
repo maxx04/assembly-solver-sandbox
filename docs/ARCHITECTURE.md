@@ -114,6 +114,34 @@ instanziiert:
 | RackPinion | `ASMTRackPinionJoint` | koppelt Rotation eines Revolute/Cylindrical mit Translation eines Sliders über `pitchRadius` |
 | Screw | `ASMTScrewJoint` | koppelt Rotation+Translation am selben Teil über `pitch` (braucht einen zugehörigen Slider) |
 | Gears / Belt | `ASMTGearJoint` (`radiusJ` bei Belt negiert) | koppelt zwei Rotations-DoF verschiedener Wellen |
+| Tangent (2026-10-16, eigener Typ, am Enum-Ende) | `ASMTPointOnCurveJoint` (eigene Solver-Erweiterung, s. §1.2) | erster Schritt "Vertex auf Kurve": 2 Translationen entzogen, Punkt gleitet auf der Kante, Drehung frei; offene Kurve: Punkt stoppt am Ende |
+
+### 1.2 Tangent-Gelenk: Punkt auf Kurve im Solver (2026-10-16)
+
+Plan und Entscheidungen: `plans/2026-10-16-tangent-joint.md`. OndselSolver kannte keine
+Kurvengeometrie (`ASMTRefCurve` ist ein leerer Platzhalter), deshalb ein eigener Solver-Patch
+(`patches/2026.10.16-ondselsolver-point-on-curve.patch`):
+
+- **FreeCAD-Seite** (`AssemblyObject::makeMbdJointTangent()`): Kante muss Reference1 sein
+  (sonst `swapJCS()`, wie bei Distance), `getEdgeBSplineInJcs()` wandelt die Kante per
+  `GeomConvert` in eine B-Spline und rechnet die Pole in die Koordinaten von Placement1, also
+  des Solver-Markers I (Shape-Koordinaten -> `obj.Placement^-1` -> `Placement1^-1`, dieselbe
+  Kette wie `UtilsAssembly.findPlacement()`). Marker J ist der Vertex.
+- **Solver-Seite:** `EndFrameqcCurve` ist ein zusätzlicher End-Frame am Marker I, der in jeder
+  Newton-Iteration auf den Fußpunkt (nächster Kurvenpunkt zum Vertex, `NurbsCurve::project()`)
+  wandert, z-Achse = Tangente. `PointOnCurveJoint` sind zwei gewöhnliche
+  Translations-Bedingungen entlang x/y dieses Frames ("Punkt auf der Tangente"). Weil sich der
+  Fußpunkt in erster Ordnung nur entlang der Tangente bewegt, ist der Gradient exakt; es gibt
+  keine zusätzliche Unbekannte. Die Aktualisierung hängt an
+  `DispCompIeqcJeqcKeqcCurve::calcPostDynCorrectorIteration()` - Teile (und damit alle
+  Marker) werden vor den Gelenken aktualisiert, der Vertex ist dort also schon auf dem Stand
+  der Iteration.
+- **Kurvenende:** an offenen Kurven zwei `TranslationLimitIJ` (Ebene durch den Endpunkt senkrecht
+  zur Endtangente, "=>" 0). Sie stehen nur im MbD-System, nicht in `mbdAssembly->limits` -
+  `solve()` macht den Grenz-Durchgang deshalb auch bei `hasCurveEndStops` (§3.2c).
+- **Grenzen:** nur Lage (Solve, Ziehen); für die Simulation fehlen die Krümmungsterme der
+  Beschleunigung, `generateSimulation()` lehnt Tangent ab. Konvergenz ohne Krümmungsterm im
+  Hesse-Anteil linear statt quadratisch (in den Tests 3-20 Iterationen).
 
 `GroundedJoint`/`RigidGroupJoint` sind **keine** `JointType`-Varianten - sie haben kein
 `Reference1`/`Reference2` und tauchen deshalb in `AssemblyObject::getJoints()` gar nicht auf

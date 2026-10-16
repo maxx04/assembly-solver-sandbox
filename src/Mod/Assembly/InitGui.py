@@ -121,6 +121,7 @@ class AssemblyWorkbench(Workbench):
             "Assembly_CreateJointParallel",
             "Assembly_CreateJointPerpendicular",
             "Assembly_CreateJointAngle",
+            "Assembly_CreateJointTangent",
             "Separator",
             "Assembly_CreateJointRackPinion",
             "Assembly_CreateJointScrew",
