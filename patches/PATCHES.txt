@@ -127,6 +127,7 @@
 # 2026-10-17 (37): Nachtrag - Ziehen rechnet in Weltkoordinaten (gedrehte Container, Tisch lief gespiegelt).
 # 2026-10-17 (38): Nachtrag - Sanduhr waehrend der ersten Berechnung beim Ziehen.
 # 2026-10-17 (39): Nachtrag - Sandbox-Kennung (Version dev-sandbox, Markierung beim Speichern).
+# 2026-10-17 (40): Nachtrag - OndselSolver Schwellen-Pivotisierung (kein falsches "singulaer" mehr).
 
 2026.10.03-freecad-assembly-full-resync.patch
 
@@ -144,6 +145,7 @@
 # Bedingungen (System::redundantConstraintStates()), genauer Loeser vor der vollen Pivotsuche.
 # Seit 2026-10-17: Konvergenzpruefung (NewtonRaphson-Indexfehler + Ganzzahl-Division,
 # AnyPosICNewtonRaphson::positionsConverged()), Markowitz-Loeser vor dem genauen Loeser.
+# Seit 2026-10-17 abends: Schwellen-Pivotisierung in GESpMatParPvMarkoFast::doPivoting().
 2026.10.11-ondselsolver-redundancy-groups.patch
 
 # NICHT in obiger Liste, weil nicht auf DIESE Sandbox anwendbar (betrifft src/App/*, hier

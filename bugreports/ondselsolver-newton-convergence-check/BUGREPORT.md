@@ -1,6 +1,7 @@
-# NewtonRaphson::isConvergedToNumericalLimit(): wrong index and integer division
+# Assembly: OndselSolver NewtonRaphson::isConvergedToNumericalLimit() uses wrong index and integer division
 
-Repository: FreeCAD/OndselSolver, `OndselSolver/NewtonRaphson.cpp` (checked on `main`, 4be80eef02).
+Component: `src/3rdParty/OndselSolver` (FreeCAD/OndselSolver, issues are disabled there),
+`OndselSolver/NewtonRaphson.cpp`, checked on `main` (4be80eef02).
 
 ## Problem
 
@@ -37,7 +38,8 @@ they reach epsilon in 1–3 iterations.
 
 Observed in a large nested assembly (114 joints, redundant but consistent constraints): every
 position solve ran exactly 5 iterations with `dxNorm` plateauing around `1e-5`, even when no
-part moved between consecutive solves.
+part moved between consecutive solves. The observation was made in a FreeCAD build with
+additional patches; the convergence check itself is unchanged upstream.
 
 ## Suggested fix
 

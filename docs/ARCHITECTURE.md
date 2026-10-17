@@ -624,6 +624,22 @@ Zieh-Schritt 0,028 s → 0,015 s. Matrix 35/35, Drag-Rundumtest PASS.
 „singulär“ (Markowitz-Kriterium wählt kleine Pivots), einmal pro Solve springt dann der genaue
 Löser ein. Das ist der größte verbleibende Block eines Solves.
 
+### 3.2f Schwellen-Pivotisierung im schnellen Löser (2026-10-17)
+
+**Befund:** `GESpMatParPvMarkoFast::doPivoting()` wählt den Pivot einer Spalte nach
+`|a| / 2^Zeilenlänge`, also fast nur nach Dünnbesetztheit. An BG22 schlug so ein Rausch-Eintrag
+(2e-25) in einer kurzen Zeile einen echten Eintrag der Größe 1. Gewählt wurde ein Pivot, der
+praktisch null war: „singulär“ bei einer nicht singulären Matrix (Spalte 1179 = Gleichung von
+Joint008, laut Suche nach Rangfolge unabhängig). Jeder Solve fiel dann auf
+`GESpMatParPvPrecise` zurück.
+
+**Änderung (OndselSolver-Patch):** Für die Dünnbesetzt-Auswahl kommen nur Kandidaten mit
+mindestens 10 % des größten Betrags der Spalte in Frage (übliches Threshold Partial Pivoting).
+Die Positionsbuchhaltung bleibt unverändert.
+
+**Wirkung (BG22):** Solve 1,4 s → 0,44 s, kein Rückfall mehr. Matrix 35/35. Upstream-Kandidat
+(zusammen mit §3.2e).
+
 ### 3.3 Kopplungs-Sequenz (Zusammenfassung von §2.1 + hier)
 
 ```
