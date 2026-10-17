@@ -60,6 +60,7 @@ TranslatedJointTypes = [
     translate("Assembly", "Screw"),
     translate("Assembly", "Gears"),
     translate("Assembly", "Belt"),
+    translate("Assembly", "Tangent"),
 ]
 
 JointTypes = [
@@ -76,7 +77,14 @@ JointTypes = [
     "Screw",
     "Gears",
     "Belt",
+    # FCPROJECT-PATCH (2026-10-16, plans/2026-10-16-tangent-joint.md): am Ende angehaengt, damit
+    # die Indizes bestehender Dateien gleich bleiben (muss zu JointType in AssemblyUtils.h passen).
+    "Tangent",
 ]
+
+# FCPROJECT-PATCH (2026-10-16): Tangent, erster Schritt "Vertex auf Kurve" - genau ein Vertex und
+# eine Kante.
+JointTangentElementTypes = ["Vertex", "Edge"]
 
 JointUsingAngle = [
     "Angle",
@@ -780,6 +788,12 @@ class Joint:
     def setJointType(self, joint, newType):
         oldType = joint.JointType
         if newType != oldType:
+            # FCPROJECT-PATCH (2026-10-16, Tangent-Gelenk): Joints aus aelteren Dateien tragen die
+            # Typliste ihres Erstellungsstands, ohne die spaeter angehaengten Typen. Liste erst
+            # erneuern, die bestehenden Indizes bleiben dabei gleich.
+            if newType not in joint.getEnumerationsOfProperty("JointType"):
+                joint.JointType = JointTypes
+                joint.JointType = oldType
             joint.JointType = newType
 
     def onChanged(self, joint, prop):
@@ -1283,6 +1297,8 @@ class ViewProviderJoint:
             return ":/icons/Assembly_CreateJointGears.svg"
         elif self.app_obj.JointType == "Belt":
             return ":/icons/Assembly_CreateJointPulleys.svg"
+        elif self.app_obj.JointType == "Tangent":
+            return ":/icons/Assembly_CreateJointTangent.svg"
 
         return ":/icons/Assembly_CreateJoint.svg"
 
@@ -2613,6 +2629,11 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
                 # Can't join a solid to itself. So the user need to select 2 different parts.
                 acceptable = False
 
+        # FCPROJECT-PATCH (2026-10-16, Tangent-Gelenk, erster Schritt): nur ein Vertex und eine
+        # Kante, je eins.
+        if acceptable and self.jType == "Tangent":
+            acceptable = self.isTangentSelectionAcceptable(ref)
+
         if not acceptable:
             self.addition_rejected = True
             Gui.Selection.removeSelection(doc_name, obj_name, sub_name)
@@ -2631,6 +2652,26 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
 
         # We hide the preview JCS if we just added to the selection
         self.joint.ViewObject.Proxy.showPreviewJCS(False)
+
+    def isTangentSelectionAcceptable(self, ref):
+        def elementType(reference):
+            elt_type, _ = UtilsAssembly.extract_type_and_number(
+                UtilsAssembly.getElementName(reference[1][0])
+            )
+            return elt_type
+
+        new_type = elementType(ref)
+        taken = [elementType(reference) for reference in self.refs]
+        if new_type not in JointTangentElementTypes or new_type in taken:
+            App.Console.PrintWarning(
+                translate(
+                    "Assembly",
+                    "Tangent joint: select one vertex and one edge (for now only vertex on curve).",
+                )
+                + "\n"
+            )
+            return False
+        return True
 
     def removeSelection(self, doc_name, obj_name, sub_name, mousePos=None):
         if self.addition_rejected:

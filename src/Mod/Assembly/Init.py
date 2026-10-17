@@ -35,3 +35,10 @@ FreeCAD.__unit_test__ += ["TestAssemblyWorkbench"]
 # The correct format for assembly interoperability is a research topic. ASMT is a placeholder.
 FreeCAD.addImportType("Assembly Format (*.asmt *.ASMT)", "AssemblyImport")
 # FreeCAD.addExportType()
+
+# FCPROJECT-PATCH (2026-10-17): Sandbox-Dateien (Gelenktypen, die nur diese Version kennt) beim
+# Speichern markieren und warnen - siehe AssemblySandboxSaveCheck.py.
+import AssemblySandboxSaveCheck
+
+AssemblySandboxSaveCheck.install()
+

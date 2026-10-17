@@ -114,6 +114,34 @@ instanziiert:
 | RackPinion | `ASMTRackPinionJoint` | koppelt Rotation eines Revolute/Cylindrical mit Translation eines Sliders über `pitchRadius` |
 | Screw | `ASMTScrewJoint` | koppelt Rotation+Translation am selben Teil über `pitch` (braucht einen zugehörigen Slider) |
 | Gears / Belt | `ASMTGearJoint` (`radiusJ` bei Belt negiert) | koppelt zwei Rotations-DoF verschiedener Wellen |
+| Tangent (2026-10-16, eigener Typ, am Enum-Ende) | `ASMTPointOnCurveJoint` (eigene Solver-Erweiterung, s. §1.2) | erster Schritt "Vertex auf Kurve": 2 Translationen entzogen, Punkt gleitet auf der Kante, Drehung frei; offene Kurve: Punkt stoppt am Ende |
+
+### 1.2 Tangent-Gelenk: Punkt auf Kurve im Solver (2026-10-16)
+
+Plan und Entscheidungen: `plans/2026-10-16-tangent-joint.md`. OndselSolver kannte keine
+Kurvengeometrie (`ASMTRefCurve` ist ein leerer Platzhalter), deshalb ein eigener Solver-Patch
+(`patches/2026.10.16-ondselsolver-point-on-curve.patch`):
+
+- **FreeCAD-Seite** (`AssemblyObject::makeMbdJointTangent()`): Kante muss Reference1 sein
+  (sonst `swapJCS()`, wie bei Distance), `getEdgeBSplineInJcs()` wandelt die Kante per
+  `GeomConvert` in eine B-Spline und rechnet die Pole in die Koordinaten von Placement1, also
+  des Solver-Markers I (Shape-Koordinaten -> `obj.Placement^-1` -> `Placement1^-1`, dieselbe
+  Kette wie `UtilsAssembly.findPlacement()`). Marker J ist der Vertex.
+- **Solver-Seite:** `EndFrameqcCurve` ist ein zusätzlicher End-Frame am Marker I, der in jeder
+  Newton-Iteration auf den Fußpunkt (nächster Kurvenpunkt zum Vertex, `NurbsCurve::project()`)
+  wandert, z-Achse = Tangente. `PointOnCurveJoint` sind zwei gewöhnliche
+  Translations-Bedingungen entlang x/y dieses Frames ("Punkt auf der Tangente"). Weil sich der
+  Fußpunkt in erster Ordnung nur entlang der Tangente bewegt, ist der Gradient exakt; es gibt
+  keine zusätzliche Unbekannte. Die Aktualisierung hängt an
+  `DispCompIeqcJeqcKeqcCurve::calcPostDynCorrectorIteration()` - Teile (und damit alle
+  Marker) werden vor den Gelenken aktualisiert, der Vertex ist dort also schon auf dem Stand
+  der Iteration.
+- **Kurvenende:** an offenen Kurven zwei `TranslationLimitIJ` (Ebene durch den Endpunkt senkrecht
+  zur Endtangente, "=>" 0). Sie stehen nur im MbD-System, nicht in `mbdAssembly->limits` -
+  `solve()` macht den Grenz-Durchgang deshalb auch bei `hasCurveEndStops` (§3.2c).
+- **Grenzen:** nur Lage (Solve, Ziehen); für die Simulation fehlen die Krümmungsterme der
+  Beschleunigung, `generateSimulation()` lehnt Tangent ab. Konvergenz ohne Krümmungsterm im
+  Hesse-Anteil linear statt quadratisch (in den Tests 3-20 Iterationen).
 
 `GroundedJoint`/`RigidGroupJoint` sind **keine** `JointType`-Varianten - sie haben kein
 `Reference1`/`Reference2` und tauchen deshalb in `AssemblyObject::getJoints()` gar nicht auf
@@ -231,6 +259,30 @@ sequenceDiagram
 
     Note over VP,AO: Innere, ueber flexible AssemblyLink eingebettete<br/>AssemblyObject-Instanzen haben ihre EIGENE VP+Solver-<br/>Zustand - wird waehrend DIESES Drags NIE beruehrt,<br/>weil FreeCADs Gui nur an die aktive Instanz weiterleitet.
 ```
+
+### 2.2a Ziehen: Mausvorgabe in Welt- statt lokalen Koordinaten (2026-10-17)
+
+`ViewProviderAssembly::tryMouseMove()` addierte die Mausbewegung (Weltkoordinaten) direkt auf die
+Placement des gezogenen Objekts, die aber relativ zu seinem Elterncontainer ist. Die Drehformeln
+mischten ebenso die lokale Placement mit dem globalen JCS. Bei einem Teil in einem gedrehten
+Container lief die Vorgabe gespiegelt (Nutzerbefund: Tisch BG89 in BG22 lief entgegen der Maus).
+
+Jetzt wird je gezogenem Objekt die Weltlage des Elterncontainers bestimmt, mit derselben Methode wie
+`jcsGlobalPlc` in `initMove()`: `GeoFeature::globalPlacement()`, bei `App::Link`-Teilen
+`GeoFeature::getGlobalPlacement(obj)`. Gerechnet wird in Weltkoordinaten, erst am Ende in die
+Elternkoordinaten zurück. Ohne gedrehten Container ändert sich nichts.
+
+### 2.2b Sandbox-Kennung und Speicher-Pruefung (2026-10-17)
+
+- Unsere FreeCAD-Version heisst `27.1.0dev-sandbox` (About-Fenster, Fenstertitel):
+  `build:`-Patch `patches/2026.10.17-freecad-version-suffix-sandbox.patch` auf `version.json`.
+- `AssemblySandboxSaveCheck.py` (geladen aus `Init.py`) beobachtet das Speichern. Enthaelt ein
+  Dokument Gelenke mit Sandbox-eigenem Typ (`SANDBOX_JOINT_TYPES`, derzeit `Tangent`), wird
+  `BuildRevision` fuer diesen Speichervorgang auf `<rev>-sandbox` gesetzt. Der Dateikopf lautet
+  dann `ProgramVersion="27.1R49261-sandbox (Git)"`, FreeCADs Versionspruefung liest weiter 27.1.
+  Dazu kommt eine Warnung im Ausgabefenster.
+- Hintergrund: Andere FreeCAD-Versionen uebergehen solche Gelenke beim Loesen still; der
+  Gelenk-Dialog bricht dort mit `'Tangent' is not in list` ab. Die Datei selbst bleibt intakt.
 
 ### 2.3 Verschachteln: `AssemblyLink::updateContents()` (die Kopier-Pipeline)
 
@@ -571,6 +623,34 @@ in `RedundantConstraint` und löst ohne sie weiter.
 - Das Gedächtnis ist ein FreeCAD-seitiges Laufzeit-Detail.
 - Die interne Einheit muss 1 sein (`ASMTAssembly`, `mbdUnits`), sonst stimmen die mm-Werte
   nicht.
+
+### 3.2e Konvergenzprüfung der Lageloesung (2026-10-17, uncommittet)
+
+**Befund:** `NewtonRaphson::isConvergedToNumericalLimit()` (Upstream) enthält zwei Fehler:
+- `dxNorms->at(iterNo)` statt `iterNo - 1`
+- `iterNo / iterMax` als Ganzzahl-Division
+
+Deshalb erkennt die Prüfung nie, dass der Schritt sich halbiert. Nach 3 Iterationen unter `1e-2`
+meldet sie „konvergiert“. Zusätzlich enthält `dxNorm` die Lagrange-Multiplikatoren, die in jedem
+Solve bei null starten. An BG22 liefen so je Durchlauf 5 Iterationen mit unveränderten Lagen
+(gemessen: Positionsanteil von `dx` = 0, alle Bedingungen erfüllt). Nach der zweiten
+„Singularität“ rechnete jede davon mit dem langsamen `GESpMatParPvPrecise`.
+
+**Änderung (OndselSolver-Patch):**
+- Beide Fehler korrigiert. Upstream-Meldung vorbereitet in
+  `bugreports/ondselsolver-newton-convergence-check/BUGREPORT.md`.
+- `AnyPosICNewtonRaphson::positionsConverged()`: Eine Lageloesung (PosIC und PosICDrag) ist
+  fertig, wenn alle Bedingungen nach dem Schritt bis 1e-8 erfüllt sind und der Lageschritt
+  ≤ 1e-6 war. `PosICNewtonRaphson::isConverged()` nutzt sie ebenfalls.
+- Findet die Suche nach Rangfolge keine Redundanz, wird zuerst `GESpMatParPvMarko`
+  versucht, dann `GESpMatParPvPrecise`.
+
+**Wirkung (BG22, Stand 2026-10-17):** Solve 15 s → 1,0 s, erstes Neuberechnen 18,9 s → 3,5 s,
+Zieh-Schritt 0,028 s → 0,015 s. Matrix 35/35, Drag-Rundumtest PASS.
+
+**Offen:** Der schnelle Löser `GESpMatParPvMarkoFast` meldet bei BG22 weiterhin fälschlich
+„singulär“ (Markowitz-Kriterium wählt kleine Pivots), einmal pro Solve springt dann der genaue
+Löser ein. Das ist der größte verbleibende Block eines Solves.
 
 ### 3.3 Kopplungs-Sequenz (Zusammenfassung von §2.1 + hier)
 

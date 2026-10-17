@@ -1,8 +1,26 @@
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/ASMTAssembly.cpp b/src/3rdParty/OndselSolver/OndselSolver/ASMTAssembly.cpp
-index 27e9054..10133dd 100644
+index 27e9054..822b6e8 100644
 --- a/src/3rdParty/OndselSolver/OndselSolver/ASMTAssembly.cpp
 +++ b/src/3rdParty/OndselSolver/OndselSolver/ASMTAssembly.cpp
-@@ -1341,6 +1341,9 @@ void MbD::ASMTAssembly::runPreDrag()
+@@ -49,6 +49,7 @@
+ #include "ASMTParallelAxesJoint.h"
+ #include "ASMTPerpendicularJoint.h"
+ #include "ASMTRackPinionJoint.h"
++#include "ASMTPointOnCurveJoint.h"
+ #include "ASMTScrewJoint.h"
+ #include "SimulationStoppingError.h"
+ #include "ASMTKinematicIJ.h"
+@@ -738,6 +739,9 @@ void MbD::ASMTAssembly::readJoints(std::vector<std::string>& lines)
+         else if (jointsLines[0] == "\t\t\tPointInLineJoint") {
+             joint = CREATE<ASMTPointInLineJoint>::With();
+         }
++        else if (jointsLines[0] == "\t\t\tPointOnCurveJoint") {
++            joint = CREATE<ASMTPointOnCurveJoint>::With();
++        }
+         else if (jointsLines[0] == "\t\t\tTranslationalJoint") {
+             joint = CREATE<ASMTTranslationalJoint>::With();
+         }
+@@ -1341,6 +1345,9 @@ void MbD::ASMTAssembly::runPreDrag()
      }
      mbdSystem = std::make_shared<System>();
      mbdSystem->externalSystem->asmtAssembly = this;
@@ -12,7 +30,7 @@ index 27e9054..10133dd 100644
      mbdSystem->runPreDrag(mbdSystem);
  }
  
-@@ -1429,6 +1432,9 @@ void MbD::ASMTAssembly::runPostDrag()
+@@ -1429,6 +1436,9 @@ void MbD::ASMTAssembly::runPostDrag()
      }
      mbdSystem = std::make_shared<System>();
      mbdSystem->externalSystem->asmtAssembly = this;
@@ -47,13 +65,1183 @@ index e9cbc6e..527dace 100644
  		bool debug = false;
          std::shared_ptr<ExternalSystem> externalSystem;
  
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/ASMTPointOnCurveJoint.cpp b/src/3rdParty/OndselSolver/OndselSolver/ASMTPointOnCurveJoint.cpp
+new file mode 100644
+index 0000000..202c96d
+--- /dev/null
++++ b/src/3rdParty/OndselSolver/OndselSolver/ASMTPointOnCurveJoint.cpp
+@@ -0,0 +1,192 @@
++/***************************************************************************
++ *   Copyright (c) 2023 Ondsel, Inc.                                       *
++ *                                                                         *
++ *   This file is part of OndselSolver.                                    *
++ *                                                                         *
++ *   See LICENSE file for details about copyright.                         *
++ ***************************************************************************/
++
++#include <fstream>
++#include <iomanip>
++#include <limits>
++
++#include "ASMTPointOnCurveJoint.h"
++#include "ASMTAssembly.h"
++#include "ASMTMarker.h"
++#include "EndFrameqcCurve.h"
++#include "MarkerFrame.h"
++#include "PointOnCurveJoint.h"
++#include "SimulationStoppingError.h"
++#include "System.h"
++#include "TranslationLimitIJ.h"
++#include "Units.h"
++
++using namespace MbD;
++
++namespace {
++	// Unit vectors x, y perpendicular to z, columns of aAme = [x y z].
++	void setFrameAlong(FMatDsptr aAme, const NurbsCurve::Vec3& z)
++	{
++		size_t k = 0;
++		for (size_t i = 1; i < 3; i++) {
++			if (std::fabs(z[i]) < std::fabs(z[k])) {
++				k = i;
++			}
++		}
++		NurbsCurve::Vec3 x = { 0.0, 0.0, 0.0 };
++		x[k] = 1.0;
++		double along = x[0] * z[0] + x[1] * z[1] + x[2] * z[2];
++		for (size_t i = 0; i < 3; i++) {
++			x[i] -= along * z[i];
++		}
++		double len = std::sqrt(x[0] * x[0] + x[1] * x[1] + x[2] * x[2]);
++		for (auto& xi : x) {
++			xi /= len;
++		}
++		NurbsCurve::Vec3 y = { z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0] };
++		for (size_t i = 0; i < 3; i++) {
++			aAme->at(i)->at(0) = x[i];
++			aAme->at(i)->at(1) = y[i];
++			aAme->at(i)->at(2) = z[i];
++		}
++	}
++
++	void storeOnLevelDoubles(std::ofstream& os, size_t level, const std::vector<double>& values)
++	{
++		for (size_t i = 0; i < level; i++) {
++			os << '\t';
++		}
++		auto oldPrecision = os.precision(std::numeric_limits<double>::max_digits10);
++		for (double value : values) {
++			os << value << '\t';
++		}
++		os << std::endl;
++		os.precision(oldPrecision);
++	}
++}
++
++std::shared_ptr<ASMTPointOnCurveJoint> MbD::ASMTPointOnCurveJoint::With()
++{
++	auto asmt = std::make_shared<ASMTPointOnCurveJoint>();
++	asmt->initialize();
++	return asmt;
++}
++
++std::shared_ptr<ItemIJ> MbD::ASMTPointOnCurveJoint::mbdClassNew()
++{
++	return CREATE<PointOnCurveJoint>::With();
++}
++
++void MbD::ASMTPointOnCurveJoint::setCurve(size_t deg, const std::vector<double>& kts,
++	const std::vector<double>& wts, const std::vector<double>& pls, bool isClosed)
++{
++	degree = deg;
++	knots = kts;
++	weights = wts;
++	poles = pls;
++	closed = isClosed;
++}
++
++void MbD::ASMTPointOnCurveJoint::parseASMT(std::vector<std::string>& lines)
++{
++	ASMTJoint::parseASMT(lines);
++	auto readRow = [&](const std::string& label, std::vector<double>& values) {
++		values.clear();
++		if (!lines.empty() && lines[0].find(label) != std::string::npos) {
++			lines.erase(lines.begin());
++			auto row = readRowOfDoubles(lines[0]);
++			values.assign(row->begin(), row->end());
++			lines.erase(lines.begin());
++		}
++	};
++	if (!lines.empty() && lines[0].find("degree") != std::string::npos) {
++		lines.erase(lines.begin());
++		degree = (size_t)readInt(lines[0]);
++		lines.erase(lines.begin());
++	}
++	if (!lines.empty() && lines[0].find("closed") != std::string::npos) {
++		lines.erase(lines.begin());
++		closed = readBool(lines[0]);
++		lines.erase(lines.begin());
++	}
++	readRow("knots", knots);
++	readRow("weights", weights);
++	readRow("poles", poles);
++}
++
++void MbD::ASMTPointOnCurveJoint::createMbD(std::shared_ptr<System> mbdSys, std::shared_ptr<Units> mbdUnits)
++{
++	std::vector<NurbsCurve::Vec3> curvePoles;
++	for (size_t i = 0; i + 2 < poles.size(); i += 3) {
++		curvePoles.push_back({ poles[i], poles[i + 1], poles[i + 2] });
++	}
++	auto curve = std::make_shared<NurbsCurve>(degree, knots, weights, curvePoles, closed);
++	if (!curve->isValid()) {
++		throw SimulationStoppingError("PointOnCurveJoint " + name + ": invalid curve.");
++	}
++	curve->scale(1.0 / mbdUnits->length);
++
++	ASMTJoint::createMbD(mbdSys, mbdUnits);
++	auto mbdJt = std::static_pointer_cast<PointOnCurveJoint>(mbdObject);
++	auto mrkI = std::static_pointer_cast<EndFramec>(root()->markerAt(markerI)->mbdObject);
++	auto mrkJ = std::static_pointer_cast<EndFramec>(root()->markerAt(markerJ)->mbdObject);
++	auto markerFrameI = mrkI->getMarkerFrame();
++
++	auto curveFrm = CREATE<EndFrameqcCurve>::With();
++	markerFrameI->addEndFrame(curveFrm);
++	curveFrm->curve = curve;
++	mbdJt->connectsItoJ(curveFrm, mrkJ);
++
++	if (curve->isClosed()) {
++		return;
++	}
++	// End stops: at each end the point may not pass the plane through the end point that is
++	// perpendicular to the end tangent ("=>" 0 along the inward tangent).
++	for (int end = 0; end < 2; end++) {
++		double u = end == 0 ? curve->firstParameter() : curve->lastParameter();
++		auto c = curve->value(u);
++		auto t = curve->tangent(u);
++		if (end == 1) {
++			for (auto& ti : t) {
++				ti = -ti;
++			}
++		}
++		auto endFrm = CREATE<EndFrameqcOffset>::With();
++		markerFrameI->addEndFrame(endFrm);
++		for (size_t i = 0; i < 3; i++) {
++			endFrm->rmem->at(i) = c[i];
++		}
++		setFrameAlong(endFrm->aAme, t);
++		auto limit = TranslationLimitIJ::With();
++		limit->name = mbdJt->name + (end == 0 ? "-CurveStart" : "-CurveEnd");
++		limit->connectsItoJ(endFrm, mrkJ);
++		limit->type = "=>";
++		limit->limit = 0.0;
++		limit->tol = 1.0e-9;
++		mbdSys->addLimit(limit);
++	}
++}
++
++void MbD::ASMTPointOnCurveJoint::storeOnLevel(std::ofstream& os, size_t level)
++{
++	// Not ASMTJoint::storeOnLevel(): it derives the type name from typeid().name(), which only
++	// gives the right text with MSVC.
++	storeOnLevelString(os, level, "PointOnCurveJoint");
++	ASMTItemIJ::storeOnLevel(os, level);
++	storeOnLevelString(os, level + 1, "degree");
++	storeOnLevelInt(os, level + 2, (int)degree);
++	storeOnLevelString(os, level + 1, "closed");
++	storeOnLevelBool(os, level + 2, closed);
++	storeOnLevelString(os, level + 1, "knots");
++	storeOnLevelDoubles(os, level + 2, knots);
++	storeOnLevelString(os, level + 1, "weights");
++	storeOnLevelDoubles(os, level + 2, weights);
++	storeOnLevelString(os, level + 1, "poles");
++	storeOnLevelDoubles(os, level + 2, poles);
++}
++
++void MbD::ASMTPointOnCurveJoint::storeOnTimeSeries(std::ofstream& os)
++{
++	os << "PointOnCurveJointSeries\t" << fullName("") << std::endl;
++	ASMTItemIJ::storeOnTimeSeries(os);
++}
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/ASMTPointOnCurveJoint.h b/src/3rdParty/OndselSolver/OndselSolver/ASMTPointOnCurveJoint.h
+new file mode 100644
+index 0000000..8061998
+--- /dev/null
++++ b/src/3rdParty/OndselSolver/OndselSolver/ASMTPointOnCurveJoint.h
+@@ -0,0 +1,36 @@
++/***************************************************************************
++ *   Copyright (c) 2023 Ondsel, Inc.                                       *
++ *                                                                         *
++ *   This file is part of OndselSolver.                                    *
++ *                                                                         *
++ *   See LICENSE file for details about copyright.                         *
++ ***************************************************************************/
++
++#pragma once
++
++#include "ASMTJoint.h"
++
++namespace MbD {
++	// Origin of marker J stays on a curve fixed to marker I. The curve is a (rational) B-spline
++	// in the coordinates of marker I. On an open curve the point stops at the curve ends (two
++	// translation limits along the end tangents).
++	class ASMTPointOnCurveJoint : public ASMTJoint
++	{
++		//
++	public:
++		static std::shared_ptr<ASMTPointOnCurveJoint> With();
++		std::shared_ptr<ItemIJ> mbdClassNew() override;
++		void parseASMT(std::vector<std::string>& lines) override;
++		void createMbD(std::shared_ptr<System> mbdSys, std::shared_ptr<Units> mbdUnits) override;
++		void storeOnLevel(std::ofstream& os, size_t level) override;
++		void storeOnTimeSeries(std::ofstream& os) override;
++
++		// poles: x, y, z of each pole one after the other. weights may be empty.
++		void setCurve(size_t degree, const std::vector<double>& knots,
++			const std::vector<double>& weights, const std::vector<double>& poles, bool closed);
++
++		size_t degree = 0;
++		std::vector<double> knots, weights, poles;
++		bool closed = false;
++	};
++}
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/AnyPosICNewtonRaphson.cpp b/src/3rdParty/OndselSolver/OndselSolver/AnyPosICNewtonRaphson.cpp
+index fb9b2e1..8cb7bf8 100644
+--- a/src/3rdParty/OndselSolver/OndselSolver/AnyPosICNewtonRaphson.cpp
++++ b/src/3rdParty/OndselSolver/OndselSolver/AnyPosICNewtonRaphson.cpp
+@@ -6,6 +6,8 @@
+  *   See LICENSE file for details about copyright.                         *
+  ***************************************************************************/
+ 
++#include <cmath>
++#include <sstream>
+ #include <iostream>
+  
+ #include "AnyPosICNewtonRaphson.h"
+@@ -103,5 +105,31 @@ void MbD::AnyPosICNewtonRaphson::assignEquationNumbers()
+ 
+ bool MbD::AnyPosICNewtonRaphson::isConverged()
+ {
+-	return dxNorms->at(iterNo) < dxTol || isConvergedToNumericalLimit();
++	return positionsConverged() || dxNorms->at(iterNo) < dxTol || isConvergedToNumericalLimit();
++}
++
++// FCPROJECT-PATCH (2026-10-17): Lageloesungen sind fertig, wenn sich die Lagen (die ersten nqsu
++// Unbekannten) nicht mehr aendern und alle Bedingungen erfuellt sind. dxNorm umfasst auch die
++// Lagrange-Multiplikatoren, die in jedem Solve bei null starten: an BG22 (114 Gelenke) liefen so je
++// Durchlauf 5 Iterationen mit unveraenderten Lagen, jede mit dem langsamen genauen Loeser.
++bool MbD::AnyPosICNewtonRaphson::positionsConverged()
++{
++	if (!dx || !y || nqsu == SIZE_MAX) {
++		return false;
++	}
++	// Bedingungen nach dem Schritt erfuellt (mm bzw. Kosinus) und der Schritt selbst klein: ein
++	// weiterer Schritt aendert nur noch Rechenrauschen (an BG22 1.7e-7 nach dem ersten, Rest 1e-11).
++	constexpr double residualTol = 1.0e-8;
++	constexpr double stepTol = 1.0e-6;
++	for (size_t i = 0; i < nqsu && i < dx->size(); i++) {
++		if (std::abs(dx->at(i)) > stepTol) {
++			return false;
++		}
++	}
++	for (size_t i = nqsu; i < y->size(); i++) {
++		if (std::abs(y->at(i)) > residualTol) {
++			return false;
++		}
++	}
++	return true;
+ }
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/AnyPosICNewtonRaphson.h b/src/3rdParty/OndselSolver/OndselSolver/AnyPosICNewtonRaphson.h
+index 1bd8b2b..336f8c8 100644
+--- a/src/3rdParty/OndselSolver/OndselSolver/AnyPosICNewtonRaphson.h
++++ b/src/3rdParty/OndselSolver/OndselSolver/AnyPosICNewtonRaphson.h
+@@ -29,6 +29,7 @@ namespace MbD {
+         void assignEquationNumbers() override;
+         bool isConverged() override;
+ 
++        bool positionsConverged();
+         size_t nqsu = SIZE_MAX;
+         FColDsptr qsuOld;
+         DiagMatDsptr qsuWeights;
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/CMakeLists.txt b/src/3rdParty/OndselSolver/OndselSolver/CMakeLists.txt
+index 9fc1e82..ce26fbe 100644
+--- a/src/3rdParty/OndselSolver/OndselSolver/CMakeLists.txt
++++ b/src/3rdParty/OndselSolver/OndselSolver/CMakeLists.txt
+@@ -63,6 +63,7 @@ set(ONDSELSOLVER_SRC
+         ASMTPerpendicularJoint.cpp
+         ASMTPlanarJoint.cpp
+         ASMTPointInLineJoint.cpp
++        ASMTPointOnCurveJoint.cpp
+         ASMTPointInPlaneJoint.cpp
+         ASMTPrincipalMassMarker.cpp
+         ASMTRackPinionJoint.cpp
+@@ -155,6 +156,8 @@ set(ONDSELSOLVER_SRC
+         EigenDecomposition.cpp
+         EndFramec.cpp
+         EndFrameqc.cpp
++        EndFrameqcCurve.cpp
++        EndFrameqcOffset.cpp
+         EndFrameqct.cpp
+         EndFrameqct2.cpp
+         EulerAngles.cpp
+@@ -234,6 +237,7 @@ set(ONDSELSOLVER_SRC
+         MomentOfInertiaSolver.cpp
+         Negative.cpp
+         NewtonRaphson.cpp
++        NurbsCurve.cpp
+         NewtonRaphsonError.cpp
+         NoRotationJoint.cpp
+         NotKinematicError.cpp
+@@ -249,6 +253,8 @@ set(ONDSELSOLVER_SRC
+         PiecewiseFunction.cpp
+         PlanarJoint.cpp
+         PointInLineJoint.cpp
++        PointOnCurveConstraintIqcJqc.cpp
++        PointOnCurveJoint.cpp
+         PointInPlaneJoint.cpp
+         Polynomial.cpp
+         PosICDragLimitNewtonRaphson.cpp
+@@ -376,6 +382,7 @@ set(ONDSELSOLVER_HEADERS
+         ASMTPerpendicularJoint.h
+         ASMTPlanarJoint.h
+         ASMTPointInLineJoint.h
++        ASMTPointOnCurveJoint.h
+         ASMTPointInPlaneJoint.h
+         ASMTPrincipalMassMarker.h
+         ASMTRackPinionJoint.h
+@@ -472,6 +479,8 @@ set(ONDSELSOLVER_HEADERS
+         EigenDecomposition.h
+         EndFramec.h
+         EndFrameqc.h
++        EndFrameqcCurve.h
++        EndFrameqcOffset.h
+         EndFrameqct.h
+         EndFrameqct2.h
+         enum.h
+@@ -552,6 +561,7 @@ set(ONDSELSOLVER_HEADERS
+         MomentOfInertiaSolver.h
+         Negative.h
+         NewtonRaphson.h
++        NurbsCurve.h
+         NewtonRaphsonError.h
+         NoRotationJoint.h
+         NotKinematicError.h
+@@ -566,6 +576,8 @@ set(ONDSELSOLVER_HEADERS
+         PerpendicularJoint.h
+         PlanarJoint.h
+         PointInLineJoint.h
++        PointOnCurveConstraintIqcJqc.h
++        PointOnCurveJoint.h
+         PointInPlaneJoint.h
+         PosICDragLimitNewtonRaphson.h
+         PosICDragNewtonRaphson.h
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/EndFrameqcCurve.cpp b/src/3rdParty/OndselSolver/OndselSolver/EndFrameqcCurve.cpp
+new file mode 100644
+index 0000000..01e9609
+--- /dev/null
++++ b/src/3rdParty/OndselSolver/OndselSolver/EndFrameqcCurve.cpp
+@@ -0,0 +1,106 @@
++/***************************************************************************
++ *   Copyright (c) 2023 Ondsel, Inc.                                       *
++ *                                                                         *
++ *   This file is part of OndselSolver.                                    *
++ *                                                                         *
++ *   See LICENSE file for details about copyright.                         *
++ ***************************************************************************/
++
++#include <cmath>
++
++#include "EndFrameqcCurve.h"
++#include "MarkerFrame.h"
++
++using namespace MbD;
++
++namespace {
++	using Vec3 = MbD::NurbsCurve::Vec3;
++
++	double dot(const Vec3& a, const Vec3& b)
++	{
++		return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
++	}
++
++	Vec3 cross(const Vec3& a, const Vec3& b)
++	{
++		return { a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0] };
++	}
++
++	bool normalize(Vec3& a)
++	{
++		double len = std::sqrt(dot(a, a));
++		if (len < 1.0e-300) {
++			return false;
++		}
++		for (auto& x : a) {
++			x /= len;
++		}
++		return true;
++	}
++
++	// x axis perpendicular to t, as close as possible to ref (keeps the frame from spinning
++	// around the tangent between iterations).
++	Vec3 perpendicularTo(const Vec3& t, const Vec3& ref)
++	{
++		Vec3 x = ref;
++		double along = dot(x, t);
++		for (size_t i = 0; i < 3; i++) {
++			x[i] -= along * t[i];
++		}
++		if (dot(x, x) < 0.01) {
++			size_t k = 0;
++			for (size_t i = 1; i < 3; i++) {
++				if (std::fabs(t[i]) < std::fabs(t[k])) {
++					k = i;
++				}
++			}
++			x = { 0.0, 0.0, 0.0 };
++			x[k] = 1.0;
++			along = dot(x, t);
++			for (size_t i = 0; i < 3; i++) {
++				x[i] -= along * t[i];
++			}
++		}
++		normalize(x);
++		return x;
++	}
++}
++
++EndFrameqcCurve::EndFrameqcCurve() {
++}
++
++EndFrameqcCurve::EndFrameqcCurve(const std::string& str) : EndFrameqcOffset(str) {
++}
++
++FColDsptr EndFrameqcCurve::pointInMarker(FColDsptr rOpO)
++{
++	auto rmpO = rOpO->minusFullColumn(markerFrame->rOmO);
++	return markerFrame->aAOm->transposeTimesFullColumn(rmpO);
++}
++
++void EndFrameqcCurve::updateFootPoint(FColDsptr rOpO)
++{
++	if (!curve) {
++		return;
++	}
++	auto rmpm = pointInMarker(rOpO);
++	Vec3 p = { rmpm->at(0), rmpm->at(1), rmpm->at(2) };
++	u = curve->project(p, u);
++	Vec3 c, d1, d2;
++	curve->evaluate(u, c, d1, d2);
++	Vec3 t = d1;
++	if (!normalize(t)) {
++		// Degenerate parametrization (zero derivative): keep the previous direction.
++		t = { aAme->at(0)->at(2), aAme->at(1)->at(2), aAme->at(2)->at(2) };
++	}
++	Vec3 x = perpendicularTo(t, refX);
++	refX = x;
++	Vec3 y = cross(t, x);
++	for (size_t i = 0; i < 3; i++) {
++		rmem->at(i) = c[i];
++		aAme->at(i)->at(0) = x[i];
++		aAme->at(i)->at(1) = y[i];
++		aAme->at(i)->at(2) = t[i];
++	}
++	calcPostDynCorrectorIteration();
++}
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/EndFrameqcCurve.h b/src/3rdParty/OndselSolver/OndselSolver/EndFrameqcCurve.h
+new file mode 100644
+index 0000000..ea1afab
+--- /dev/null
++++ b/src/3rdParty/OndselSolver/OndselSolver/EndFrameqcCurve.h
+@@ -0,0 +1,37 @@
++/***************************************************************************
++ *   Copyright (c) 2023 Ondsel, Inc.                                       *
++ *                                                                         *
++ *   This file is part of OndselSolver.                                    *
++ *                                                                         *
++ *   See LICENSE file for details about copyright.                         *
++ ***************************************************************************/
++
++#pragma once
++
++#include <limits>
++#include <memory>
++
++#include "EndFrameqcOffset.h"
++#include "NurbsCurve.h"
++
++namespace MbD {
++	// End frame that sits on the curve point closest to a given point, with its z axis along
++	// the curve tangent there. Used by PointOnCurveJoint: "point on the z axis of this frame"
++	// is then "point on the curve" to first order, and the frame is moved to the new foot point
++	// in every iteration.
++	class EndFrameqcCurve : public EndFrameqcOffset
++	{
++		//curve u refX
++	public:
++		EndFrameqcCurve();
++		EndFrameqcCurve(const std::string& str);
++		// rOpO: the point (global coordinates). The marker of this frame must be up to date.
++		void updateFootPoint(FColDsptr rOpO);
++		// Point in the coordinates of this frame's marker.
++		FColDsptr pointInMarker(FColDsptr rOpO);
++
++		std::shared_ptr<NurbsCurve> curve;
++		double u = std::numeric_limits<double>::quiet_NaN();
++		NurbsCurve::Vec3 refX = { 0.0, 0.0, 0.0 };
++	};
++}
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/EndFrameqcOffset.cpp b/src/3rdParty/OndselSolver/OndselSolver/EndFrameqcOffset.cpp
+new file mode 100644
+index 0000000..5e8e400
+--- /dev/null
++++ b/src/3rdParty/OndselSolver/OndselSolver/EndFrameqcOffset.cpp
+@@ -0,0 +1,62 @@
++/***************************************************************************
++ *   Copyright (c) 2023 Ondsel, Inc.                                       *
++ *                                                                         *
++ *   This file is part of OndselSolver.                                    *
++ *                                                                         *
++ *   See LICENSE file for details about copyright.                         *
++ ***************************************************************************/
++
++#include "EndFrameqcOffset.h"
++#include "MarkerFrame.h"
++#include "EulerParameters.h"
++
++using namespace MbD;
++
++EndFrameqcOffset::EndFrameqcOffset() {
++}
++
++EndFrameqcOffset::EndFrameqcOffset(const std::string& str) : EndFrameqc(str) {
++}
++
++void EndFrameqcOffset::initialize()
++{
++	EndFrameqc::initialize();
++	rmem = std::make_shared<FullColumn<double>>(3, 0.0);
++	aAme = FullMatrix<double>::identitysptr(3);
++}
++
++void EndFrameqcOffset::calcPostDynCorrectorIteration()
++{
++	auto& rOmO = markerFrame->rOmO;
++	auto& aAOm = markerFrame->aAOm;
++	rOeO = rOmO->plusFullColumn(aAOm->timesFullColumn(rmem));
++	auto& prOmOpE = markerFrame->prOmOpE;
++	auto& pAOmpE = markerFrame->pAOmpE;
++	for (size_t i = 0; i < 3; i++)
++	{
++		auto& prOmOpEi = prOmOpE->at(i);
++		auto& prOeOpEi = prOeOpE->at(i);
++		for (size_t j = 0; j < 4; j++)
++		{
++			prOeOpEi->at(j) = prOmOpEi->at(j) + pAOmpE->at(j)->at(i)->timesFullColumn(rmem);
++		}
++	}
++	pprOeOpEpE = EulerParameters<double>::ppApEpEtimesColumn(rpep());
++	aAOe = aAOm->timesFullMatrix(aAme);
++	for (size_t i = 0; i < 4; i++)
++	{
++		pAOepE->at(i) = pAOmpE->at(i)->timesFullMatrix(aAme);
++	}
++	auto aApe = markerFrame->aApm->timesFullMatrix(aAme);
++	ppAOepEpE = EulerParameters<double>::ppApEpEtimesMatrix(aApe);
++}
++
++FColDsptr EndFrameqcOffset::rmeO()
++{
++	return markerFrame->aAOm->timesFullColumn(rmem);
++}
++
++FColDsptr EndFrameqcOffset::rpep()
++{
++	return markerFrame->rpmp->plusFullColumn(markerFrame->aApm->timesFullColumn(rmem));
++}
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/EndFrameqcOffset.h b/src/3rdParty/OndselSolver/OndselSolver/EndFrameqcOffset.h
+new file mode 100644
+index 0000000..6361f12
+--- /dev/null
++++ b/src/3rdParty/OndselSolver/OndselSolver/EndFrameqcOffset.h
+@@ -0,0 +1,31 @@
++/***************************************************************************
++ *   Copyright (c) 2023 Ondsel, Inc.                                       *
++ *                                                                         *
++ *   This file is part of OndselSolver.                                    *
++ *                                                                         *
++ *   See LICENSE file for details about copyright.                         *
++ ***************************************************************************/
++
++#pragma once
++
++#include "EndFrameqc.h"
++
++namespace MbD {
++	// End frame displaced from its marker by a constant offset rmem and rotation aAme
++	// (marker coordinates). Same algebra as EndFrameqct, but without time dependence, so the
++	// q-only constraint classes (isEndFrameqc() == true) can use it.
++	class EndFrameqcOffset : public EndFrameqc
++	{
++		//rmem aAme
++	public:
++		EndFrameqcOffset();
++		EndFrameqcOffset(const std::string& str);
++		void initialize() override;
++		void calcPostDynCorrectorIteration() override;
++		FColDsptr rmeO() override;
++		FColDsptr rpep() override;
++
++		FColDsptr rmem;
++		FMatDsptr aAme;
++	};
++}
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/NewtonRaphson.cpp b/src/3rdParty/OndselSolver/OndselSolver/NewtonRaphson.cpp
+index f73c55f..53428c5 100644
+--- a/src/3rdParty/OndselSolver/OndselSolver/NewtonRaphson.cpp
++++ b/src/3rdParty/OndselSolver/OndselSolver/NewtonRaphson.cpp
+@@ -112,9 +112,14 @@ bool NewtonRaphson::isConvergedToNumericalLimit()
+ 	size_t nDivergenceMax = 3;
+ 	auto dxNormIterNo = dxNorms->at(iterNo);
+ 	if (iterNo > 0) {
+-		auto dxNormIterNoOld = dxNorms->at(iterNo);
++		// FCPROJECT-PATCH (2026-10-17): vorher dxNorms->at(iterNo) (derselbe Wert - "halbiert
++		// sich" war nie wahr, jede Iteration unter tooLargeTol zaehlte als Divergenz) und
++		// (iterNo / iterMax) als Ganzzahl-Division (immer 0). Siehe
++		// bugreports/ondselsolver-newton-convergence-check/BUGREPORT.md.
++		auto dxNormIterNoOld = dxNorms->at(iterNo - 1);
+ 		auto farTooLargeError = dxNormIterNo > tooLargeTol;
+-		auto worthIterating = dxNormIterNo > (smallEnoughTol * pow(10.0, (iterNo / iterMax) * nDecade));
++		auto worthIterating = dxNormIterNo
++			> (smallEnoughTol * pow(10.0, (static_cast<double>(iterNo) / static_cast<double>(iterMax)) * nDecade));
+ 		bool stillConverging;
+ 		if (dxNormIterNo < (0.5 * dxNormIterNoOld)) {
+ 			stillConverging = true;
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/NurbsCurve.cpp b/src/3rdParty/OndselSolver/OndselSolver/NurbsCurve.cpp
+new file mode 100644
+index 0000000..fefb86b
+--- /dev/null
++++ b/src/3rdParty/OndselSolver/OndselSolver/NurbsCurve.cpp
+@@ -0,0 +1,287 @@
++/***************************************************************************
++ *   Copyright (c) 2023 Ondsel, Inc.                                       *
++ *                                                                         *
++ *   This file is part of OndselSolver.                                    *
++ *                                                                         *
++ *   See LICENSE file for details about copyright.                         *
++ ***************************************************************************/
++
++#include <algorithm>
++#include <cmath>
++
++#include "NurbsCurve.h"
++
++using namespace MbD;
++
++namespace {
++	using Vec3 = MbD::NurbsCurve::Vec3;
++
++	double dot(const Vec3& a, const Vec3& b)
++	{
++		return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
++	}
++
++	Vec3 minus(const Vec3& a, const Vec3& b)
++	{
++		return { a[0] - b[0], a[1] - b[1], a[2] - b[2] };
++	}
++
++	double dist2(const Vec3& a, const Vec3& b)
++	{
++		auto d = minus(a, b);
++		return dot(d, d);
++	}
++}
++
++MbD::NurbsCurve::NurbsCurve(size_t deg, std::vector<double> kts, std::vector<double> wts,
++	std::vector<Vec3> pls, bool isClosed) :
++	degree(deg), knots(std::move(kts)), weights(std::move(wts)), poles(std::move(pls)), closed(isClosed)
++{
++	if (weights.empty()) {
++		weights.assign(poles.size(), 1.0);
++	}
++}
++
++bool MbD::NurbsCurve::isValid() const
++{
++	return degree >= 1 && poles.size() > degree && knots.size() == poles.size() + degree + 1
++		&& weights.size() == poles.size() && lastParameter() > firstParameter();
++}
++
++bool MbD::NurbsCurve::isClosed() const
++{
++	return closed;
++}
++
++double MbD::NurbsCurve::firstParameter() const
++{
++	return knots[degree];
++}
++
++double MbD::NurbsCurve::lastParameter() const
++{
++	return knots[poles.size()];
++}
++
++double MbD::NurbsCurve::normalizeParameter(double u) const
++{
++	double a = firstParameter();
++	double b = lastParameter();
++	if (closed) {
++		double period = b - a;
++		u = a + std::fmod(u - a, period);
++		if (u < a) {
++			u += period;
++		}
++		return u;
++	}
++	return std::clamp(u, a, b);
++}
++
++size_t MbD::NurbsCurve::findSpan(double u) const
++{
++	size_t n = poles.size() - 1;
++	if (u >= knots[n + 1]) {
++		return n;
++	}
++	if (u <= knots[degree]) {
++		return degree;
++	}
++	size_t low = degree;
++	size_t high = n + 1;
++	size_t mid = (low + high) / 2;
++	while (u < knots[mid] || u >= knots[mid + 1]) {
++		if (u < knots[mid]) {
++			high = mid;
++		}
++		else {
++			low = mid;
++		}
++		mid = (low + high) / 2;
++	}
++	return mid;
++}
++
++void MbD::NurbsCurve::dersBasisFuns(size_t span, double u, size_t nDerivs,
++	std::vector<std::vector<double>>& ders) const
++{
++	// Piegl/Tiller, The NURBS Book, algorithm A2.3.
++	size_t p = degree;
++	std::vector<std::vector<double>> ndu(p + 1, std::vector<double>(p + 1, 0.0));
++	std::vector<double> left(p + 1, 0.0), right(p + 1, 0.0);
++	ndu[0][0] = 1.0;
++	for (size_t j = 1; j <= p; j++) {
++		left[j] = u - knots[span + 1 - j];
++		right[j] = knots[span + j] - u;
++		double saved = 0.0;
++		for (size_t r = 0; r < j; r++) {
++			ndu[j][r] = right[r + 1] + left[j - r];
++			double temp = ndu[r][j - 1] / ndu[j][r];
++			ndu[r][j] = saved + right[r + 1] * temp;
++			saved = left[j - r] * temp;
++		}
++		ndu[j][j] = saved;
++	}
++	ders.assign(nDerivs + 1, std::vector<double>(p + 1, 0.0));
++	for (size_t j = 0; j <= p; j++) {
++		ders[0][j] = ndu[j][p];
++	}
++	std::vector<std::vector<double>> a(2, std::vector<double>(p + 1, 0.0));
++	for (int r = 0; r <= (int)p; r++) {
++		int s1 = 0;
++		int s2 = 1;
++		a[0][0] = 1.0;
++		for (int k = 1; k <= (int)nDerivs; k++) {
++			double d = 0.0;
++			int rk = r - k;
++			int pk = (int)p - k;
++			if (r >= k) {
++				a[s2][0] = a[s1][0] / ndu[pk + 1][rk];
++				d = a[s2][0] * ndu[rk][pk];
++			}
++			int j1 = (rk >= -1) ? 1 : -rk;
++			int j2 = (r - 1 <= pk) ? k - 1 : (int)p - r;
++			for (int j = j1; j <= j2; j++) {
++				a[s2][j] = (a[s1][j] - a[s1][j - 1]) / ndu[pk + 1][rk + j];
++				d += a[s2][j] * ndu[rk + j][pk];
++			}
++			if (r <= pk) {
++				a[s2][k] = -a[s1][k - 1] / ndu[pk + 1][r];
++				d += a[s2][k] * ndu[r][pk];
++			}
++			ders[k][r] = d;
++			std::swap(s1, s2);
++		}
++	}
++	double factor = (double)p;
++	for (size_t k = 1; k <= nDerivs; k++) {
++		for (size_t j = 0; j <= p; j++) {
++			ders[k][j] *= factor;
++		}
++		factor *= (double)(p - k);
++	}
++}
++
++void MbD::NurbsCurve::evaluate(double u, Vec3& c, Vec3& d1, Vec3& d2) const
++{
++	u = normalizeParameter(u);
++	size_t span = findSpan(u);
++	size_t nDerivs = std::min<size_t>(2, degree);
++	std::vector<std::vector<double>> ders;
++	dersBasisFuns(span, u, nDerivs, ders);
++	// Homogeneous derivatives A(k) = sum N(k) w P and w(k) = sum N(k) w.
++	Vec3 a[3] = { {0, 0, 0}, {0, 0, 0}, {0, 0, 0} };
++	double w[3] = { 0, 0, 0 };
++	for (size_t k = 0; k <= nDerivs; k++) {
++		for (size_t j = 0; j <= degree; j++) {
++			size_t i = span - degree + j;
++			double nw = ders[k][j] * weights[i];
++			for (size_t m = 0; m < 3; m++) {
++				a[k][m] += nw * poles[i][m];
++			}
++			w[k] += nw;
++		}
++	}
++	// Rational derivatives (The NURBS Book, A4.2).
++	for (size_t m = 0; m < 3; m++) {
++		c[m] = a[0][m] / w[0];
++		d1[m] = (a[1][m] - w[1] * c[m]) / w[0];
++		d2[m] = (a[2][m] - 2.0 * w[1] * d1[m] - w[2] * c[m]) / w[0];
++	}
++}
++
++NurbsCurve::Vec3 MbD::NurbsCurve::value(double u) const
++{
++	Vec3 c, d1, d2;
++	evaluate(u, c, d1, d2);
++	return c;
++}
++
++NurbsCurve::Vec3 MbD::NurbsCurve::tangent(double u) const
++{
++	Vec3 c, d1, d2;
++	evaluate(u, c, d1, d2);
++	double len = std::sqrt(dot(d1, d1));
++	if (len > 0.0) {
++		for (auto& x : d1) {
++			x /= len;
++		}
++	}
++	return d1;
++}
++
++double MbD::NurbsCurve::sampleStart(const Vec3& p) const
++{
++	double a = firstParameter();
++	double b = lastParameter();
++	size_t nSamples = std::max<size_t>(200, 20 * poles.size());
++	double best = a;
++	double bestDist2 = std::numeric_limits<double>::max();
++	for (size_t i = 0; i <= nSamples; i++) {
++		double u = a + (b - a) * (double)i / (double)nSamples;
++		double d = dist2(value(u), p);
++		if (d < bestDist2) {
++			bestDist2 = d;
++			best = u;
++		}
++	}
++	return best;
++}
++
++double MbD::NurbsCurve::project(const Vec3& p, double uGuess) const
++{
++	double a = firstParameter();
++	double b = lastParameter();
++	double range = b - a;
++	double u = std::isnan(uGuess) ? sampleStart(p) : normalizeParameter(uGuess);
++	// Newton on f(u) = c'(u) . (c(u) - p) = 0, damped so that the distance never grows.
++	Vec3 c, d1, d2;
++	evaluate(u, c, d1, d2);
++	double currentDist2 = dist2(c, p);
++	for (int iter = 0; iter < 50; iter++) {
++		auto r = minus(c, p);
++		double f = dot(d1, r);
++		double df = dot(d2, r) + dot(d1, d1);
++		if (df <= 0.0) {
++			df = dot(d1, d1);
++		}
++		if (df <= 0.0) {
++			break;
++		}
++		double du = std::clamp(-f / df, -0.25 * range, 0.25 * range);
++		bool improved = false;
++		for (int halving = 0; halving < 20; halving++) {
++			double uNew = normalizeParameter(u + du);
++			Vec3 cNew, d1New, d2New;
++			evaluate(uNew, cNew, d1New, d2New);
++			double newDist2 = dist2(cNew, p);
++			if (newDist2 <= currentDist2) {
++				double step = std::fabs(uNew - u);
++				if (closed && step > 0.5 * range) {
++					step = range - step;
++				}
++				u = uNew;
++				c = cNew;
++				d1 = d1New;
++				d2 = d2New;
++				currentDist2 = newDist2;
++				improved = step > 1.0e-15 * range;
++				break;
++			}
++			du *= 0.5;
++		}
++		if (!improved || std::fabs(du) < 1.0e-14 * range) {
++			break;
++		}
++	}
++	return u;
++}
++
++void MbD::NurbsCurve::scale(double factor)
++{
++	for (auto& pole : poles) {
++		for (auto& x : pole) {
++			x *= factor;
++		}
++	}
++}
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/NurbsCurve.h b/src/3rdParty/OndselSolver/OndselSolver/NurbsCurve.h
+new file mode 100644
+index 0000000..ac552c6
+--- /dev/null
++++ b/src/3rdParty/OndselSolver/OndselSolver/NurbsCurve.h
+@@ -0,0 +1,53 @@
++/***************************************************************************
++ *   Copyright (c) 2023 Ondsel, Inc.                                       *
++ *                                                                         *
++ *   This file is part of OndselSolver.                                    *
++ *                                                                         *
++ *   See LICENSE file for details about copyright.                         *
++ ***************************************************************************/
++
++#pragma once
++
++#include <array>
++#include <limits>
++#include <vector>
++
++namespace MbD {
++	// Rational B-spline space curve, used as the path of a PointOnCurveJoint.
++	// The curve is given in the coordinates of the marker it is attached to.
++	class NurbsCurve
++	{
++	public:
++		using Vec3 = std::array<double, 3>;
++
++		// knots is the full (flat) knot vector, size poles.size() + degree + 1.
++		// weights may be empty (non-rational curve).
++		// closed: the parameter wraps around instead of being clamped at the ends.
++		NurbsCurve(size_t degree, std::vector<double> knots, std::vector<double> weights,
++			std::vector<Vec3> poles, bool closed);
++
++		bool isValid() const;
++		bool isClosed() const;
++		double firstParameter() const;
++		double lastParameter() const;
++		// Wraps (closed) or clamps (open) u into [firstParameter, lastParameter].
++		double normalizeParameter(double u) const;
++		void evaluate(double u, Vec3& c, Vec3& d1, Vec3& d2) const;
++		Vec3 value(double u) const;
++		Vec3 tangent(double u) const;
++		// Parameter of the curve point closest to p. Starts a local search at uGuess; with NaN a
++		// coarse sampling of the whole curve gives the start.
++		double project(const Vec3& p, double uGuess = std::numeric_limits<double>::quiet_NaN()) const;
++		void scale(double factor);
++
++		size_t degree;
++		std::vector<double> knots, weights;
++		std::vector<Vec3> poles;
++		bool closed;
++
++	private:
++		size_t findSpan(double u) const;
++		void dersBasisFuns(size_t span, double u, size_t nDerivs, std::vector<std::vector<double>>& ders) const;
++		double sampleStart(const Vec3& p) const;
++	};
++}
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/PointOnCurveConstraintIqcJqc.cpp b/src/3rdParty/OndselSolver/OndselSolver/PointOnCurveConstraintIqcJqc.cpp
+new file mode 100644
+index 0000000..688fd2a
+--- /dev/null
++++ b/src/3rdParty/OndselSolver/OndselSolver/PointOnCurveConstraintIqcJqc.cpp
+@@ -0,0 +1,43 @@
++/***************************************************************************
++ *   Copyright (c) 2023 Ondsel, Inc.                                       *
++ *                                                                         *
++ *   This file is part of OndselSolver.                                    *
++ *                                                                         *
++ *   See LICENSE file for details about copyright.                         *
++ ***************************************************************************/
++
++#include "PointOnCurveConstraintIqcJqc.h"
++#include "EndFrameqcCurve.h"
++#include "CREATE.h"
++
++using namespace MbD;
++
++DispCompIeqcJeqcKeqcCurve::DispCompIeqcJeqcKeqcCurve(EndFrmsptr frmi, EndFrmsptr frmj, EndFrmsptr frmk, size_t axisk) :
++	DispCompIeqcJeqcKeqc(frmi, frmj, frmk, axisk)
++{
++}
++
++void DispCompIeqcJeqcKeqcCurve::calcPostDynCorrectorIteration()
++{
++	// Parts (and with them all marker and end frames) are updated before joints, so frmJ
++	// already holds the position of this iteration.
++	if (auto curveFrm = std::dynamic_pointer_cast<EndFrameqcCurve>(efrmK)) {
++		curveFrm->updateFootPoint(frmJ->rOeO);
++	}
++	DispCompIeqcJeqcKeqc::calcPostDynCorrectorIteration();
++}
++
++PointOnCurveConstraintIqcJqc::PointOnCurveConstraintIqcJqc(EndFrmsptr frmi, EndFrmsptr frmj, size_t axisi) :
++	TranslationConstraintIqcJqc(frmi, frmj, axisi)
++{
++}
++
++void PointOnCurveConstraintIqcJqc::initriIeJeIe()
++{
++	riIeJeIe = CREATE<DispCompIeqcJeqcKeqcCurve>::With(frmI, frmJ, frmI, axisI);
++}
++
++std::string PointOnCurveConstraintIqcJqc::constraintSpec()
++{
++	return "PointOnCurveConstraintI" + MbDMath::xyzFromInt(axisI) + "J";
++}
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/PointOnCurveConstraintIqcJqc.h b/src/3rdParty/OndselSolver/OndselSolver/PointOnCurveConstraintIqcJqc.h
+new file mode 100644
+index 0000000..caa0fd1
+--- /dev/null
++++ b/src/3rdParty/OndselSolver/OndselSolver/PointOnCurveConstraintIqcJqc.h
+@@ -0,0 +1,38 @@
++/***************************************************************************
++ *   Copyright (c) 2023 Ondsel, Inc.                                       *
++ *                                                                         *
++ *   This file is part of OndselSolver.                                    *
++ *                                                                         *
++ *   See LICENSE file for details about copyright.                         *
++ ***************************************************************************/
++
++#pragma once
++
++#include "DispCompIeqcJeqcKeqc.h"
++#include "TranslationConstraintIqcJqc.h"
++
++namespace MbD {
++	class EndFrameqcCurve;
++
++	// Displacement component along an axis of an EndFrameqcCurve. Moves the frame to the
++	// current foot point of end frame J before evaluating, so value and derivatives always
++	// belong to the tangent line at the closest curve point.
++	class DispCompIeqcJeqcKeqcCurve : public DispCompIeqcJeqcKeqc
++	{
++		//
++	public:
++		DispCompIeqcJeqcKeqcCurve(EndFrmsptr frmi, EndFrmsptr frmj, EndFrmsptr frmk, size_t axisk);
++		void calcPostDynCorrectorIteration() override;
++	};
++
++	// One of the two equations of a PointOnCurveJoint: component of (rJ - foot point) along
++	// axis 0 or 1 of the curve frame (both perpendicular to the tangent) is zero.
++	class PointOnCurveConstraintIqcJqc : public TranslationConstraintIqcJqc
++	{
++		//
++	public:
++		PointOnCurveConstraintIqcJqc(EndFrmsptr frmi, EndFrmsptr frmj, size_t axisi);
++		void initriIeJeIe() override;
++		std::string constraintSpec() override;
++	};
++}
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/PointOnCurveJoint.cpp b/src/3rdParty/OndselSolver/OndselSolver/PointOnCurveJoint.cpp
+new file mode 100644
+index 0000000..d4738f3
+--- /dev/null
++++ b/src/3rdParty/OndselSolver/OndselSolver/PointOnCurveJoint.cpp
+@@ -0,0 +1,36 @@
++/***************************************************************************
++ *   Copyright (c) 2023 Ondsel, Inc.                                       *
++ *                                                                         *
++ *   This file is part of OndselSolver.                                    *
++ *                                                                         *
++ *   See LICENSE file for details about copyright.                         *
++ ***************************************************************************/
++
++#include "PointOnCurveJoint.h"
++#include "PointOnCurveConstraintIqcJqc.h"
++#include "CREATE.h"
++#include "System.h"
++
++using namespace MbD;
++
++MbD::PointOnCurveJoint::PointOnCurveJoint()
++{
++}
++
++MbD::PointOnCurveJoint::PointOnCurveJoint(const std::string& str) : Joint(str)
++{
++}
++
++void MbD::PointOnCurveJoint::initializeGlobally()
++{
++	if (constraints->empty())
++	{
++		// Not CREATE::ConstraintWith(): that only knows the standard constraint classes.
++		addConstraint(CREATE<PointOnCurveConstraintIqcJqc>::With(frmI, frmJ, 0));
++		addConstraint(CREATE<PointOnCurveConstraintIqcJqc>::With(frmI, frmJ, 1));
++		this->root()->hasChanged = true;
++	}
++	else {
++		Joint::initializeGlobally();
++	}
++}
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/PointOnCurveJoint.h b/src/3rdParty/OndselSolver/OndselSolver/PointOnCurveJoint.h
+new file mode 100644
+index 0000000..1f344da
+--- /dev/null
++++ b/src/3rdParty/OndselSolver/OndselSolver/PointOnCurveJoint.h
+@@ -0,0 +1,24 @@
++/***************************************************************************
++ *   Copyright (c) 2023 Ondsel, Inc.                                       *
++ *                                                                         *
++ *   This file is part of OndselSolver.                                    *
++ *                                                                         *
++ *   See LICENSE file for details about copyright.                         *
++ ***************************************************************************/
++
++#pragma once
++
++#include "Joint.h"
++
++namespace MbD {
++	// Origin of end frame J stays on a curve fixed to end frame I (an EndFrameqcCurve).
++	// Removes two translational degrees of freedom; rotation stays free.
++	class PointOnCurveJoint : public Joint
++	{
++		//
++	public:
++		PointOnCurveJoint();
++		PointOnCurveJoint(const std::string& str);
++		void initializeGlobally() override;
++	};
++}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/PosICNewtonRaphson.cpp b/src/3rdParty/OndselSolver/OndselSolver/PosICNewtonRaphson.cpp
-index 41963a1..d78ae45 100644
+index 41963a1..55a7a2e 100644
 --- a/src/3rdParty/OndselSolver/OndselSolver/PosICNewtonRaphson.cpp
 +++ b/src/3rdParty/OndselSolver/OndselSolver/PosICNewtonRaphson.cpp
-@@ -17,6 +17,12 @@
+@@ -16,7 +16,14 @@
+ #include "Constraint.h"
  #include "CREATE.h"
  #include "GESpMatParPvPrecise.h"
++#include "GESpMatParPvMarko.h"
  #include "GESpMatFullPvPosIC.h"
 +#include "System.h"
 +#include "Joint.h"
@@ -64,7 +1252,17 @@ index 41963a1..d78ae45 100644
  
  using namespace MbD;
  
-@@ -127,11 +133,302 @@ void PosICNewtonRaphson::handleSingularMatrix()
+@@ -96,7 +103,8 @@ void PosICNewtonRaphson::assignEquationNumbers()
+ 
+ bool PosICNewtonRaphson::isConverged()
+ {
+-	return this->isConvergedToNumericalLimit();
++	// FCPROJECT-PATCH (2026-10-17): siehe AnyPosICNewtonRaphson::positionsConverged().
++	return this->positionsConverged() || this->isConvergedToNumericalLimit();
+ }
+ 
+ void PosICNewtonRaphson::handleSingularMatrix()
+@@ -127,11 +135,310 @@ void PosICNewtonRaphson::handleSingularMatrix()
  	}
  }
  
@@ -162,6 +1360,14 @@ index 41963a1..d78ae45 100644
 +		// Keine abhaengige Gleichung: die Matrix ist nur schlecht konditioniert, der schnelle Loeser
 +		// (Markowitz) gab zu frueh auf. Erst der genaue Loeser mit Skalierung, die volle Pivotsuche
 +		// (an BG22 ~1.5 s pro Solve) nur, wenn auch der scheitert.
++		try {
++			auto marko = CREATE<GESpMatParPvMarko>::With();
++			dx = marko->solvewithsaveOriginal(pypx, y->negated(), false);
++			system->logString("MbD: Redundanzsuche nach Rangfolge: keine Redundanz, Markowitz-Loeser genuegt.");
++			return;
++		}
++		catch (const SingularMatrixError&) {
++		}
 +		try {
 +			auto precise = CREATE<GESpMatParPvPrecise>::With();
 +			dx = precise->solvewithsaveOriginal(pypx, y->negated(), false);

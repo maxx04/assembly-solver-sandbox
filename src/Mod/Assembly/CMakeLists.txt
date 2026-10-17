@@ -38,6 +38,7 @@ set(Assembly_Scripts
     AssemblyImport.py
     SoSwitchMarker.py
     UtilsAssembly.py
+    AssemblySandboxSaveCheck.py
 )
 
 if(BUILD_GUI)

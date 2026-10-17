@@ -212,6 +212,9 @@ public:
     );
     std::shared_ptr<MbD::ASMTJoint> makeMbdJointOfType(App::DocumentObject* joint, JointType jointType);
     std::shared_ptr<MbD::ASMTJoint> makeMbdJointDistance(App::DocumentObject* joint);
+    // FCPROJECT-PATCH (2026-10-16, plans/2026-10-16-tangent-joint.md): Tangent, erster Schritt
+    // "Vertex auf Kurve" (OndselSolver PointOnCurveJoint).
+    std::shared_ptr<MbD::ASMTJoint> makeMbdJointTangent(App::DocumentObject* joint);
     std::string handleOneSideOfJoint(
         App::DocumentObject* joint,
         const char* propRefName,
@@ -746,6 +749,10 @@ private:
     std::set<std::string> mbdJointSignatures() const;
     bool applyRedundancyCache(const RedundancyCache& cache);
     void setJointPriorities(const std::vector<JointRef>& jointRefs);
+    // FCPROJECT-PATCH (2026-10-16, Tangent-Gelenk): ein Tangent-Gelenk an einer offenen Kurve
+    // bringt im Solver eigene Endanschlaege mit (Limits, die nicht in mbdAssembly->limits
+    // stehen). solve() braucht dann trotzdem den Grenz-Durchgang.
+    bool hasCurveEndStops = false;
     std::vector<std::string> lastLimitViolations;
     std::optional<Base::Placement> getJcsInContext(
         App::DocumentObject* joint,
