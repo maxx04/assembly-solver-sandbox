@@ -53,6 +53,7 @@
 
 #include <Base/Tools.h>
 
+#include <Gui/WaitCursor.h>
 #include <Gui/ActionFunction.h>
 #include <Gui/Application.h>
 #include <Gui/BitmapFactory.h>
@@ -591,11 +592,33 @@ bool ViewProviderAssembly::tryMouseMove(const SbVec2s& cursorPos, Gui::View3DInv
         Base::Rotation asmInvRot
             = App::GeoFeature::getGlobalPlacement(getObject<AssemblyObject>()).getRotation().inverse();
 
+        // FCPROJECT-PATCH (2026-10-17, Nutzerbefund "Tisch laeuft beim Ziehen in verkehrte
+        // Richtung", nur bei manchen Teilen): Cursor und JCS sind Weltkoordinaten, die Placement
+        // des gezogenen Objekts ist aber relativ zu seinem Elterncontainer. Steckt es in einem
+        // gedrehten Container (z.B. um 180 Grad gedrehte Unterbaugruppe), lief die Vorgabe
+        // gespiegelt; die Drehformeln mischten lokale Placement und globales JCS ebenso. Jetzt wird
+        // in Weltkoordinaten gerechnet und erst zum Schluss in die Elternkoordinaten umgerechnet.
+        // Ohne gedrehten Container ist das identisch zum bisherigen Verhalten.
+        // Dieselbe Weltlage wie jcsGlobalPlc in initMove() (GeoFeature::globalPlacement()).
+        auto parentGlobalOf = [this](const MovingObject& m, const Base::Placement& localPlc) {
+            if (auto* geoFeat = freecad_cast<App::GeoFeature*>(m.obj)) {
+                return geoFeat->globalPlacement() * localPlc.inverse();
+            }
+            if (m.obj) {
+                // App::Link-Teile (keine GeoFeature) - wie initMove() fuer jcsGlobalPlc.
+                return App::GeoFeature::getGlobalPlacement(m.obj) * localPlc.inverse();
+            }
+            return App::GeoFeature::getGlobalPlacement(getObject<AssemblyObject>());
+        };
+
         for (auto& objToMove : docsToMove) {
             App::DocumentObject* obj = objToMove.obj;
             auto* propPlacement = obj->getPlacementProperty();
             if (propPlacement) {
                 Base::Placement plc = objToMove.plc;
+                const Base::Placement parentGlobal
+                    = parentGlobalOf(objToMove, propPlacement->getValue());
+                const Base::Rotation parentInvRot = parentGlobal.getRotation().inverse();
                 if (ungroundedJointDrag) {
                     plc.setPosition(plc.getPosition() + ungroundedDragTranslation);
                     if (obj != docsToMove[0].obj) {
@@ -614,8 +637,9 @@ bool ViewProviderAssembly::tryMouseMove(const SbVec2s& cursorPos, Gui::View3DInv
                     Base::Rotation zRotation = Base::Rotation(Base::Vector3d(0., 0., 1.), angle);
                     Base::Placement rotatedGlovalJcsPlc = dragJcsGlobalPlc
                         * Base::Placement(Base::Vector3d(), zRotation);
-                    Base::Placement jcsPlcRelativeToPart = plc.inverse() * dragJcsGlobalPlc;
-                    plc = rotatedGlovalJcsPlc * jcsPlcRelativeToPart.inverse();
+                    const Base::Placement objGlobal = parentGlobal * plc;
+                    Base::Placement jcsPlcRelativeToPart = objGlobal.inverse() * dragJcsGlobalPlc;
+                    plc = parentGlobal.inverse() * rotatedGlovalJcsPlc * jcsPlcRelativeToPart.inverse();
                 }
                 else if (dragMode == DragMode::Ball) {
                     Base::Vector3d center = jcsGlobalPlc.getPosition();
@@ -635,18 +659,21 @@ bool ViewProviderAssembly::tryMouseMove(const SbVec2s& cursorPos, Gui::View3DInv
 
                         // Calculate the initial offset of the part relative to the joint
                         // and apply the new global joint placement to find the new part placement.
-                        Base::Placement jcsPlcRelativeToPart = plc.inverse() * dragJcsGlobalPlc;
-                        plc = rotatedGlobalJcsPlc * jcsPlcRelativeToPart.inverse();
+                        const Base::Placement objGlobal = parentGlobal * plc;
+                        Base::Placement jcsPlcRelativeToPart = objGlobal.inverse() * dragJcsGlobalPlc;
+                        plc = parentGlobal.inverse() * rotatedGlobalJcsPlc
+                            * jcsPlcRelativeToPart.inverse();
                     }
                 }
                 else if (dragMode == DragMode::TranslationOnAxis) {
-                    Base::Vector3d pos = plc.getPosition() + (newPos - initialPosition);
+                    Base::Vector3d pos = plc.getPosition()
+                        + parentInvRot.multVec(newPos - initialPosition);
                     plc.setPosition(pos);
                 }
                 else if (dragMode == DragMode::TranslationOnAxisAndRotationOnePlane) {
                     Base::Vector3d delta = newPos - initialPosition;
-                    Base::Vector3d pos = plc.getPosition() + delta;
-                    plc.setPosition(pos);
+                    Base::Placement objGlobal = parentGlobal * plc;
+                    objGlobal.setPosition(objGlobal.getPosition() + delta);
 
                     Base::Placement newJcsGlobalPlc = dragJcsGlobalPlc;
                     newJcsGlobalPlc.setPosition(dragJcsGlobalPlc.getPosition() + delta);
@@ -664,15 +691,18 @@ bool ViewProviderAssembly::tryMouseMove(const SbVec2s& cursorPos, Gui::View3DInv
                     Base::Rotation zRotation = Base::Rotation(Base::Vector3d(0., 0., 1.), angle);
                     Base::Placement rotatedGlovalJcsPlc = newJcsGlobalPlc
                         * Base::Placement(Base::Vector3d(), zRotation);
-                    Base::Placement jcsPlcRelativeToPart = plc.inverse() * newJcsGlobalPlc;
-                    plc = rotatedGlovalJcsPlc * jcsPlcRelativeToPart.inverse();
+                    Base::Placement jcsPlcRelativeToPart = objGlobal.inverse() * newJcsGlobalPlc;
+                    plc = parentGlobal.inverse() * rotatedGlovalJcsPlc * jcsPlcRelativeToPart.inverse();
                 }
                 else if (dragMode == DragMode::TranslationOnPlane) {
-                    Base::Vector3d pos = plc.getPosition() + (newPos - initialPosition);
+                    Base::Vector3d pos = plc.getPosition()
+                        + parentInvRot.multVec(newPos - initialPosition);
                     plc.setPosition(pos);
                 }
                 else {  // DragMode::Translation / TranslationNoSolve
-                    Base::Vector3d delta = asmInvRot.multVec(newPos - prevPosition);
+                    // FCPROJECT-PATCH (2026-10-17): Elterncontainer statt nur der Baugruppe.
+                    boost::ignore_unused(asmInvRot);
+                    Base::Vector3d delta = parentInvRot.multVec(newPos - prevPosition);
 
                     Base::Vector3d pos = propPlacement->getValue().getPosition() + delta;
                     plc.setPosition(pos);
@@ -1274,6 +1304,12 @@ void ViewProviderAssembly::initMove(const SbVec2s& cursorPos, Gui::View3DInvento
 
 void ViewProviderAssembly::tryInitMove(const SbVec2s& cursorPos, Gui::View3DInventorViewer* viewer)
 {
+    // FCPROJECT-PATCH (2026-10-17, Nutzerwunsch): Sanduhr waehrend der ersten Berechnung beim
+    // Ziehen (Zieh-Gelenk bestimmen, preDrag-Solve). Ereignisse nicht verwerfen, sonst ginge ein
+    // Loslassen der Maus waehrend der Berechnung verloren.
+    Gui::WaitCursor waitCursor;
+    waitCursor.setIgnoreEvents(Gui::WaitCursor::NoEvents);
+
     dragMode = findDragMode();
     if (dragMode == DragMode::None) {
         return;

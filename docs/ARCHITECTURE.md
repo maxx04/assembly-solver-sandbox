@@ -232,6 +232,30 @@ sequenceDiagram
     Note over VP,AO: Innere, ueber flexible AssemblyLink eingebettete<br/>AssemblyObject-Instanzen haben ihre EIGENE VP+Solver-<br/>Zustand - wird waehrend DIESES Drags NIE beruehrt,<br/>weil FreeCADs Gui nur an die aktive Instanz weiterleitet.
 ```
 
+### 2.2a Ziehen: Mausvorgabe in Welt- statt lokalen Koordinaten (2026-10-17)
+
+`ViewProviderAssembly::tryMouseMove()` addierte die Mausbewegung (Weltkoordinaten) direkt auf die
+Placement des gezogenen Objekts, die aber relativ zu seinem Elterncontainer ist. Die Drehformeln
+mischten ebenso die lokale Placement mit dem globalen JCS. Bei einem Teil in einem gedrehten
+Container lief die Vorgabe gespiegelt (Nutzerbefund: Tisch BG89 in BG22 lief entgegen der Maus).
+
+Jetzt wird je gezogenem Objekt die Weltlage des Elterncontainers bestimmt, mit derselben Methode wie
+`jcsGlobalPlc` in `initMove()`: `GeoFeature::globalPlacement()`, bei `App::Link`-Teilen
+`GeoFeature::getGlobalPlacement(obj)`. Gerechnet wird in Weltkoordinaten, erst am Ende in die
+Elternkoordinaten zurück. Ohne gedrehten Container ändert sich nichts.
+
+### 2.2b Sandbox-Kennung und Speicher-Pruefung (2026-10-17)
+
+- Unsere FreeCAD-Version heisst `27.1.0dev-sandbox` (About-Fenster, Fenstertitel):
+  `build:`-Patch `patches/2026.10.17-freecad-version-suffix-sandbox.patch` auf `version.json`.
+- `AssemblySandboxSaveCheck.py` (geladen aus `Init.py`) beobachtet das Speichern. Enthaelt ein
+  Dokument Gelenke mit Sandbox-eigenem Typ (`SANDBOX_JOINT_TYPES`, derzeit `Tangent`), wird
+  `BuildRevision` fuer diesen Speichervorgang auf `<rev>-sandbox` gesetzt. Der Dateikopf lautet
+  dann `ProgramVersion="27.1R49261-sandbox (Git)"`, FreeCADs Versionspruefung liest weiter 27.1.
+  Dazu kommt eine Warnung im Ausgabefenster.
+- Hintergrund: Andere FreeCAD-Versionen uebergehen solche Gelenke beim Loesen still; der
+  Gelenk-Dialog bricht dort mit `'Tangent' is not in list` ab. Die Datei selbst bleibt intakt.
+
 ### 2.3 Verschachteln: `AssemblyLink::updateContents()` (die Kopier-Pipeline)
 
 ```
@@ -571,6 +595,34 @@ in `RedundantConstraint` und löst ohne sie weiter.
 - Das Gedächtnis ist ein FreeCAD-seitiges Laufzeit-Detail.
 - Die interne Einheit muss 1 sein (`ASMTAssembly`, `mbdUnits`), sonst stimmen die mm-Werte
   nicht.
+
+### 3.2e Konvergenzprüfung der Lageloesung (2026-10-17, uncommittet)
+
+**Befund:** `NewtonRaphson::isConvergedToNumericalLimit()` (Upstream) enthält zwei Fehler:
+- `dxNorms->at(iterNo)` statt `iterNo - 1`
+- `iterNo / iterMax` als Ganzzahl-Division
+
+Deshalb erkennt die Prüfung nie, dass der Schritt sich halbiert. Nach 3 Iterationen unter `1e-2`
+meldet sie „konvergiert“. Zusätzlich enthält `dxNorm` die Lagrange-Multiplikatoren, die in jedem
+Solve bei null starten. An BG22 liefen so je Durchlauf 5 Iterationen mit unveränderten Lagen
+(gemessen: Positionsanteil von `dx` = 0, alle Bedingungen erfüllt). Nach der zweiten
+„Singularität“ rechnete jede davon mit dem langsamen `GESpMatParPvPrecise`.
+
+**Änderung (OndselSolver-Patch):**
+- Beide Fehler korrigiert. Upstream-Meldung vorbereitet in
+  `bugreports/ondselsolver-newton-convergence-check/BUGREPORT.md`.
+- `AnyPosICNewtonRaphson::positionsConverged()`: Eine Lageloesung (PosIC und PosICDrag) ist
+  fertig, wenn alle Bedingungen nach dem Schritt bis 1e-8 erfüllt sind und der Lageschritt
+  ≤ 1e-6 war. `PosICNewtonRaphson::isConverged()` nutzt sie ebenfalls.
+- Findet die Suche nach Rangfolge keine Redundanz, wird zuerst `GESpMatParPvMarko`
+  versucht, dann `GESpMatParPvPrecise`.
+
+**Wirkung (BG22, Stand 2026-10-17):** Solve 15 s → 1,0 s, erstes Neuberechnen 18,9 s → 3,5 s,
+Zieh-Schritt 0,028 s → 0,015 s. Matrix 35/35, Drag-Rundumtest PASS.
+
+**Offen:** Der schnelle Löser `GESpMatParPvMarkoFast` meldet bei BG22 weiterhin fälschlich
+„singulär“ (Markowitz-Kriterium wählt kleine Pivots), einmal pro Solve springt dann der genaue
+Löser ein. Das ist der größte verbleibende Block eines Solves.
 
 ### 3.3 Kopplungs-Sequenz (Zusammenfassung von §2.1 + hier)
 

@@ -3261,7 +3261,7 @@ index 7ca17b4e3be..6e38571c0c2 100644
  
      return ret;
 diff --git a/src/Mod/Assembly/App/AssemblyObject.cpp b/src/Mod/Assembly/App/AssemblyObject.cpp
-index 171363a633c..82c9ecc3d63 100644
+index 2f5b06dacf6..38764b58bc1 100644
 --- a/src/Mod/Assembly/App/AssemblyObject.cpp
 +++ b/src/Mod/Assembly/App/AssemblyObject.cpp
 @@ -24,6 +24,10 @@
@@ -6098,7 +6098,7 @@ index 171363a633c..82c9ecc3d63 100644
              ASMTmotion->setMarkerI(fullMarkerNameI);
              ASMTmotion->setMarkerJ(fullMarkerNameJ);
              ASMTmotion->setTranslationZ(formula);
-@@ -2302,19 +4204,29 @@ std::string AssemblyObject::handleOneSideOfJoint(
+@@ -2302,10 +4204,18 @@ std::string AssemblyObject::handleOneSideOfJoint(
      App::DocumentObject* joint,
      const char* propRefName,
      const char* propPlcName,
@@ -6119,9 +6119,7 @@ index 171363a633c..82c9ecc3d63 100644
      App::DocumentObject* obj = getObjFromJointRef(joint, propRefName);
  
      if (!part || !obj) {
-         Base::Console()
--            .warning("The property %s of Joint %s is bad.\n", propRefName, joint->getFullName());
-+            .warning("The property {} of Joint {} is bad.\n", propRefName, joint->getFullName());
+@@ -2314,7 +4224,9 @@ std::string AssemblyObject::handleOneSideOfJoint(
          return "";
      }
  
@@ -9196,11 +9194,111 @@ index bd52b9d8814..bc53f2b69db 100644
      BomObject.cpp
      BomObject.h
      Groups.cpp
+diff --git a/src/Mod/Assembly/AssemblySandboxSaveCheck.py b/src/Mod/Assembly/AssemblySandboxSaveCheck.py
+new file mode 100644
+index 00000000000..28f2cfa389e
+--- /dev/null
++++ b/src/Mod/Assembly/AssemblySandboxSaveCheck.py
+@@ -0,0 +1,94 @@
++# SPDX-License-Identifier: LGPL-2.1-or-later
++# /**************************************************************************
++#                                                                           *
++#    This file is part of FreeCAD.                                          *
++#                                                                           *
++#    FreeCAD is free software: you can redistribute it and/or modify it     *
++#    under the terms of the GNU Lesser General Public License as            *
++#    published by the Free Software Foundation, either version 2.1 of the   *
++#    License, or (at your option) any later version.                        *
++#                                                                           *
++#    FreeCAD is distributed in the hope that it will be useful, but         *
++#    WITHOUT ANY WARRANTY; without even the implied warranty of             *
++#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU       *
++#    Lesser General Public License for more details.                        *
++#                                                                           *
++#    You should have received a copy of the GNU Lesser General Public       *
++#    License along with FreeCAD. If not, see                                *
++#    <https://www.gnu.org/licenses/>.                                       *
++#                                                                           *
++# **************************************************************************/
++
++# FCPROJECT-PATCH (2026-10-17, Nutzerauftrag): Dateien mit Gelenktypen, die es nur in dieser
++# Sandbox gibt, werden beim Speichern im Dateikopf markiert (ProgramVersion "...-sandbox") und es
++# kommt eine Warnung. Andere FreeCAD-Versionen uebergehen solche Gelenke beim Loesen still, der
++# Gelenk-Dialog bricht dort mit "'Tangent' is not in list" ab.
++
++import FreeCAD as App
++
++# Gelenktypen, die nur diese Sandbox kennt (am Ende von JointObject.JointTypes angehaengt).
++SANDBOX_JOINT_TYPES = ("Tangent",)
++SANDBOX_MARK = "-sandbox"
++
++
++def sandboxJoints(doc):
++    """Labels aller Gelenke im Dokument mit einem Sandbox-eigenen Typ."""
++    found = []
++    for obj in doc.Objects:
++        try:
++            jointType = obj.JointType if "JointType" in obj.PropertiesList else None
++        except Exception:
++            jointType = None
++        if jointType in SANDBOX_JOINT_TYPES:
++            found.append(f"{obj.Label} ({jointType})")
++    return found
++
++
++def markedRevision(revision):
++    """BuildRevision mit Sandbox-Kennung, z.B. '49261 (Git)' -> '49261-sandbox (Git)'. Der Kopf
++    lautet dann '27.1R49261-sandbox (Git)' - FreeCADs Versionspruefung liest weiter 27.1."""
++    if SANDBOX_MARK in revision:
++        return revision
++    if " (" in revision:
++        head, tail = revision.split(" (", 1)
++        return f"{head}{SANDBOX_MARK} ({tail}"
++    return revision + SANDBOX_MARK
++
++
++class SandboxSaveCheck:
++    def __init__(self):
++        self.originalRevision = None
++
++    def slotStartSaveDocument(self, doc, filename):
++        self.restore()
++        joints = sandboxJoints(doc)
++        if not joints:
++            return
++        revision = App.ConfigGet("BuildRevision")
++        self.originalRevision = revision
++        App.ConfigSet("BuildRevision", markedRevision(revision))
++        App.Console.PrintWarning(
++            "Assembly: '{}' enthaelt Gelenke, die nur diese Sandbox-Version kennt: {}. Die Datei "
++            "wird als Sandbox-Datei markiert; andere FreeCAD-Versionen koennen diese Gelenke nicht "
++            "verwenden (sie werden beim Loesen uebergangen, der Gelenk-Dialog oeffnet nicht).\n".format(
++                doc.Label, ", ".join(joints)
++            )
++        )
++
++    def slotFinishSaveDocument(self, doc, filename):
++        self.restore()
++
++    def restore(self):
++        if self.originalRevision is not None:
++            App.ConfigSet("BuildRevision", self.originalRevision)
++            self.originalRevision = None
++
++
++_observer = None
++
++
++def install():
++    global _observer
++    if _observer is None:
++        _observer = SandboxSaveCheck()
++        App.addDocumentObserver(_observer)
 diff --git a/src/Mod/Assembly/CMakeLists.txt b/src/Mod/Assembly/CMakeLists.txt
-index 975da1c3341..18bdd56c401 100644
+index 975da1c3341..c62d5f85bda 100644
 --- a/src/Mod/Assembly/CMakeLists.txt
 +++ b/src/Mod/Assembly/CMakeLists.txt
-@@ -31,6 +31,7 @@ set(Assembly_Scripts
+@@ -31,12 +31,14 @@ set(Assembly_Scripts
      CommandCreateSimulation.py
      CommandCreateSnapshot.py
      CommandExportASMT.py
@@ -9208,6 +9306,13 @@ index 975da1c3341..18bdd56c401 100644
      TestAssemblyWorkbench.py
      JointObject.py
      Preferences.py
+     AssemblyImport.py
+     SoSwitchMarker.py
+     UtilsAssembly.py
++    AssemblySandboxSaveCheck.py
+ )
+ 
+ if(BUILD_GUI)
 diff --git a/src/Mod/Assembly/CommandCreateSimulation.py b/src/Mod/Assembly/CommandCreateSimulation.py
 index 3c89d4a40ec..299dcf8ef52 100644
 --- a/src/Mod/Assembly/CommandCreateSimulation.py
@@ -9675,10 +9780,18 @@ index 10ebe705fe6..22633cc4dfb 100644
       <property name="orientation">
        <enum>Qt::Vertical</enum>
 diff --git a/src/Mod/Assembly/Gui/ViewProviderAssembly.cpp b/src/Mod/Assembly/Gui/ViewProviderAssembly.cpp
-index 4a27e982913..f1fcc8fed58 100644
+index 4a27e982913..51189120fae 100644
 --- a/src/Mod/Assembly/Gui/ViewProviderAssembly.cpp
 +++ b/src/Mod/Assembly/Gui/ViewProviderAssembly.cpp
-@@ -68,6 +68,7 @@
+@@ -53,6 +53,7 @@
+ 
+ #include <Base/Tools.h>
+ 
++#include <Gui/WaitCursor.h>
+ #include <Gui/ActionFunction.h>
+ #include <Gui/Application.h>
+ #include <Gui/BitmapFactory.h>
+@@ -68,6 +69,7 @@
  #include <Gui/ViewParams.h>
  #include <Gui/Selection/SoFCSelectionAction.h>
  
@@ -9686,7 +9799,7 @@ index 4a27e982913..f1fcc8fed58 100644
  #include <Mod/Assembly/App/AssemblyLink.h>
  #include <Mod/Assembly/App/AssemblyObject.h>
  #include <Mod/Assembly/App/AssemblyUtils.h>
-@@ -206,14 +207,35 @@ bool ViewProviderAssembly::canDragObjectToTarget(App::DocumentObject* obj, App::
+@@ -206,14 +208,35 @@ bool ViewProviderAssembly::canDragObjectToTarget(App::DocumentObject* obj, App::
      }
  
      // Combine the joints and groundedJoints vectors into one for simplicity.
@@ -9725,7 +9838,7 @@ index 4a27e982913..f1fcc8fed58 100644
          App::DocumentObject* obj1 = getObjFromJointRef(joint, "Reference1");
          App::DocumentObject* obj2 = getObjFromJointRef(joint, "Reference2");
          App::DocumentObject* obj3 = getObjFromProp(joint, "ObjectToGround");
-@@ -275,7 +297,7 @@ void ViewProviderAssembly::updateData(const App::Property* prop)
+@@ -275,7 +298,7 @@ void ViewProviderAssembly::updateData(const App::Property* prop)
                  return;
              }
  
@@ -9734,7 +9847,7 @@ index 4a27e982913..f1fcc8fed58 100644
              for (auto* joint : joints) {
                  Gui::ViewProvider* jointVp = Gui::Application::Instance->getViewProvider(joint);
                  if (jointVp) {
-@@ -313,6 +335,22 @@ bool ViewProviderAssembly::setEdit(int mode)
+@@ -313,6 +336,22 @@ bool ViewProviderAssembly::setEdit(int mode)
          updateTaskPanel(true);
  
          auto* assembly = getObject<AssemblyObject>();
@@ -9757,7 +9870,7 @@ index 4a27e982913..f1fcc8fed58 100644
          connectSolverUpdate = assembly->signalSolverUpdate.connect([this] {
              UpdateSolverInformation();
          });
-@@ -346,6 +384,16 @@ void ViewProviderAssembly::unsetEdit(int mode)
+@@ -346,6 +385,16 @@ void ViewProviderAssembly::unsetEdit(int mode)
          partMoving = false;
          docsToMove.clear();
  
@@ -9774,7 +9887,103 @@ index 4a27e982913..f1fcc8fed58 100644
          unsetDragger();
          detachSelection();
  
-@@ -650,7 +698,7 @@ bool ViewProviderAssembly::tryMouseMove(const SbVec2s& cursorPos, Gui::View3DInv
+@@ -543,11 +592,33 @@ bool ViewProviderAssembly::tryMouseMove(const SbVec2s& cursorPos, Gui::View3DInv
+         Base::Rotation asmInvRot
+             = App::GeoFeature::getGlobalPlacement(getObject<AssemblyObject>()).getRotation().inverse();
+ 
++        // FCPROJECT-PATCH (2026-10-17, Nutzerbefund "Tisch laeuft beim Ziehen in verkehrte
++        // Richtung", nur bei manchen Teilen): Cursor und JCS sind Weltkoordinaten, die Placement
++        // des gezogenen Objekts ist aber relativ zu seinem Elterncontainer. Steckt es in einem
++        // gedrehten Container (z.B. um 180 Grad gedrehte Unterbaugruppe), lief die Vorgabe
++        // gespiegelt; die Drehformeln mischten lokale Placement und globales JCS ebenso. Jetzt wird
++        // in Weltkoordinaten gerechnet und erst zum Schluss in die Elternkoordinaten umgerechnet.
++        // Ohne gedrehten Container ist das identisch zum bisherigen Verhalten.
++        // Dieselbe Weltlage wie jcsGlobalPlc in initMove() (GeoFeature::globalPlacement()).
++        auto parentGlobalOf = [this](const MovingObject& m, const Base::Placement& localPlc) {
++            if (auto* geoFeat = freecad_cast<App::GeoFeature*>(m.obj)) {
++                return geoFeat->globalPlacement() * localPlc.inverse();
++            }
++            if (m.obj) {
++                // App::Link-Teile (keine GeoFeature) - wie initMove() fuer jcsGlobalPlc.
++                return App::GeoFeature::getGlobalPlacement(m.obj) * localPlc.inverse();
++            }
++            return App::GeoFeature::getGlobalPlacement(getObject<AssemblyObject>());
++        };
++
+         for (auto& objToMove : docsToMove) {
+             App::DocumentObject* obj = objToMove.obj;
+             auto* propPlacement = obj->getPlacementProperty();
+             if (propPlacement) {
+                 Base::Placement plc = objToMove.plc;
++                const Base::Placement parentGlobal
++                    = parentGlobalOf(objToMove, propPlacement->getValue());
++                const Base::Rotation parentInvRot = parentGlobal.getRotation().inverse();
+                 if (ungroundedJointDrag) {
+                     plc.setPosition(plc.getPosition() + ungroundedDragTranslation);
+                     if (obj != docsToMove[0].obj) {
+@@ -566,8 +637,9 @@ bool ViewProviderAssembly::tryMouseMove(const SbVec2s& cursorPos, Gui::View3DInv
+                     Base::Rotation zRotation = Base::Rotation(Base::Vector3d(0., 0., 1.), angle);
+                     Base::Placement rotatedGlovalJcsPlc = dragJcsGlobalPlc
+                         * Base::Placement(Base::Vector3d(), zRotation);
+-                    Base::Placement jcsPlcRelativeToPart = plc.inverse() * dragJcsGlobalPlc;
+-                    plc = rotatedGlovalJcsPlc * jcsPlcRelativeToPart.inverse();
++                    const Base::Placement objGlobal = parentGlobal * plc;
++                    Base::Placement jcsPlcRelativeToPart = objGlobal.inverse() * dragJcsGlobalPlc;
++                    plc = parentGlobal.inverse() * rotatedGlovalJcsPlc * jcsPlcRelativeToPart.inverse();
+                 }
+                 else if (dragMode == DragMode::Ball) {
+                     Base::Vector3d center = jcsGlobalPlc.getPosition();
+@@ -587,18 +659,21 @@ bool ViewProviderAssembly::tryMouseMove(const SbVec2s& cursorPos, Gui::View3DInv
+ 
+                         // Calculate the initial offset of the part relative to the joint
+                         // and apply the new global joint placement to find the new part placement.
+-                        Base::Placement jcsPlcRelativeToPart = plc.inverse() * dragJcsGlobalPlc;
+-                        plc = rotatedGlobalJcsPlc * jcsPlcRelativeToPart.inverse();
++                        const Base::Placement objGlobal = parentGlobal * plc;
++                        Base::Placement jcsPlcRelativeToPart = objGlobal.inverse() * dragJcsGlobalPlc;
++                        plc = parentGlobal.inverse() * rotatedGlobalJcsPlc
++                            * jcsPlcRelativeToPart.inverse();
+                     }
+                 }
+                 else if (dragMode == DragMode::TranslationOnAxis) {
+-                    Base::Vector3d pos = plc.getPosition() + (newPos - initialPosition);
++                    Base::Vector3d pos = plc.getPosition()
++                        + parentInvRot.multVec(newPos - initialPosition);
+                     plc.setPosition(pos);
+                 }
+                 else if (dragMode == DragMode::TranslationOnAxisAndRotationOnePlane) {
+                     Base::Vector3d delta = newPos - initialPosition;
+-                    Base::Vector3d pos = plc.getPosition() + delta;
+-                    plc.setPosition(pos);
++                    Base::Placement objGlobal = parentGlobal * plc;
++                    objGlobal.setPosition(objGlobal.getPosition() + delta);
+ 
+                     Base::Placement newJcsGlobalPlc = dragJcsGlobalPlc;
+                     newJcsGlobalPlc.setPosition(dragJcsGlobalPlc.getPosition() + delta);
+@@ -616,15 +691,18 @@ bool ViewProviderAssembly::tryMouseMove(const SbVec2s& cursorPos, Gui::View3DInv
+                     Base::Rotation zRotation = Base::Rotation(Base::Vector3d(0., 0., 1.), angle);
+                     Base::Placement rotatedGlovalJcsPlc = newJcsGlobalPlc
+                         * Base::Placement(Base::Vector3d(), zRotation);
+-                    Base::Placement jcsPlcRelativeToPart = plc.inverse() * newJcsGlobalPlc;
+-                    plc = rotatedGlovalJcsPlc * jcsPlcRelativeToPart.inverse();
++                    Base::Placement jcsPlcRelativeToPart = objGlobal.inverse() * newJcsGlobalPlc;
++                    plc = parentGlobal.inverse() * rotatedGlovalJcsPlc * jcsPlcRelativeToPart.inverse();
+                 }
+                 else if (dragMode == DragMode::TranslationOnPlane) {
+-                    Base::Vector3d pos = plc.getPosition() + (newPos - initialPosition);
++                    Base::Vector3d pos = plc.getPosition()
++                        + parentInvRot.multVec(newPos - initialPosition);
+                     plc.setPosition(pos);
+                 }
+                 else {  // DragMode::Translation / TranslationNoSolve
+-                    Base::Vector3d delta = asmInvRot.multVec(newPos - prevPosition);
++                    // FCPROJECT-PATCH (2026-10-17): Elterncontainer statt nur der Baugruppe.
++                    boost::ignore_unused(asmInvRot);
++                    Base::Vector3d delta = parentInvRot.multVec(newPos - prevPosition);
+ 
+                     Base::Vector3d pos = propPlacement->getValue().getPosition() + delta;
+                     plc.setPosition(pos);
+@@ -650,7 +728,7 @@ bool ViewProviderAssembly::tryMouseMove(const SbVec2s& cursorPos, Gui::View3DInv
              }
          }
          else {
@@ -9783,7 +9992,7 @@ index 4a27e982913..f1fcc8fed58 100644
          }
      }
      return false;
-@@ -729,29 +777,89 @@ void ViewProviderAssembly::doubleClickedIn3dView()
+@@ -729,29 +807,89 @@ void ViewProviderAssembly::doubleClickedIn3dView()
      }
  }
  
@@ -9879,7 +10088,7 @@ index 4a27e982913..f1fcc8fed58 100644
                  return true;
              }
          }
-@@ -845,7 +953,12 @@ bool ViewProviderAssembly::getSelectedObjectsWithinAssembly(bool addPreselection
+@@ -845,7 +983,12 @@ bool ViewProviderAssembly::getSelectedObjectsWithinAssembly(bool addPreselection
          App::DocumentObject* selRoot = Gui::Selection().getPreselection().Object.getObject();
          std::string sub = Gui::Selection().getPreselection().pSubName;
  
@@ -9893,7 +10102,7 @@ index 4a27e982913..f1fcc8fed58 100644
          if (canDragObjectIn3d(obj)) {
  
              bool alreadyIn = false;
-@@ -882,8 +995,26 @@ void ViewProviderAssembly::collectMovableObjects(
+@@ -882,8 +1025,26 @@ void ViewProviderAssembly::collectMovableObjects(
      auto* assemblyPart = getObject<AssemblyObject>();
  
      // Handling of special case: flexible AssemblyLink
@@ -9921,7 +10130,7 @@ index 4a27e982913..f1fcc8fed58 100644
          std::vector<App::DocumentObject*> children = asmLink->Group.getValues();
          for (auto* child : children) {
              // Recurse on children, appending the child's name to the subName prefix
-@@ -913,7 +1044,12 @@ void ViewProviderAssembly::collectMovableObjects(
+@@ -913,7 +1074,12 @@ void ViewProviderAssembly::collectMovableObjects(
          return;
      }
  
@@ -9935,7 +10144,7 @@ index 4a27e982913..f1fcc8fed58 100644
  
      if (onlySolids && assemblyPart->isPartConnected(part)) {
          return;  // No dragger for connected parts.
-@@ -981,7 +1117,41 @@ ViewProviderAssembly::DragMode ViewProviderAssembly::findDragMode()
+@@ -981,7 +1147,41 @@ ViewProviderAssembly::DragMode ViewProviderAssembly::findDragMode()
              addPartsToMove(connectedParts);
          }
  
@@ -9977,7 +10186,7 @@ index 4a27e982913..f1fcc8fed58 100644
          if (jointType == JointType::Fixed) {
              // If fixed joint we need to find the upstream joint to find move mode.
              // For example : Gnd -(revolute)- A -(fixed)- B : if user try to move B, then we should
-@@ -1028,14 +1198,44 @@ ViewProviderAssembly::DragMode ViewProviderAssembly::findDragMode()
+@@ -1028,14 +1228,44 @@ ViewProviderAssembly::DragMode ViewProviderAssembly::findDragMode()
          if (!ref) {
              return DragMode::Translation;
          }
@@ -10026,7 +10235,20 @@ index 4a27e982913..f1fcc8fed58 100644
              addPartsToMove(downstreamParts);
          }
  
-@@ -1082,7 +1282,7 @@ void ViewProviderAssembly::tryInitMove(const SbVec2s& cursorPos, Gui::View3DInve
+@@ -1074,6 +1304,12 @@ void ViewProviderAssembly::initMove(const SbVec2s& cursorPos, Gui::View3DInvento
+ 
+ void ViewProviderAssembly::tryInitMove(const SbVec2s& cursorPos, Gui::View3DInventorViewer* viewer)
+ {
++    // FCPROJECT-PATCH (2026-10-17, Nutzerwunsch): Sanduhr waehrend der ersten Berechnung beim
++    // Ziehen (Zieh-Gelenk bestimmen, preDrag-Solve). Ereignisse nicht verwerfen, sonst ginge ein
++    // Loslassen der Maus waehrend der Berechnung verloren.
++    Gui::WaitCursor waitCursor;
++    waitCursor.setIgnoreEvents(Gui::WaitCursor::NoEvents);
++
+     dragMode = findDragMode();
+     if (dragMode == DragMode::None) {
+         return;
+@@ -1082,7 +1318,7 @@ void ViewProviderAssembly::tryInitMove(const SbVec2s& cursorPos, Gui::View3DInve
      auto* assemblyPart = getObject<AssemblyObject>();
      // When the user drag parts, we switch off all joints visibility and only show the movingjoint
      jointVisibilitiesBackup.clear();
@@ -10035,7 +10257,7 @@ index 4a27e982913..f1fcc8fed58 100644
      for (auto* joint : joints) {
          if (!joint) {
              continue;
-@@ -1167,7 +1367,7 @@ void ViewProviderAssembly::tryInitMove(const SbVec2s& cursorPos, Gui::View3DInve
+@@ -1167,7 +1403,7 @@ void ViewProviderAssembly::tryInitMove(const SbVec2s& cursorPos, Gui::View3DInve
          assemblyPart->preDrag(dragParts);
      }
      else {
@@ -10044,7 +10266,7 @@ index 4a27e982913..f1fcc8fed58 100644
      }
  }
  
-@@ -1368,7 +1568,16 @@ bool ViewProviderAssembly::canDelete(App::DocumentObject* objBeingDeleted) const
+@@ -1368,7 +1604,16 @@ bool ViewProviderAssembly::canDelete(App::DocumentObject* objBeingDeleted) const
                  if (subAsmLink || link) {
                      if (std::ranges::find(objs, obj) == objs.end()) {
                          objs.push_back(obj);
@@ -10062,7 +10284,7 @@ index 4a27e982913..f1fcc8fed58 100644
                              addSubComponents(subAsmLink, objs);
                          }
                      }
-@@ -1381,17 +1590,40 @@ bool ViewProviderAssembly::canDelete(App::DocumentObject* objBeingDeleted) const
+@@ -1381,17 +1626,40 @@ bool ViewProviderAssembly::canDelete(App::DocumentObject* objBeingDeleted) const
              addSubComponents(asmLink, objsBeingDeleted);
          }
  
@@ -10107,7 +10329,7 @@ index 4a27e982913..f1fcc8fed58 100644
                      objToDel.push_back(joint);
                  }
              }
-@@ -1399,7 +1631,7 @@ bool ViewProviderAssembly::canDelete(App::DocumentObject* objBeingDeleted) const
+@@ -1399,7 +1667,7 @@ bool ViewProviderAssembly::canDelete(App::DocumentObject* objBeingDeleted) const
              // List its grounded joints
              std::vector<App::DocumentObject*> inList = obj->getInList();
              for (auto* parent : inList) {
@@ -10116,7 +10338,7 @@ index 4a27e982913..f1fcc8fed58 100644
                      continue;
                  }
  
-@@ -1486,22 +1718,46 @@ void ViewProviderAssembly::applyIsolationRecursively(
+@@ -1486,22 +1754,46 @@ void ViewProviderAssembly::applyIsolationRecursively(
          }
          return;
      }
@@ -10171,7 +10393,7 @@ index 4a27e982913..f1fcc8fed58 100644
  
      auto* vp = Gui::Application::Instance->getViewProvider(current);
      auto* vpl = dynamic_cast<Gui::ViewProviderLink*>(vp);
-@@ -1589,8 +1845,29 @@ void ViewProviderAssembly::isolateJointReferences(App::DocumentObject* joint, Is
+@@ -1589,8 +1881,29 @@ void ViewProviderAssembly::isolateJointReferences(App::DocumentObject* joint, Is
          return;
      }
  
@@ -10203,7 +10425,7 @@ index 4a27e982913..f1fcc8fed58 100644
      if (!part1 || !part2) {
          return;
      }
-@@ -1847,6 +2124,22 @@ Base::Vector3d ViewProviderAssembly::getCenterOfBoundingBox(const std::vector<Mo
+@@ -1847,6 +2160,22 @@ Base::Vector3d ViewProviderAssembly::getCenterOfBoundingBox(const std::vector<Mo
      return center;
  }
  
@@ -10226,7 +10448,7 @@ index 4a27e982913..f1fcc8fed58 100644
  inline QString objListHelper(const AssemblyObject* assembly, const std::vector<std::string>& names)
  {
      if (!assembly) {
-@@ -1856,7 +2149,7 @@ inline QString objListHelper(const AssemblyObject* assembly, const std::vector<s
+@@ -1856,7 +2185,7 @@ inline QString objListHelper(const AssemblyObject* assembly, const std::vector<s
  
      std::vector<App::DocumentObject*> joints;
      for (const auto& name : names) {
@@ -10235,7 +10457,7 @@ index 4a27e982913..f1fcc8fed58 100644
              joints.push_back(obj);
          }
      }
-@@ -1890,6 +2183,17 @@ void ViewProviderAssembly::UpdateSolverInformation()
+@@ -1890,6 +2219,17 @@ void ViewProviderAssembly::UpdateSolverInformation()
      // Updates Solver Information with the Last solver execution at AssemblyObject level
      auto* assembly = getObject<AssemblyObject>();
  
@@ -10253,7 +10475,7 @@ index 4a27e982913..f1fcc8fed58 100644
      int dofs = assembly->getLastDoF();
      bool hasRedundancies = assembly->getLastHasRedundancies();
      bool hasMalformed = assembly->getLastHasMalformedConstraints();
-@@ -1905,11 +2209,14 @@ void ViewProviderAssembly::UpdateSolverInformation()
+@@ -1905,11 +2245,14 @@ void ViewProviderAssembly::UpdateSolverInformation()
                      QStringLiteral("(%1)").arg(objListHelper(assembly,
             assembly->getLastConflicting())));*/
          // So for now we report like follows:
@@ -10269,7 +10491,7 @@ index 4a27e982913..f1fcc8fed58 100644
          );
      }
      else if (hasMalformed) {  // malformed joints
-@@ -1970,13 +2277,25 @@ void ViewProviderAssembly::updateTaskPanel(bool show)
+@@ -1970,13 +2313,25 @@ void ViewProviderAssembly::updateTaskPanel(bool show)
          return;
      }
  
@@ -10360,6 +10582,21 @@ index 948b806f0fa..e7906365695 100644
  };
  
  }  // namespace AssemblyGui
+diff --git a/src/Mod/Assembly/Init.py b/src/Mod/Assembly/Init.py
+index 350b5238a12..ecf7326bee7 100644
+--- a/src/Mod/Assembly/Init.py
++++ b/src/Mod/Assembly/Init.py
+@@ -35,3 +35,10 @@ FreeCAD.__unit_test__ += ["TestAssemblyWorkbench"]
+ # The correct format for assembly interoperability is a research topic. ASMT is a placeholder.
+ FreeCAD.addImportType("Assembly Format (*.asmt *.ASMT)", "AssemblyImport")
+ # FreeCAD.addExportType()
++
++# FCPROJECT-PATCH (2026-10-17): Sandbox-Dateien (Gelenktypen, die nur diese Version kennt) beim
++# Speichern markieren und warnen - siehe AssemblySandboxSaveCheck.py.
++import AssemblySandboxSaveCheck
++
++AssemblySandboxSaveCheck.install()
++
 diff --git a/src/Mod/Assembly/InitGui.py b/src/Mod/Assembly/InitGui.py
 index e2ac92c0ebe..11d2db7deab 100644
 --- a/src/Mod/Assembly/InitGui.py

@@ -6,7 +6,7 @@
 #     gegen ein ECHTES Vanilla-Checkout des Ziel-Commits, nicht mehr gegen HEAD - siehe dortige
 #     Kommentare)
 #
-# VANILLA_BASE: e5fabddebb
+# VANILLA_BASE: 088f49373d
 # ^ Nutzerauftrag 2026-09-27 ("wer prueft, dass alle Commits im Patch landen?"): der Commit,
 # gegen den die Patches oben den Diff bilden (git diff VANILLA_BASE HEAD -- src/Mod/Assembly
 # src/3rdParty/OndselSolver). check-patches.sh liest diese Zeile automatisch und prueft nach dem
@@ -124,6 +124,9 @@
 # 2026-10-14 (34): Nachtrag - Redundanz innerhalb einer Toleranz schlucken, nach Rangfolge, mit Gedaechtnis (Regel C7).
 # 2026-10-14 (35): Nachtrag - Pfad-Index fuer die Lebensdauer eines IdentityGraph (Zieh-Start/Solve schneller).
 # 2026-10-14 (36): Nachtrag - Redundanz-Toleranz im Einstellungsdialog der Assembly-Werkbank.
+# 2026-10-17 (37): Nachtrag - Ziehen rechnet in Weltkoordinaten (gedrehte Container, Tisch lief gespiegelt).
+# 2026-10-17 (38): Nachtrag - Sanduhr waehrend der ersten Berechnung beim Ziehen.
+# 2026-10-17 (39): Nachtrag - Sandbox-Kennung (Version dev-sandbox, Markierung beim Speichern).
 
 2026.10.03-freecad-assembly-full-resync.patch
 
@@ -139,6 +142,8 @@
 # (PosICNewtonRaphson::redundantEqnsByPriority(), System::jointPriority), bekannte Redundanzen
 # vorab herausnehmen (System::applyKnownRedundantConstraints()), Restwerte der herausgenommenen
 # Bedingungen (System::redundantConstraintStates()), genauer Loeser vor der vollen Pivotsuche.
+# Seit 2026-10-17: Konvergenzpruefung (NewtonRaphson-Indexfehler + Ganzzahl-Division,
+# AnyPosICNewtonRaphson::positionsConverged()), Markowitz-Loeser vor dem genauen Loeser.
 2026.10.11-ondselsolver-redundancy-groups.patch
 
 # NICHT in obiger Liste, weil nicht auf DIESE Sandbox anwendbar (betrifft src/App/*, hier
@@ -166,3 +171,9 @@
 # eingetragen (Nutzerhinweis: "wir haben schon PATCHES.txt") - vorher blockierte er jeden
 # update-sandbox.sh-Lauf als "unerwartete lokale Aenderung" im Build-Baum.
 build: 2026.09.27-freecad-gui-qt6-qbytearray-qstring-fixes.patch
+
+# 2026-10-17 (Nutzerauftrag): unsere FreeCAD-Version heisst "...dev-sandbox" (About-Fenster,
+# Fenstertitel, Programmversion) - damit Sandbox-Builds und Sandbox-Dateien erkennbar sind. Dateien
+# mit Sandbox-eigenen Gelenktypen (Zweig tangent-joint: Tangent) bekommen zusaetzlich im Kopf
+# "...-sandbox" und eine Warnung beim Speichern (src/Mod/Assembly/AssemblySandboxSaveCheck.py).
+build: 2026.10.17-freecad-version-suffix-sandbox.patch
