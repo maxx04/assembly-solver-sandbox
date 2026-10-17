@@ -530,6 +530,11 @@ public:
     {
         return lastRedundancyGroups;
     }
+    // FCPROJECT-PATCH (2026-10-14): siehe lastRedundancyStates
+    inline const std::vector<std::string>& getLastRedundancyStates() const
+    {
+        return lastRedundancyStates;
+    }
     // FCPROJECT-PATCH (2026-10-13): siehe lastLimitViolations
     inline const std::vector<std::string>& getLastLimitViolations() const
     {
@@ -712,6 +717,35 @@ private:
         double max;
     };
     std::vector<LimitCheck> activeLimits;
+
+    // FCPROJECT-PATCH (2026-10-14, Plan plans/2026-10-14-redundanz-mit-toleranz.md, Regel C7):
+    // Redundanzen des letzten Solves, nur im Speicher. Solange alle gemerkten Gelenke noch
+    // unveraendert im Modell stecken, nimmt der naechste Solve dieselben Bedingungen vorab heraus
+    // (OndselSolver sucht sonst bei jedem Solve von vorn - ~80% der Solve-Zeit an BG22).
+    struct RedundancyCache
+    {
+        std::set<std::string> signatures;
+        std::set<std::pair<std::string, std::size_t>> removed;
+        // davon ueber der Toleranz (bekannter Widerspruch aus einem frischen Solve)
+        std::set<std::pair<std::string, std::size_t>> conflicts;
+        std::vector<std::pair<std::string, std::vector<std::string>>> groups;
+    };
+    bool newRedundancyConflict = false;
+    RedundancyCache redundancyCache;
+    // solve() aus preDrag() buendelt Fixed-Ketten (bundleFixed) - ein anderes Modell, eigenes
+    // Gedaechtnis, sonst ueberschreiben sich beide gegenseitig.
+    RedundancyCache bundledRedundancyCache;
+    RedundancyCache dragRedundancyCache;
+    RedundancyCache& currentRedundancyCache()
+    {
+        return bundleFixed ? bundledRedundancyCache : redundancyCache;
+    }
+    bool redundancyCacheApplied = false;
+    // je herausgenommener Bedingung eine Zeile "Gelenk: Abweichung ..., geschluckt|Konflikt"
+    std::vector<std::string> lastRedundancyStates;
+    std::set<std::string> mbdJointSignatures() const;
+    bool applyRedundancyCache(const RedundancyCache& cache);
+    void setJointPriorities(const std::vector<JointRef>& jointRefs);
     std::vector<std::string> lastLimitViolations;
     std::optional<Base::Placement> getJcsInContext(
         App::DocumentObject* joint,

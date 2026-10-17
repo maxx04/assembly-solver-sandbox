@@ -25,6 +25,9 @@
 #include <cstdio>
 #include <fstream>
 #include <functional>
+#include <map>
+#include <memory>
+#include <unordered_map>
 
 #include <App/Application.h>
 #include <App/Document.h>
@@ -44,6 +47,23 @@
 
 namespace Assembly
 {
+
+// FCPROJECT-PATCH (2026-10-14): Pfad-Index fuer die Lebensdauer eines IdentityGraph (siehe
+// findLocalGroupPathIn()).
+struct PathIndex
+{
+    std::unordered_map<const App::DocumentObject*,
+                       std::unordered_map<const App::DocumentObject*, std::vector<AssemblyLink*>>>
+        local;
+    std::map<std::pair<const App::DocumentObject*, const App::DocumentObject*>,
+             std::pair<bool, std::vector<AssemblyLink*>>>
+        chains;
+};
+
+namespace
+{
+thread_local PathIndex* activePathIndex = nullptr;
+}  // namespace
 
 namespace
 {
@@ -92,6 +112,59 @@ bool findLocalGroupPath(
     }
     return false;
 }
+// FCPROJECT-PATCH (2026-10-14, Zieh-Start in BG22 ~4 s, gdb-Stichproben: der groesste Teil in
+// findLocalGroupPath(), je Teil und je Gelenk ein neuer Baumdurchlauf aus instanceOf()/
+// resolveJointRef()/containerChainPlacement()): solange ein IdentityGraph lebt (ein Vorgang - Solve,
+// Zieh-Start, Overlay; die Baumstruktur aendert sich darin nicht), wird je Container EIN Durchlauf
+// gemacht und der Pfad zu jedem Objekt gemerkt (erstes Vorkommen in derselben Tiefensuch-Reihenfolge
+// wie findLocalGroupPath(), also dasselbe Ergebnis). Ohne aktiven Graphen wie bisher.
+void indexLocalGroupPaths(
+    const std::vector<App::DocumentObject*>& objects,
+    std::vector<AssemblyLink*>& path,
+    std::unordered_map<const App::DocumentObject*, std::vector<AssemblyLink*>>& out
+)
+{
+    for (auto* candidate : objects) {
+        if (!candidate) {
+            continue;
+        }
+        out.emplace(candidate, path);
+        if (auto* asmLink = freecad_cast<AssemblyLink*>(candidate)) {
+            path.push_back(asmLink);
+            indexLocalGroupPaths(asmLink->Group.getValues(), path, out);
+            path.pop_back();
+            continue;
+        }
+        if (auto* group = freecad_cast<App::DocumentObjectGroup*>(candidate)) {
+            indexLocalGroupPaths(group->Group.getValues(), path, out);
+        }
+    }
+}
+
+bool findLocalGroupPathIn(
+    const App::DocumentObject* container,
+    const std::vector<App::DocumentObject*>& objects,
+    App::DocumentObject* target,
+    std::vector<AssemblyLink*>& outPath
+)
+{
+    if (!activePathIndex) {
+        return findLocalGroupPath(objects, target, outPath);
+    }
+    auto it = activePathIndex->local.find(container);
+    if (it == activePathIndex->local.end()) {
+        std::vector<AssemblyLink*> path;
+        it = activePathIndex->local.emplace(container, decltype(it->second)()).first;
+        indexLocalGroupPaths(objects, path, it->second);
+    }
+    auto hit = it->second.find(target);
+    if (hit == it->second.end()) {
+        return false;
+    }
+    outPath.insert(outPath.end(), hit->second.begin(), hit->second.end());
+    return true;
+}
+
 // FCPROJECT-PATCH (2026-09-19, live am echten BG37/BG43/BG67-Projekt gefunden): findLocalGroupPath()
 // alleine findet 'target' nur, wenn es innerhalb DESSELBEN Dokuments wie 'scope' liegt - fuer ein
 // tief verschachteltes, ueber MEHRERE ECHTE Dokumentgrenzen erreichtes Objekt (z.B. ein Blatt in
@@ -103,14 +176,43 @@ bool findLocalGroupPath(
 // 'scope' und 'target' liegen. 'chain' sammelt dabei JEDE durchquerte AssemblyLink-Instanz,
 // aeusserste zuerst - das Produkt ihrer Placement-Werte ist exakt die Transformation, die
 // 'target's lokale Placement in Weltkoordinaten relativ zu 'scope' umrechnet.
+bool findContainerChainUncached(
+    AssemblyObject* scope,
+    App::DocumentObject* target,
+    std::vector<AssemblyLink*>& chain
+);
+
 bool findContainerChain(
     AssemblyObject* scope,
     App::DocumentObject* target,
     std::vector<AssemblyLink*>& chain
 )
 {
+    if (!activePathIndex) {
+        return findContainerChainUncached(scope, target, chain);
+    }
+    auto key = std::make_pair(static_cast<const App::DocumentObject*>(scope),
+                              static_cast<const App::DocumentObject*>(target));
+    auto it = activePathIndex->chains.find(key);
+    if (it == activePathIndex->chains.end()) {
+        std::vector<AssemblyLink*> found;
+        const bool ok = findContainerChainUncached(scope, target, found);
+        it = activePathIndex->chains.emplace(key, std::make_pair(ok, std::move(found))).first;
+    }
+    if (it->second.first) {
+        chain.insert(chain.end(), it->second.second.begin(), it->second.second.end());
+    }
+    return it->second.first;
+}
+
+bool findContainerChainUncached(
+    AssemblyObject* scope,
+    App::DocumentObject* target,
+    std::vector<AssemblyLink*>& chain
+)
+{
     std::vector<AssemblyLink*> localPath;
-    if (findLocalGroupPath(scope->Group.getValues(), target, localPath)) {
+    if (findLocalGroupPathIn(scope, scope->Group.getValues(), target, localPath)) {
         chain.insert(chain.end(), localPath.begin(), localPath.end());
         return true;
     }
@@ -174,7 +276,7 @@ App::DocumentObject* refineNestedMirrorTarget(
     }
 
     std::vector<AssemblyLink*> path;
-    if (!findLocalGroupPath(scope->Group.getValues(), obj, path)) {
+    if (!findLocalGroupPathIn(scope, scope->Group.getValues(), obj, path)) {
         return obj;
     }
     if (path.empty()) {
@@ -242,7 +344,18 @@ std::size_t IdentityHandleHash::operator()(const IdentityHandle& h) const
 
 IdentityGraph::IdentityGraph(AssemblyObject* root)
     : rootAssembly(root)
-{}
+    , pathIndex(std::make_unique<PathIndex>())
+    , previousPathIndex(activePathIndex)
+{
+    activePathIndex = pathIndex.get();
+}
+
+IdentityGraph::~IdentityGraph()
+{
+    if (activePathIndex == pathIndex.get()) {
+        activePathIndex = previousPathIndex;
+    }
+}
 
 // FCPROJECT-PATCH (2026-09-19, IdentityGraph-Umbau, Phase 0): generalisiert
 // AssemblyUtils::getMovingPartFromSel()'s Segment-fuer-Segment-Namens-Walk. 'localContext' dient
@@ -377,7 +490,7 @@ namespace
 bool resolveObjectIn(AssemblyObject* scope, App::DocumentObject* obj, IdentityHandle& outHandle)
 {
     std::vector<AssemblyLink*> path;
-    if (findLocalGroupPath(scope->Group.getValues(), obj, path)) {
+    if (findLocalGroupPathIn(scope, scope->Group.getValues(), obj, path)) {
         AssemblyLink* previousLink = nullptr;
         std::vector<AssemblyLink*> duplicatePath;
         for (auto* mirrorLink : path) {
@@ -651,7 +764,7 @@ IdentityHandle IdentityGraph::resolveJointRef(
                 std::vector<App::DocumentObject*> siblingCandidates;
                 if (!localContext) {
                     std::vector<AssemblyLink*> structuralPath;
-                    if (findLocalGroupPath(rootAssembly->Group.getValues(), assemblyLink, structuralPath)
+                    if (findLocalGroupPathIn(rootAssembly, rootAssembly->Group.getValues(), assemblyLink, structuralPath)
                         && !structuralPath.empty()) {
                         siblingCandidates = structuralPath.back()->Group.getValues();
                     }
@@ -911,7 +1024,7 @@ App::DocumentObject* IdentityGraph::instanceOf(const IdentityHandle& h)
         }
         else {
             std::vector<AssemblyLink*> localPath;
-            if (findLocalGroupPath(rootAssembly->Group.getValues(), target, localPath)) {
+            if (findLocalGroupPathIn(rootAssembly, rootAssembly->Group.getValues(), target, localPath)) {
                 return target;  // liegt selbst im Baum dieses Kontexts
             }
         }
@@ -1143,6 +1256,8 @@ void IdentityGraph::invalidate()
     groundedSet.clear();
     instanceIndexBuilt = false;
     instanceIndex.clear();
+    pathIndex->local.clear();
+    pathIndex->chains.clear();
 }
 
 namespace

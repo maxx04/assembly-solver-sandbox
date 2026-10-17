@@ -387,6 +387,20 @@ PyObject* AssemblyObjectPy::getRedundancyGroups(PyObject* args) const
     return Py::new_reference_to(ret);
 }
 
+// FCPROJECT-PATCH (2026-10-14): herausgenommene (redundante) Bedingungen des letzten Solves mit
+// Abweichung und "geschluckt"/"Konflikt" (siehe AssemblyObject::updateSolveStatus(), Regel C7).
+PyObject* AssemblyObjectPy::getRedundancyStates(PyObject* args) const
+{
+    if (!PyArg_ParseTuple(args, "")) {
+        return nullptr;
+    }
+    Py::List ret;
+    for (const auto& line : this->getAssemblyObjectPtr()->getLastRedundancyStates()) {
+        ret.append(Py::String(line));
+    }
+    return Py::new_reference_to(ret);
+}
+
 // FCPROJECT-PATCH (2026-10-13): Gelenkgrenzen, die der letzte Solve nicht einhalten konnte, je
 // Grenze eine Zeile (siehe AssemblyObject::reportUnsatisfiedLimits()).
 PyObject* AssemblyObjectPy::getLimitViolations(PyObject* args) const

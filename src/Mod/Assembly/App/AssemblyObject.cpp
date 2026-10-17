@@ -582,6 +582,8 @@ int AssemblyObject::solve(bool enableRedo)
         savePlacementsForUndo();
     }
 
+    setJointPriorities(jointRefs);
+    redundancyCacheApplied = applyRedundancyCache(currentRedundancyCache());
     try {
         mbdAssembly->runPreDrag();
         // FCPROJECT-PATCH (2026-10-11, live an BG22 gefunden: BG75 per Zylinder-Fuehrung
@@ -668,26 +670,50 @@ int AssemblyObject::solve(bool enableRedo)
                              std::abs(rotDiff)});
     }
 
+    // FCPROJECT-PATCH (2026-10-14, Regel C7): Warnung nur noch bei einem Widerspruch ueber der
+    // Toleranz; stimmige Redundanz wird geschluckt (nur Protokoll).
     if (lastHasRedundancies) {
         std::string names;
-        for (const auto& n : lastRedundantJoints) {
+        for (const auto& n : lastConflictingJoints) {
             if (!names.empty()) {
                 names += ", ";
             }
             names += n;
         }
         Base::Console().warning(
-            "Assembly: Solve of '{}' finished with {} redundant joint(s): {}.\n",
+            "Assembly: Solve of '{}' finished with {} conflicting joint(s) (ueberbestimmt, "
+            "ausserhalb der Toleranz): {}.\n",
             getFullName(),
-            lastRedundantJoints.size(),
+            lastConflictingJoints.size(),
             names
         );
         for (const auto& group : lastRedundancyGroups) {
             Base::Console().warning("Assembly:   ueberbestimmt: {}\n", group);
         }
     }
+    else if (!lastRedundantJoints.empty()) {
+        Base::Console().log(
+            "Assembly: Solve of '{}' finished successfully; {} redundante Bedingung(en) in {} "
+            "Gelenk(en) innerhalb der Toleranz geschluckt.\n",
+            getFullName(),
+            lastRedundancyStates.size(),
+            lastRedundantJoints.size()
+        );
+    }
     else {
         Base::Console().log("Assembly: Solve of '{}' finished successfully.\n", getFullName());
+    }
+
+    // FCPROJECT-PATCH (2026-10-14, Regel C7): ein Widerspruch mit vorab herausgenommenen
+    // Bedingungen kann daher ruehren, dass eine gemerkte Bedingung gar nicht mehr redundant ist
+    // (z.B. stellungsabhaengig). Dann einmal ohne Gedaechtnis frisch loesen.
+    if (redundancyCacheApplied && newRedundancyConflict) {
+        Base::Console().log(
+            "Assembly: '{}' - Widerspruch mit gemerkten Redundanzen, loese ohne Gedaechtnis neu.\n",
+            getFullName()
+        );
+        currentRedundancyCache() = RedundancyCache();
+        return solve(false);
     }
 
     // FCPROJECT-PATCH (2026-10-03, "BG43-Nachdrehen", zum Ausprobieren): bei grossem Startfehler
@@ -795,7 +821,11 @@ void AssemblyObject::updateSolveStatus()
                 );
             }
             // Base::Console().warning("    - {}\n", spec);
-            --lastDoF;
+            // FCPROJECT-PATCH (2026-10-14, Regel C7): herausgenommene Bedingungen sind von den
+            // uebrigen abhaengig und nehmen keinen Freiheitsgrad weg.
+            if (!con->isRedundant()) {
+                --lastDoF;
+            }
         });
 
         std::string solverName = jm->name;
@@ -842,8 +872,75 @@ void AssemblyObject::updateSolveStatus()
         }
         return name;
     };
+    // FCPROJECT-PATCH (2026-10-14, Regel C7): jede herausgenommene Bedingung nachmessen. Innerhalb
+    // der Toleranz gilt sie als erfuellt (geschluckt), darueber ist sie ein Widerspruch.
+    ParameterGrp::handle hPgr = App::GetApplication().GetParameterGroupByPath(
+        "User parameter:BaseApp/Preferences/Mod/Assembly"
+    );
+    const double tolLength = hPgr->GetFloat("RedundancyToleranceLength", 0.01);
+    const double tolAngle = hPgr->GetFloat("RedundancyToleranceAngle", 0.01);
+    lastRedundancyStates.clear();
+    lastConflictingJoints.clear();
+    std::set<std::string> conflictingSolverNames;
+    std::set<std::pair<std::string, std::size_t>> removedNow;
+    std::set<std::pair<std::string, std::size_t>> conflictsNow;
+    for (const auto& st : mbdAssembly->mbdSystem->redundantConstraintStates()) {
+        removedNow.insert({st.jointName, st.index});
+        const double dev = st.isAngle
+            ? Base::toDegrees(std::asin(std::min(1.0, std::abs(st.value))))
+            : std::abs(st.value);
+        const bool ok = dev <= (st.isAngle ? tolAngle : tolLength);
+        std::string solverName = st.jointName;
+        if (solverName.rfind(solverPathPrefix, 0) == 0) {
+            solverName = solverName.substr(solverPathPrefix.size());
+        }
+        auto mapped = solverNameToJoint.find(solverName);
+        App::DocumentObject* docObj = mapped != solverNameToJoint.end() ? mapped->second : nullptr;
+        const std::string name = docObj ? displayName(docObj) : solverName;
+        std::ostringstream line;
+        line.precision(4);
+        line << name << " [" << st.index << "]: Abweichung " << std::fixed << dev
+             << (st.isAngle ? " deg" : " mm") << ", " << (ok ? "geschluckt" : "Konflikt");
+        lastRedundancyStates.push_back(line.str());
+        if (ok) {
+            continue;
+        }
+        conflictsNow.insert({st.jointName, st.index});
+        conflictingSolverNames.insert(st.jointName);
+        if (docObj) {
+            std::string objName = docObj->getDocument() == getDocument()
+                ? std::string(docObj->getNameInDocument())
+                : docObj->getFullName();
+            if (std::find(lastConflictingJoints.begin(), lastConflictingJoints.end(), objName)
+                == lastConflictingJoints.end()) {
+                lastConflictingJoints.push_back(objName);
+            }
+        }
+    }
+    // Gruppen kommen nur aus einer frischen Suche; sonst die gemerkten.
+    const auto& freshGroups = mbdAssembly->mbdSystem->redundancyGroups;
+    const auto groupSource = freshGroups.empty() ? currentRedundancyCache().groups : freshGroups;
+    // Ein Widerspruch, der schon beim Merken bekannt war, ist kein Grund, frisch zu loesen. Ein
+    // NEUER Widerspruch mit vorab herausgenommenen Bedingungen kann dagegen daher ruehren, dass
+    // eine gemerkte Bedingung nicht mehr redundant ist (solve() loest dann ohne Gedaechtnis neu).
+    newRedundancyConflict = false;
+    for (const auto& c : conflictsNow) {
+        if (!redundancyCacheApplied || currentRedundancyCache().conflicts.count(c) == 0) {
+            newRedundancyConflict = true;
+        }
+    }
+    if (!redundancyCacheApplied || !newRedundancyConflict) {
+        currentRedundancyCache().signatures = mbdJointSignatures();
+        currentRedundancyCache().removed = removedNow;
+        currentRedundancyCache().conflicts = conflictsNow;
+        currentRedundancyCache().groups = groupSource;
+    }
+
     std::set<std::vector<App::DocumentObject*>> reportedGroups;
-    for (const auto& [removed, members] : mbdAssembly->mbdSystem->redundancyGroups) {
+    for (const auto& [removed, members] : groupSource) {
+        if (conflictingSolverNames.count(removed) == 0) {
+            continue;
+        }
         std::vector<App::DocumentObject*> group;
         for (std::string member : members) {
             if (member.rfind(solverPathPrefix, 0) == 0) {
@@ -868,17 +965,31 @@ void AssemblyObject::updateSolveStatus()
         std::sort(group.begin(), group.end(), [&rank](App::DocumentObject* a, App::DocumentObject* b) {
             return rank(a) > rank(b);
         });
-        std::string line = displayName(group.front()) + ", zusammen mit:";
+        // FCPROJECT-PATCH (2026-10-14, Regel C7): das Gelenk, dessen Bedingung die Toleranz
+        // ueberschreitet, steht vorn - es ist im Modell tatsaechlich nicht erfuellt.
+        std::string removedName = removed;
+        if (removedName.rfind(solverPathPrefix, 0) == 0) {
+            removedName = removedName.substr(solverPathPrefix.size());
+        }
+        auto violated = solverNameToJoint.find(removedName);
+        if (violated != solverNameToJoint.end()) {
+            auto it = std::find(group.begin(), group.end(), violated->second);
+            if (it != group.end()) {
+                std::rotate(group.begin(), it, it + 1);
+            }
+        }
+        std::string line = displayName(group.front()) + " nicht erfuellt, widerspricht:";
         for (std::size_t i = 1; i < group.size(); ++i) {
             line += (i == 1 ? " " : ", ") + displayName(group[i]);
         }
         lastRedundancyGroups.push_back(line);
     }
 
-    // Update the summary boolean flag
-    if (!lastRedundantJoints.empty()) {
-        lastHasRedundancies = true;
-    }
+    // Update the summary boolean flag. FCPROJECT-PATCH (2026-10-14, Regel C7): nur ein Widerspruch
+    // ueber der Toleranz zaehlt als Ueberbestimmung; stimmige Redundanz steht nur informativ in
+    // lastRedundantJoints/lastRedundancyStates.
+    lastHasConflict = !lastConflictingJoints.empty();
+    lastHasRedundancies = lastHasConflict;
 
     signalSolverUpdate();
 }
@@ -1076,8 +1187,17 @@ void AssemblyObject::prepareMbdForIslandDrag(std::vector<App::DocumentObject*> d
 
     jointParts(joints);
 
+    setJointPriorities(joints);
+    // Das Zieh-Modell enthaelt nur die beteiligten Teile und haelt andere fest als solve() - es hat
+    // ein eigenes Gedaechtnis (erneutes Ziehen desselben Teils startet ohne Redundanzsuche).
+    applyRedundancyCache(dragRedundancyCache);
     try {
         mbdAssembly->runPreDrag();
+        dragRedundancyCache.signatures = mbdJointSignatures();
+        dragRedundancyCache.removed.clear();
+        for (const auto& st : mbdAssembly->mbdSystem->redundantConstraintStates()) {
+            dragRedundancyCache.removed.insert({st.jointName, st.index});
+        }
     }
     catch (const std::exception& e) {
         FC_ERR("Drag setup failed: " << e.what());
@@ -1902,6 +2022,62 @@ std::optional<Base::Placement> AssemblyObject::getJcsInContext(
     plc = getJcsReferenceGlobalPlacement(ref) * plc;
     plc = getGlobalPlacement(part, ref).inverse() * plc;
     return getMbdPlacement(data.part) * data.offsetPlc * plc;
+}
+
+// FCPROJECT-PATCH (2026-10-14, Regel C7): Kennung aller Gelenke/Antriebe des aktuellen
+// Solver-Modells (Klasse, Name, Marker I/J). Aendert sich ein Gelenk, ein Koerper (starr/flexibel)
+// oder eine Erdung, aendert sich auch die Kennung.
+std::set<std::string> AssemblyObject::mbdJointSignatures() const
+{
+    std::set<std::string> signatures;
+    if (!mbdAssembly) {
+        return signatures;
+    }
+    for (const auto& joint : *mbdAssembly->joints) {
+        signatures.insert(joint->classname() + "|" + joint->name + "|" + joint->markerI + "|"
+                          + joint->markerJ);
+    }
+    for (const auto& motion : *mbdAssembly->motions) {
+        signatures.insert(motion->classname() + "|" + motion->name + "|" + motion->markerI + "|"
+                          + motion->markerJ);
+    }
+    return signatures;
+}
+
+// FCPROJECT-PATCH (2026-10-14, Regel C7): Rangfolge fuer die Redundanzsuche - was schon da ist,
+// gilt; redundant (und gegen die Toleranz geprueft) ist das Neueste. Erdungen und Gelenke aus
+// Unterbaugruppen (dort fertig konstruiert) vor den eigenen Gelenken, diese nach Alter (ID).
+void AssemblyObject::setJointPriorities(const std::vector<JointRef>& jointRefs)
+{
+    if (!mbdAssembly) {
+        return;
+    }
+    mbdAssembly->jointPriority.clear();
+    for (const auto& jr : jointRefs) {
+        if (!jr.joint) {
+            continue;
+        }
+        const long rank = jr.joint->getDocument() == getDocument()
+            ? 1000000L + static_cast<long>(jr.joint->getID())
+            : 1L;
+        mbdAssembly->jointPriority[jointInstanceName(jr.joint, jr.nestingPrefix)] = rank;
+    }
+}
+
+// Gemerkte Redundanzen vorab herausnehmen, wenn alle gemerkten Gelenke unveraendert im Modell
+// stecken. Neue Gelenke duerfen dazukommen: eine abhaengige Gleichung bleibt abhaengig, wenn
+// weitere Gleichungen hinzukommen; neue Redundanzen findet OndselSolver dann selbst.
+bool AssemblyObject::applyRedundancyCache(const RedundancyCache& cache)
+{
+    if (!mbdAssembly || cache.removed.empty()) {
+        return false;
+    }
+    const auto current = mbdJointSignatures();
+    if (!std::includes(current.begin(), current.end(), cache.signatures.begin(), cache.signatures.end())) {
+        return false;
+    }
+    mbdAssembly->knownRedundantConstraints = cache.removed;
+    return true;
 }
 
 // FCPROJECT-PATCH (2026-10-13, Nutzerentscheidung "Aenderung im Original"): Aenderungen im

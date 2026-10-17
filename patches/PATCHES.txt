@@ -121,6 +121,9 @@
 # 2026-10-13 (31): Nachtrag - neues Teil in eingebauter, versetzter Unterbaugruppe startet beim Nachbarn.
 # 2026-10-13 (32): Nachtrag - Erdung je Einbau-Instanz aufgeloest, lose Unterbaugruppe bleibt an Ablage-Position (Regel C5).
 # 2026-10-13 (33): Nachtrag - nicht einhaltbare Gelenkgrenze nach Aenderung im Original melden (reportUnsatisfiedLimits).
+# 2026-10-14 (34): Nachtrag - Redundanz innerhalb einer Toleranz schlucken, nach Rangfolge, mit Gedaechtnis (Regel C7).
+# 2026-10-14 (35): Nachtrag - Pfad-Index fuer die Lebensdauer eines IdentityGraph (Zieh-Start/Solve schneller).
+# 2026-10-14 (36): Nachtrag - Redundanz-Toleranz im Einstellungsdialog der Assembly-Werkbank.
 
 2026.10.03-freecad-assembly-full-resync.patch
 
@@ -132,6 +135,10 @@
 # Dateien vor dem Update zurueck und wendet den Patch danach neu an.
 # Inhalt: Redundanzgruppen (PosICNewtonRaphson::recordRedundancyGroups(), System::redundancyGroups)
 # - nennt bei einer Ueberbestimmung die minimale abhaengige Gelenk-Gruppe.
+# Seit 2026-10-14 (Regel C7) zusaetzlich: Redundanzsuche nach Rangfolge
+# (PosICNewtonRaphson::redundantEqnsByPriority(), System::jointPriority), bekannte Redundanzen
+# vorab herausnehmen (System::applyKnownRedundantConstraints()), Restwerte der herausgenommenen
+# Bedingungen (System::redundantConstraintStates()), genauer Loeser vor der vollen Pivotsuche.
 2026.10.11-ondselsolver-redundancy-groups.patch
 
 # NICHT in obiger Liste, weil nicht auf DIESE Sandbox anwendbar (betrifft src/App/*, hier

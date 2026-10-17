@@ -1,5 +1,54 @@
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/ASMTAssembly.cpp b/src/3rdParty/OndselSolver/OndselSolver/ASMTAssembly.cpp
+index 27e9054..10133dd 100644
+--- a/src/3rdParty/OndselSolver/OndselSolver/ASMTAssembly.cpp
++++ b/src/3rdParty/OndselSolver/OndselSolver/ASMTAssembly.cpp
+@@ -1341,6 +1341,9 @@ void MbD::ASMTAssembly::runPreDrag()
+     }
+     mbdSystem = std::make_shared<System>();
+     mbdSystem->externalSystem->asmtAssembly = this;
++    // FCPROJECT-PATCH (2026-10-14): bekannte Redundanzen eines vorigen Solves (siehe System.h).
++    mbdSystem->knownRedundantConstraints = knownRedundantConstraints;
++    mbdSystem->jointPriority = jointPriority;
+     mbdSystem->runPreDrag(mbdSystem);
+ }
+ 
+@@ -1429,6 +1432,9 @@ void MbD::ASMTAssembly::runPostDrag()
+     }
+     mbdSystem = std::make_shared<System>();
+     mbdSystem->externalSystem->asmtAssembly = this;
++    // FCPROJECT-PATCH (2026-10-14): bekannte Redundanzen eines vorigen Solves (siehe System.h).
++    mbdSystem->knownRedundantConstraints = knownRedundantConstraints;
++    mbdSystem->jointPriority = jointPriority;
+     mbdSystem->runPreDrag(mbdSystem);
+ }
+ 
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/ASMTAssembly.h b/src/3rdParty/OndselSolver/OndselSolver/ASMTAssembly.h
+index e9cbc6e..527dace 100644
+--- a/src/3rdParty/OndselSolver/OndselSolver/ASMTAssembly.h
++++ b/src/3rdParty/OndselSolver/OndselSolver/ASMTAssembly.h
+@@ -7,7 +7,9 @@
+  ***************************************************************************/
+ 
+ #pragma once
+-#include <fstream>	
++#include <fstream>
++#include <map>
++#include <set>	
+ 
+ #include "ASMTSpatialContainer.h"
+ //Required for initialization
+@@ -153,6 +155,9 @@ namespace MbD {
+ 		std::shared_ptr<ASMTTime> asmtTime = ASMTTime::With();
+ 		std::shared_ptr<Units> mbdUnits = std::make_shared<Units>();
+ 		std::shared_ptr<System> mbdSystem;
++		// FCPROJECT-PATCH (2026-10-14): wird vor runPreDrag() an mbdSystem uebergeben.
++		std::set<std::pair<std::string, size_t>> knownRedundantConstraints;
++		std::map<std::string, long> jointPriority;
+ 		bool debug = false;
+         std::shared_ptr<ExternalSystem> externalSystem;
+ 
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/PosICNewtonRaphson.cpp b/src/3rdParty/OndselSolver/OndselSolver/PosICNewtonRaphson.cpp
-index 41963a1..1884def 100644
+index 41963a1..d78ae45 100644
 --- a/src/3rdParty/OndselSolver/OndselSolver/PosICNewtonRaphson.cpp
 +++ b/src/3rdParty/OndselSolver/OndselSolver/PosICNewtonRaphson.cpp
 @@ -17,6 +17,12 @@
@@ -15,7 +64,7 @@ index 41963a1..1884def 100644
  
  using namespace MbD;
  
-@@ -127,11 +133,202 @@ void PosICNewtonRaphson::handleSingularMatrix()
+@@ -127,11 +133,302 @@ void PosICNewtonRaphson::handleSingularMatrix()
  	}
  }
  
@@ -101,6 +150,27 @@ index 41963a1..1884def 100644
 +		}
 +		constraintRows[i] = std::move(row);
 +	}
++	// FCPROJECT-PATCH (2026-10-14, Regel C7): mit Rangfolge zuerst die Gleichungen juengerer Gelenke
++	// als redundant bestimmen (die bestehende Konstruktion gilt, geprueft wird das Neue).
++	if (system && system->system && !system->system->jointPriority.empty()) {
++		auto redundant = redundantEqnsByPriority(constraintRows);
++		if (!redundant->empty()) {
++			recordRedundancyGroups(constraintRows, redundant);
++			auto eqnNos = std::make_shared<FullColumn<size_t>>(redundant->begin(), redundant->end());
++			throw SingularMatrixError("", eqnNos);
++		}
++		// Keine abhaengige Gleichung: die Matrix ist nur schlecht konditioniert, der schnelle Loeser
++		// (Markowitz) gab zu frueh auf. Erst der genaue Loeser mit Skalierung, die volle Pivotsuche
++		// (an BG22 ~1.5 s pro Solve) nur, wenn auch der scheitert.
++		try {
++			auto precise = CREATE<GESpMatParPvPrecise>::With();
++			dx = precise->solvewithsaveOriginal(pypx, y->negated(), false);
++			system->logString("MbD: Redundanzsuche nach Rangfolge: keine Redundanz, genauer Loeser genuegt.");
++			return;
++		}
++		catch (const SingularMatrixError&) {
++		}
++	}
  	auto posICsolver = CREATE<GESpMatFullPvPosIC>::With();
  	posICsolver->system = this;
 -	dx = posICsolver->solvewithsaveOriginal(pypx, y->negated(), false);
@@ -111,6 +181,85 @@ index 41963a1..1884def 100644
 +		recordRedundancyGroups(constraintRows, ex.getRedundantEqnNos());
 +		throw;
 +	}
++}
++
++// Gleichungen nach Rang des Gelenks (dann Gleichungsnummer) ordnen und der Reihe nach gegen die
++// bisher aufgenommenen orthogonalisieren (modifiziertes Gram-Schmidt, zweifach). Bleibt kaum Rest,
++// haengt die Gleichung von verlaesslicheren ab und ist redundant.
++std::shared_ptr<std::vector<size_t>> PosICNewtonRaphson::redundantEqnsByPriority(
++	const std::map<size_t, std::map<size_t, double>>& constraintRows)
++{
++	auto redundant = std::make_shared<std::vector<size_t>>();
++	const auto& priority = system->system->jointPriority;
++	std::map<size_t, long> eqnRank;
++	system->system->jointsMotionsDo([&](std::shared_ptr<Joint> joint) {
++		std::string key = joint->name;
++		const auto slash = key.find('/', 1);
++		if (!key.empty() && key[0] == '/' && slash != std::string::npos) {
++			key = key.substr(slash + 1);
++		}
++		auto it = priority.find(key);
++		const long rank = it != priority.end() ? it->second : 0;
++		joint->constraintsDo([&](std::shared_ptr<Constraint> con) {
++			eqnRank[con->iG] = rank;
++		});
++	});
++	std::vector<size_t> order;
++	for (const auto& [eqn, row] : constraintRows) {
++		order.push_back(eqn);
++	}
++	std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
++		const long ra = eqnRank.count(a) ? eqnRank[a] : 0;
++		const long rb = eqnRank.count(b) ? eqnRank[b] : 0;
++		return ra < rb;
++	});
++	const size_t nCols = nqsu;
++	std::vector<std::vector<double>> basis;
++	for (size_t eqn : order) {
++		const auto& row = constraintRows.at(eqn);
++		std::vector<double> v(nCols, 0.0);
++		double norm0 = 0.0;
++		for (const auto& [col, value] : row) {
++			v[col] = value;
++			norm0 += value * value;
++		}
++		norm0 = std::sqrt(norm0);
++		if (norm0 == 0.0) {
++			continue;
++		}
++		for (int pass = 0; pass < 2; ++pass) {
++			for (const auto& q : basis) {
++				double dot = 0.0;
++				for (size_t c = 0; c < nCols; ++c) {
++					dot += q[c] * v[c];
++				}
++				if (dot != 0.0) {
++					for (size_t c = 0; c < nCols; ++c) {
++						v[c] -= dot * q[c];
++					}
++				}
++			}
++		}
++		double norm = 0.0;
++		for (double x : v) {
++			norm += x * x;
++		}
++		norm = std::sqrt(norm);
++		// 1e-6: an BG22 blieb bei einer um 89 Grad verletzten Parallel-Bedingung ein Rest von ~1e-7,
++		// den OndselSolvers eigene Zerlegung bereits als singulaer wertet.
++		if (norm <= 1.0e-6 * norm0) {
++			redundant->push_back(eqn);
++			continue;
++		}
++		for (double& x : v) {
++			x /= norm;
++		}
++		basis.push_back(std::move(v));
++	}
++	std::string str = "MbD: Redundanzsuche nach Rangfolge: " + std::to_string(redundant->size())
++		+ " redundante Gleichung(en).";
++	system->logString(str);
++	return redundant;
 +}
 +
 +void PosICNewtonRaphson::recordRedundancyGroups(
@@ -220,7 +369,7 @@ index 41963a1..1884def 100644
 +	}
  }
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/PosICNewtonRaphson.h b/src/3rdParty/OndselSolver/OndselSolver/PosICNewtonRaphson.h
-index 9d16dcf..64583b4 100644
+index 9d16dcf..5f950f8 100644
 --- a/src/3rdParty/OndselSolver/OndselSolver/PosICNewtonRaphson.h
 +++ b/src/3rdParty/OndselSolver/OndselSolver/PosICNewtonRaphson.h
 @@ -9,6 +9,7 @@
@@ -231,30 +380,130 @@ index 9d16dcf..64583b4 100644
  
  namespace MbD {
      class PosICNewtonRaphson : public AnyPosICNewtonRaphson
-@@ -25,6 +26,10 @@ namespace MbD {
+@@ -25,6 +26,12 @@ namespace MbD {
          bool isConverged() override;
          void handleSingularMatrix() override;
          void lookForRedundantConstraints();
 +        // FCPROJECT-PATCH (2026-10-11): siehe PosICNewtonRaphson.cpp
++		std::shared_ptr<std::vector<size_t>> redundantEqnsByPriority(
++			const std::map<size_t, std::map<size_t, double>>& constraintRows);
 +        void recordRedundancyGroups(
 +            const std::map<size_t, std::map<size_t, double>>& constraintRows,
 +            const std::shared_ptr<std::vector<size_t>>& redundantEqnNos);
  
          std::shared_ptr<std::vector<size_t>> pivotRowLimits;
      };
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/System.cpp b/src/3rdParty/OndselSolver/OndselSolver/System.cpp
+index 9e402dc..76dba74 100644
+--- a/src/3rdParty/OndselSolver/OndselSolver/System.cpp
++++ b/src/3rdParty/OndselSolver/OndselSolver/System.cpp
+@@ -17,6 +17,9 @@
+ #include "CREATE.h"
+ #include "ExternalSystem.h"
+ #include "PrescribedMotion.h"
++#include "RedundantConstraint.h"
++#include "DirectionCosineConstraintIJ.h"
++#include <cmath>
+ 
+ using namespace MbD;
+ 
+@@ -122,6 +125,7 @@ void MbD::System::runPreDrag(std::shared_ptr<System> self)
+ 		if (!hasChanged) break;
+ 	}
+ 	partsJointsMotionsLimitsForcesTorquesDo([](std::shared_ptr<Item> item) { item->postInput(); });
++	applyKnownRedundantConstraints();
+ 	systemSolver->runPreDrag();
+ 	externalSystem->updateFromMbD();
+ }
+@@ -275,3 +279,50 @@ void MbD::System::deactivateLimits()
+ {
+ 	std::for_each(limits->cbegin(), limits->cend(), [](auto& limit) { limit->deactivate(); });
+ }
++
++void MbD::System::applyKnownRedundantConstraints()
++{
++	appliedKnownRedundantConstraints = 0;
++	if (knownRedundantConstraints.empty()) {
++		return;
++	}
++	for (auto& joint : *jointsMotions) {
++		auto& cons = *joint->constraints;
++		for (size_t i = 0; i < cons.size(); i++) {
++			if (cons[i]->isRedundant()
++				|| knownRedundantConstraints.count({joint->name, i}) == 0) {
++				continue;
++			}
++			auto redunCon = CREATE<RedundantConstraint>::With();
++			redunCon->constraint = cons[i];
++			cons[i] = redunCon;
++			appliedKnownRedundantConstraints++;
++		}
++	}
++	std::string str = "MbD: " + std::to_string(appliedKnownRedundantConstraints)
++		+ " bekannte redundante Bedingung(en) vorab herausgenommen.";
++	logString(str);
++}
++
++std::vector<MbD::System::RedundantConstraintState> MbD::System::redundantConstraintStates()
++{
++	std::vector<RedundantConstraintState> states;
++	for (auto& joint : *jointsMotions) {
++		auto& cons = *joint->constraints;
++		for (size_t i = 0; i < cons.size(); i++) {
++			if (!cons[i]->isRedundant()) {
++				continue;
++			}
++			auto inner = std::static_pointer_cast<RedundantConstraint>(cons[i])->constraint;
++			if (!inner) {
++				continue;
++			}
++			inner->prePosIC();
++			inner->postPosICIteration();
++			// classname() ist unter GCC ein verstuemmelter Typname - Art ueber den Typ bestimmen.
++			const bool isAngle = std::dynamic_pointer_cast<DirectionCosineConstraintIJ>(inner) != nullptr;
++			states.push_back({joint->name, i, inner->aG, isAngle});
++		}
++	}
++	return states;
++}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/System.h b/src/3rdParty/OndselSolver/OndselSolver/System.h
-index 2f775b7..0eebbc7 100644
+index 2f775b7..2b085b4 100644
 --- a/src/3rdParty/OndselSolver/OndselSolver/System.h
 +++ b/src/3rdParty/OndselSolver/OndselSolver/System.h
-@@ -18,6 +18,7 @@
+@@ -18,7 +18,11 @@
  
  #include <memory>
  #include <vector>
 +#include <string>
  #include <functional>
++#include <map>
++#include <set>
++#include <utility>
  
  #include "Item.h"
-@@ -83,6 +84,11 @@ namespace MbD {
+ #include "LimitIJ.h"
+@@ -75,6 +79,20 @@ namespace MbD {
+ 		void outputFor(AnalysisType type);
+ 		bool limitsSatisfied();
+ 		void deactivateLimits();
++		// FCPROJECT-PATCH (2026-10-14, Plan plans/2026-10-14-redundanz-mit-toleranz.md): bekannte
++		// redundante Bedingungen (Gelenkname, Index im Gelenk) eines vorigen Solves. runPreDrag()
++		// nimmt sie vorab heraus, die teure Suche (lookForRedundantConstraints()) entfaellt dann,
++		// solange das System nicht trotzdem singulaer ist.
++		void applyKnownRedundantConstraints();
++		struct RedundantConstraintState
++		{
++			std::string jointName;
++			size_t index;
++			double value;    // Restwert der Bedingung (mm bzw. Kosinus)
++			bool isAngle;    // DirectionCosine*: Abweichung = asin(|value|)
++		};
++		// Alle derzeit herausgenommenen Bedingungen mit ihrem Restwert am aktuellen Stand.
++		std::vector<RedundantConstraintState> redundantConstraintStates();
+ 
+ 		std::shared_ptr<ExternalSystem> externalSystem;
+ 		std::shared_ptr<std::vector<std::shared_ptr<Part>>> parts;
+@@ -83,6 +101,19 @@ namespace MbD {
  		std::shared_ptr<std::vector<std::shared_ptr<ForceTorqueItem>>> forcesTorques;
  		bool hasChanged = false;
  		std::shared_ptr<SystemSolver> systemSolver;
@@ -263,6 +512,14 @@ index 2f775b7..0eebbc7 100644
 +		// abhaengt (die eigentliche ueberbestimmte Gruppe). Gefuellt von
 +		// PosICNewtonRaphson::lookForRedundantConstraints().
 +		std::vector<std::pair<std::string, std::vector<std::string>>> redundancyGroups;
++		std::set<std::pair<std::string, size_t>> knownRedundantConstraints;
++		// FCPROJECT-PATCH (2026-10-14): Rangfolge der Gelenke fuer die Redundanzsuche (kleiner =
++		// verlaesslicher). Ist sie gesetzt, gilt eine Gleichung als redundant, die von den Gleichungen
++		// verlaesslicherer (aelterer) Gelenke abhaengt - nicht eine zufaellig per Pivot gewaehlte.
++		// Schluessel: Gelenkname ohne "/<Baugruppe>/"-Praefix; unbekannte Namen haben Rang 0.
++		std::map<std::string, long> jointPriority;
++		// Anzahl der Bedingungen, die applyKnownRedundantConstraints() herausgenommen hat.
++		size_t appliedKnownRedundantConstraints = 0;
  
  		std::shared_ptr<Time> time;
  	};

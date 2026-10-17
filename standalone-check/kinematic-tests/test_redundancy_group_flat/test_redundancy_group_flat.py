@@ -12,7 +12,9 @@ dieser Baugruppe darin als Verursacher (getRedundancyGroups()).
 Aufbau: BoxA (geerdet) -[Revolute]- BoxB, dazu als LETZTES Gelenk Parallel BoxB-BoxA mit
 Achsen senkrecht zur Drehachse (sperrt die Drehung, eine Gleichung zu viel: das Kippen sperrt die
 Revolute schon). Unbeteiligt: BoxA -[Slider]- BoxC -[Fixed]- BoxD.
-Erwartet: genau eine Gruppe, Verursacher "Parallel", darin "Dreh", nicht "Gleit"/"Starr".
+Erwartet (Regel C7, 2026-10-14): die stimmige Redundanz wird geschluckt (keine Gruppe, Bedingung
+"geschluckt"). Wird die Parallel-Achse um 3 Grad verkippt, ist es ein Widerspruch: genau eine Gruppe
+mit "Parallel" und "Dreh", ohne "Gleit"/"Starr".
 
 Aufruf:
     ./common/run-test.sh <freecad-install-dir> test_redundancy_group_flat/test_redundancy_group_flat.py
@@ -42,6 +44,25 @@ FIX_PLC1 = jtu.face_jcs_placement("Face2", flip=False, extra_z_rotation_deg=30) 
 FIX_PLC2 = jtu.face_jcs_placement("Face5", flip=True, extra_z_rotation_deg=0)  # BoxD
 
 
+def check_groups(groups, expect_conflict):
+    ok = True
+    if not expect_conflict:
+        if groups:
+            print("FEHLER: stimmige Redundanz wurde als Widerspruch gemeldet")
+            ok = False
+        return ok
+    if len(groups) != 1:
+        print(f"FEHLER: erwartet genau eine widerspruechliche Gruppe, gefunden {len(groups)}")
+        return False
+    if "'Parallel'" not in groups[0] or "'Dreh'" not in groups[0]:
+        print("FEHLER: Parallel-Verbindung oder Revolute fehlt in der Gruppe")
+        ok = False
+    if "'Gleit'" in groups[0] or "'Starr'" in groups[0]:
+        print("FEHLER: unbeteiligte Gelenke in der Gruppe")
+        ok = False
+    return ok
+
+
 def main():
     fixture_file = jtu.fixture_path(THIS_DIR)
     out_path = os.environ.get("KINEMATIC_TEST_OUTPUT_FCSTD", "/tmp/kinematic_test_redundancy_group.FCStd")
@@ -49,27 +70,35 @@ def main():
     doc = App.openDocument(out_path)
     assembly = doc.getObject("Assembly")
     doc.recompute()
+    ok = True
+
+    # Fall 1 (Regel C7): die Redundanz ist stimmig -> geschluckt, keine Gruppe.
     rc = assembly.solve()
     groups = assembly.getRedundancyGroups()
-    print(f"Solve rc={rc}, Gruppen:")
+    states = assembly.getRedundancyStates()
+    print(f"Stimmig: rc={rc}, Gruppen {groups}, Bedingungen {states}")
+    ok &= rc == 0
+    if not states or not all("geschluckt" in s for s in states):
+        print("FEHLER: stimmige redundante Bedingung nicht als 'geschluckt' gefuehrt")
+        ok = False
+    ok &= check_groups(groups, expect_conflict=False)
+
+    # Fall 2: Parallel-Achse um 3 Grad zur Drehachse hin verkippt (um die JCS-y-Achse; die x-Achse ist
+    # die Drehachse, eine Kippung darum gleicht die Drehung aus) -> Widerspruch.
+    par = [j for j in doc.Objects if getattr(j, "JointType", None) == "Parallel"][0]
+    par.Placement1 = par.Placement1.multiply(App.Placement(App.Vector(), App.Rotation(App.Vector(0, 1, 0), 3)))
+    doc.recompute()
+    rc = assembly.solve()
+    groups = assembly.getRedundancyGroups()
+    states = assembly.getRedundancyStates()
+    print(f"Verkippt: rc={rc}, Gruppen:")
     for g in groups:
         print(f"  {g}")
-
-    ok = rc == 0
-    if len(groups) != 1:
-        print(f"FEHLER: erwartet genau eine ueberbestimmte Gruppe, gefunden {len(groups)}")
+    print(f"  Bedingungen {states}")
+    if not any("Konflikt" in s for s in states):
+        print("FEHLER: Widerspruch nicht als 'Konflikt' erkannt")
         ok = False
-    else:
-        culprit, _, rest = groups[0].partition(", zusammen mit:")
-        if "'Parallel'" not in culprit:
-            print("FEHLER: Verursacher ist nicht die Parallel-Verbindung")
-            ok = False
-        if "'Dreh'" not in rest:
-            print("FEHLER: die Revolute fehlt in der Gruppe")
-            ok = False
-        if "'Gleit'" in groups[0] or "'Starr'" in groups[0]:
-            print("FEHLER: unbeteiligte Gelenke in der Gruppe")
-            ok = False
+    ok &= check_groups(groups, expect_conflict=True)
 
     if ok:
         print("RESULT: PASS")

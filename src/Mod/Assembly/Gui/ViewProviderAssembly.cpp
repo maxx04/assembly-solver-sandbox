@@ -2209,11 +2209,14 @@ void ViewProviderAssembly::UpdateSolverInformation()
                     QStringLiteral("(%1)").arg(objListHelper(assembly,
            assembly->getLastConflicting())));*/
         // So for now we report like follows:
+        // FCPROJECT-PATCH (2026-10-14, Regel C7): getLastHasRedundancies() ist nur noch bei einem
+        // Widerspruch ueber der Toleranz gesetzt; gezeigt werden die widerspruechlichen Gelenke,
+        // nicht alle (auch stimmig) redundanten.
         signalSetUp(
             QStringLiteral("conflicting_constraints"),
             tr("Over-constrained:") + QLatin1String(" "),
             QStringLiteral("#conflicting"),
-            QStringLiteral("(%1)").arg(objListHelper(assembly, assembly->getLastRedundant()))
+            QStringLiteral("(%1)").arg(objListHelper(assembly, assembly->getLastConflicting()))
         );
     }
     else if (hasMalformed) {  // malformed joints

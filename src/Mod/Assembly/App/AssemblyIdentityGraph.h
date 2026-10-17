@@ -33,6 +33,7 @@
 // 1-5) als Zwischenschicht zwischen den FreeCAD-Joints und dem OndselSolver alle bisher
 // verstreuten Verschachtelungs-Traversierungen ersetzt.
 
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -56,6 +57,7 @@ namespace Assembly
 class AssemblyObject;
 class AssemblyLink;
 enum class JointType;
+struct PathIndex;
 class IdentityGraph;
 
 // Wert-basierte Knoten-Identitaet. Ein roher App::DocumentObject* reicht nicht: derselbe
@@ -158,6 +160,9 @@ class AssemblyExport IdentityGraph
 {
 public:
     explicit IdentityGraph(AssemblyObject* root);
+    ~IdentityGraph();
+    IdentityGraph(const IdentityGraph&) = delete;
+    IdentityGraph& operator=(const IdentityGraph&) = delete;
 
     // DER zentrale Resolver fuer eine GUI-/Selektions-Adresse (Top-Level-Objekt + optionaler,
     // Punkt-getrennter Rest-Pfad, wie ihn getMovingPartFromSel() heute entgegennimmt). Anders als
@@ -271,6 +276,10 @@ private:
     void ensureJointEdgesBuilt();
 
     AssemblyObject* rootAssembly;
+    // FCPROJECT-PATCH (2026-10-14): Pfad-Index fuer die Lebensdauer dieses Graphen (siehe
+    // findLocalGroupPathIn() in der .cpp); waehrend er lebt, nutzen ihn alle Pfadsuchen.
+    std::unique_ptr<PathIndex> pathIndex;
+    PathIndex* previousPathIndex = nullptr;
     bool jointEdgesBuilt = false;
     std::vector<JointEdge> edges;
 

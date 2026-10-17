@@ -510,6 +510,68 @@ bisherige Verhalten zurück. Offene Frage an Upstream: Gibt es Fälle (z.B. Konv
 Simulation-Start), für die „nur beim Ziehen“ wichtig ist? Vor dem Melden das Verhalten
 noch einmal gegen die aktuelle Weekly-AppImage prüfen.
 
+### 3.2d Redundanz mit Toleranz, Rangfolge und Gedächtnis - bewusste Abweichung von Upstream (2026-10-14)
+
+Plan: `plans/2026-10-14-redundanz-mit-toleranz.md`, Regel C7 in `docs/CONSTRAINTS.md`.
+
+**Upstream:** Ist die Jacobi-Matrix singulär, sucht `PosICNewtonRaphson::lookForRedundantConstraints()`
+mit voller Pivotsuche (`GESpMatFullPvPosIC`) über die ganze Matrix die abhängigen Gleichungen. Es
+wählt sie nach Zahlengröße aus (innerhalb der Gruppen essentiell/Verschiebung/Richtung), hüllt sie
+in `RedundantConstraint` und löst ohne sie weiter.
+- Das geschieht bei **jedem** Solve von vorn. An BG22 waren das rund 80 % der Solve-Zeit
+  (gdb-Stichproben).
+- Welche Gleichung herausfällt, ist zufällig, im Testfall zwei Führungen zum Beispiel die
+  Drehbedingung des starren Gelenks zwischen den Stangen.
+- Ob die herausgenommene Bedingung im Ergebnis erfüllt ist, prüft niemand. An BG22 war ein
+  Parallel-Gelenk um 89,5° verletzt und galt nur als „redundant“.
+- FreeCAD meldet jede Redundanz als „Over-constrained“, auch stimmige wie zwei Führungen.
+
+**Unsere Abweichung:**
+1. **Rangfolge** (`System::jointPriority`, gesetzt von `AssemblyObject::setJointPriorities()`).
+   - Reihenfolge: Erdung und körpereigene Gleichungen (Rang 0), Gelenke aus Unterbaugruppen
+     (Rang 1), eigene Gelenke nach ID.
+   - `PosICNewtonRaphson::redundantEqnsByPriority()` orthogonalisiert die Gleichungszeilen
+     (zweifaches modifiziertes Gram-Schmidt) in dieser Reihenfolge. Redundant ist eine Zeile mit
+     einem Rest ≤ 1e-6 ihrer Länge, also immer die des **jüngeren** Gelenks.
+   - Findet das nichts, gilt die bisherige Suche als Rückfall.
+2. **Gedächtnis** (`AssemblyObject::RedundancyCache`, nur im Speicher). Die herausgenommenen
+   Bedingungen (Gelenkname, Index) werden gemerkt und von `System::applyKnownRedundantConstraints()`
+   beim nächsten `runPreDrag()` vorab herausgenommen.
+   - Gültig, solange alle gemerkten Gelenke (Klasse, Name, Marker) noch im Modell stecken. Neue
+     Gelenke dürfen dazukommen.
+   - Ein neuer Widerspruch mit Gedächtnis führt zu einem frischen Solve ohne Gedächtnis.
+   - Drei getrennte Gedächtnisse, je Modell eines:
+     - der normale Solve
+     - der Solve mit gebündelten Fixed-Ketten aus `preDrag()` (`bundleFixed`)
+     - das Zieh-Modell (nur die beteiligten Teile)
+
+     Vorher überschrieben sie sich gegenseitig, und jeder Zieh-Start suchte neu.
+   - Findet die Suche nach Rangfolge keine abhängige Gleichung, war die Matrix nur schlecht
+     konditioniert, und der schnelle Markowitz-Löser hat zu früh aufgegeben. Dann versucht es
+     zuerst `GESpMatParPvPrecise`, die volle Pivotsuche kommt erst als letzter Rückfall.
+3. **Nachmessen** (`System::redundantConstraintStates()`, `AssemblyObject::updateSolveStatus()`):
+   der Restwert jeder herausgenommenen Bedingung, in mm oder, bei `DirectionCosine*`, als
+   asin(|Restwert|) in Grad.
+   - Innerhalb der Toleranz (Einstellungen `RedundancyToleranceLength` 0,01 mm,
+     `RedundancyToleranceAngle` 0,01°) gilt sie als geschluckt: nur ein Protokolleintrag.
+   - Darüber ist es ein Konflikt: Warnung „… nicht erfuellt, widerspricht: …“,
+     `getLastConflicting()`, GUI „Over-constrained“.
+   - Herausgenommene Bedingungen zählen nicht mehr bei den Freiheitsgraden.
+
+**Wirkung:**
+- BG22 mit BG89: ein Solve dauert 0,66 s statt 2,1–3,3 s.
+- BG11 (Rahmen): Die 75 stimmigen Redundanzen werden geschluckt, die Warnungsflut beim Öffnen ist
+  weg.
+- Tests: `test_redundancy_tolerance_flat` (zwei Führungen), `test_redundancy_group_flat`.
+
+**Für ein Upstream-Issue:**
+- Die Auswahl nach Rangfolge und das Nachmessen sind für Upstream interessant, auch ohne
+  Gedächtnis. Eine stimmige Redundanz ist kein Fehler, eine verletzte herausgenommene Bedingung
+  dagegen schon, und sie wird bisher verschwiegen.
+- Das Gedächtnis ist ein FreeCAD-seitiges Laufzeit-Detail.
+- Die interne Einheit muss 1 sein (`ASMTAssembly`, `mbdUnits`), sonst stimmen die mm-Werte
+  nicht.
+
 ### 3.3 Kopplungs-Sequenz (Zusammenfassung von §2.1 + hier)
 
 ```
@@ -726,6 +788,31 @@ ausnahmslos [[feedback-cmake-scope-boundary]]: nur `cmake --build ... && cmake -
 manuellen Kopien.
 
 ---
+
+### 4.3 Pfad-Index für die Lebensdauer eines IdentityGraph (2026-10-14)
+
+**Anlass:** In BG22 dauerte es in der GUI etwa 4 s vom Mausdruck bis zur ersten Bewegung. Laut
+gdb-Stichproben am laufenden FreeCAD lag der größte Teil nicht im Solver, sondern in
+`findLocalGroupPath()`, einer rekursiven Suche durch die `Group`-Bäume der Unterbaugruppen. Sie
+wird aufgerufen über `IdentityGraph::instanceOf()`, `resolveJointRef()` und
+`containerChainPlacement()`, und zwar je Teil und je Gelenk neu: in `findDragMode`, in den
+Überlagerungs-Symbolen (`isPartConnected`) und im Solve beim Zieh-Start (`getMbDData` →
+`getJointsOfPart` → `resolvePartForMbD`).
+
+**Lösung** (`AssemblyIdentityGraph.cpp`): Solange ein `IdentityGraph` lebt, ist sein `PathIndex`
+aktiv (`thread_local`, wie ein Stapel, verschachtelte Graphen stellen den vorigen wieder her).
+- `findLocalGroupPathIn()` durchläuft je Container den Baum einmal und merkt sich den Pfad zu
+  jedem Objekt. Es gilt das erste Vorkommen in derselben Tiefensuch-Reihenfolge, das Ergebnis ist
+  also identisch zur bisherigen Suche.
+- `findContainerChain()` merkt sich ihr Ergebnis je Paar aus Bereich und Ziel.
+- Ohne aktiven Graphen läuft alles wie bisher. `IdentityGraph::invalidate()` leert den Index.
+
+**Voraussetzung:** Die `Group`-Struktur ändert sich während eines Vorgangs nicht. Ein Graph lebt
+nur für einen Solve, einen Zieh-Start oder ein Overlay (`ScopedIdentityGraph` bzw. lokale
+Graphen).
+
+**Wirkung (BG22):** Zieh-Start headless 1,6 s → 0,48 s, Solve 0,73 s → 0,54 s, in der GUI laut
+Nutzer etwa 50 % schneller.
 
 ## 5. "Adressieren statt Kopieren" - Migrationsstatus
 

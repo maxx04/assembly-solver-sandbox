@@ -116,3 +116,27 @@ Ohne Erdung kann sie in ihrer eigenen Datei nicht berechnet werden; `solve()` br
 - Eingebaut und noch lose hält sie die Unterbaugruppe an ihrer Ablage-Position (C5).
 - Fehlt sie trotzdem, ist das ein Modellfehler. Der Ersatz-Anker aus C5 Punkt 2 ist nur ein
   Notbehelf, damit nichts herumschwimmt.
+
+## C7. Redundanz innerhalb einer Toleranz wird geschluckt (2026-10-14)
+
+Nutzerentscheidung: „Solver soll z.B. zwei Führungen schlucken, in bestimmtem Toleranzbereich.“
+Ein Konstrukteur soll sich nicht mit Freiheitsgraden beschäftigen müssen.
+
+1. **Stimmige Redundanz ist kein Fehler.** Zwei parallele Führungen oder eine Spindel parallel
+   zur Führung legen dieselbe Richtung doppelt fest. Weicht die doppelte Bedingung im Ergebnis um
+   höchstens die Toleranz ab, gibt es keine Warnung und kein „Over-constrained“.
+2. **Was schon da ist, gilt.** Redundant und damit gegen die Toleranz geprüft ist immer das
+   jüngste Gelenk. Erdung und Gelenke aus Unterbaugruppen gelten vor den eigenen Gelenken, diese
+   nach Alter.
+3. **Über der Toleranz ist es ein Widerspruch.** Die Warnung nennt das nicht erfüllte Gelenk, die
+   Abweichung und die Gelenke, denen es widerspricht.
+4. **Toleranz einstellbar** unter *Bearbeiten → Einstellungen → Assembly* („Redundancy tolerance
+   (length)“ und „(angle)“, Parameter `RedundancyToleranceLength`, Standard 0,01 mm, und
+   `RedundancyToleranceAngle`, Standard 0,01°).
+   Es kommt keine neue Eigenschaft in die Datei (C4).
+5. **Schnell:** Die gefundenen Redundanzen werden gemerkt und beim nächsten Solve gleich
+   herausgenommen, solange die betroffenen Gelenke unverändert sind.
+
+Umsetzung und Upstream-Abweichung: docs/ARCHITECTURE.md §3.2d,
+`plans/2026-10-14-redundanz-mit-toleranz.md`.
+

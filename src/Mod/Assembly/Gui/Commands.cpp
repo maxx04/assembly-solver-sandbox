@@ -194,9 +194,9 @@ void CmdAssemblySelectConflictingConstraints::activated(int iMsg)
         return;
     }
 
-    // NOTE: The solver currently reports conflicting constraints as redundant.
-    // This uses the redundant list until the solver provides a separate conflicting list.
-    selectObjectsByName(assembly, assembly->getLastRedundant());
+    // FCPROJECT-PATCH (2026-10-14, Regel C7): AssemblyObject fuehrt jetzt eine eigene Liste der
+    // Gelenke, deren herausgenommene Bedingungen die Toleranz ueberschreiten.
+    selectObjectsByName(assembly, assembly->getLastConflicting());
 }
 
 bool CmdAssemblySelectConflictingConstraints::isActive()

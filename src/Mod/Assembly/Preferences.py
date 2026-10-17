@@ -40,6 +40,10 @@ class PreferencesPage:
         pref.SetBool("LeaveEditWithEscape", self.form.checkBoxEnableEscape.isChecked())
         pref.SetBool("LogSolverDebug", self.form.checkBoxSolverDebug.isChecked())
         pref.SetInt("GroundFirstPart", self.form.groundFirstPart.currentIndex())
+        # FCPROJECT-PATCH (2026-10-14, Regel C7): Toleranz, innerhalb der redundante Bedingungen
+        # geschluckt werden (siehe AssemblyObject::updateSolveStatus()).
+        pref.SetFloat("RedundancyToleranceLength", self.form.redundancyToleranceLength.value())
+        pref.SetFloat("RedundancyToleranceAngle", self.form.redundancyToleranceAngle.value())
 
     def loadSettings(self):
         pref = preferences()
@@ -50,3 +54,5 @@ class PreferencesPage:
         self.form.groundFirstPart.addItem(translate("Assembly", "Always"))
         self.form.groundFirstPart.addItem(translate("Assembly", "Never"))
         self.form.groundFirstPart.setCurrentIndex(pref.GetInt("GroundFirstPart", 0))
+        self.form.redundancyToleranceLength.setValue(pref.GetFloat("RedundancyToleranceLength", 0.01))
+        self.form.redundancyToleranceAngle.setValue(pref.GetFloat("RedundancyToleranceAngle", 0.01))

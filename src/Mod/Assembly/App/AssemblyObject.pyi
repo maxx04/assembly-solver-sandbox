@@ -229,6 +229,14 @@ class AssemblyObject(Part):
         ...
 
     @constmethod
+    def getRedundancyStates(self) -> list[str]:
+        """
+        FCProject: redundant (removed) constraints of the last solve, one line each:
+        "<joint> [<index>]: Abweichung <value> mm|deg, geschluckt|Konflikt".
+        """
+        ...
+
+    @constmethod
     def getLimitViolations(self) -> list[str]:
         """
         FCProject: joint limits the last solve could not keep, one line per limit:
