@@ -114,7 +114,7 @@ instanziiert:
 | RackPinion | `ASMTRackPinionJoint` | koppelt Rotation eines Revolute/Cylindrical mit Translation eines Sliders über `pitchRadius` |
 | Screw | `ASMTScrewJoint` | koppelt Rotation+Translation am selben Teil über `pitch` (braucht einen zugehörigen Slider) |
 | Gears / Belt | `ASMTGearJoint` (`radiusJ` bei Belt negiert) | koppelt zwei Rotations-DoF verschiedener Wellen |
-| Tangent (2026-10-16, eigener Typ, am Enum-Ende) | `ASMTPointOnCurveJoint` (eigene Solver-Erweiterung, s. §1.2) | erster Schritt "Vertex auf Kurve": 2 Translationen entzogen, Punkt gleitet auf der Kante, Drehung frei; offene Kurve: Punkt stoppt am Ende |
+| Tangent (2026-10-16, eigener Typ, am Enum-Ende) | `ASMTPointOnCurveJoint` bzw. `ASMTTangentJoint` (eigene Solver-Erweiterung, s. §1.2/§1.3) | Vertex auf Kante (Punkt gleitet, stoppt am offenen Ende), Vertex auf Fläche, Kante an Fläche und Kante an Kante (einseitiger Kontakt, Abrollen/Gleiten); Drehung frei, soweit der Kontakt sie nicht bindet |
 
 ### 1.2 Tangent-Gelenk: Punkt auf Kurve im Solver (2026-10-16)
 
@@ -142,6 +142,37 @@ Kurvengeometrie (`ASMTRefCurve` ist ein leerer Platzhalter), deshalb ein eigener
 - **Grenzen:** nur Lage (Solve, Ziehen); für die Simulation fehlen die Krümmungsterme der
   Beschleunigung, `generateSimulation()` lehnt Tangent ab. Konvergenz ohne Krümmungsterm im
   Hesse-Anteil linear statt quadratisch (in den Tests 3-20 Iterationen).
+
+### 1.3 Tangent-Gelenk: Flächen und Kurvenkontakt (2026-10-18)
+
+Plan: `plans/2026-10-16-tangent-joint.md`, Abschnitt „Zweiter Schritt“. Solver-Teile (alle in
+`src/3rdParty/OndselSolver/OndselSolver`, OndselSolver-Patch):
+
+- `NurbsSurface`: rationale Tensorprodukt-B-Spline (Auswertung mit Ableitungen bis 2. Ordnung,
+  Projektion: Abtastung + gedämpftes Newton). `ASMTTangentJoint` trägt Art („PointOnSurface“,
+  „CurveOnSurface“, „CurveOnCurve“) und Geometrie, ASMT-Name `TangentJoint`.
+- `EndFrameqcFoot` ist die gemeinsame Basis der mitwandernden End-Frames (`EndFrameqcCurve`,
+  `EndFrameqcSurface`): `setFoot()` legt Ursprung und z-Achse, x bleibt nahe der vorigen
+  Richtung. `DispCompIeqcJeqcKeqcCurve` ruft vor jeder Auswertung `updateFor()` auf.
+- `TangentContact` (gehört zu frmI): Kontakt zwischen I (Fläche oder Kurve) und Kurve J. Der
+  Kontaktpunkt auf J minimiert den orientierten Abstand (Flächennormale bzw. Normale in der Ebene
+  einer ebenen Kurve I, Seite einmal beim ersten Auswerten per Median bestimmt). Gleichungen:
+  `CurveOnSurfaceJoint` z = 0, `CurveOnCurveJoint` x = 0 (Abstand in der Ebene) und y = 0 (aus
+  der Ebene), jeweils `PointOnCurveConstraintIqcJqc` entlang einer Achse von frmI.
+- **Zweite Ableitungen:** `PointOnCurveConstraintIqcJqc::fillPosICJacob()` ergänzt für die
+  Abstandsgleichung eines Kontakts die Hüllkurven- und Krümmungsterme (Formel im Plan). Ohne
+  sie ist das Drehen der Kurve um sich selbst / das Abrollen für Newton künstlich steif.
+- **Aufsetzen:** `CurveOnSurfaceJoint`/`CurveOnCurveJoint::prePosIC()` verschieben ein Teil, das
+  nur an diesem Kontakt hängt, vor dem Lagelösen entlang der Normalen auf die Berührung, und zwar
+  *vor* `Joint::prePosIC()`, sonst rechnet die erste Iteration mit den alten Gleichungswerten.
+- FreeCAD: `getFaceBSplineInJcs()` (Fläche als B-Spline in JCS-Koordinaten, auf die UV-Grenzen
+  beschnitten), `makeMbdJointTangent()` ordnet die Paarung zu (höhere Geometrie = Reference1).
+- Nebenbei behoben (OndselSolver-Leser, upstream): `ASMTAssembly::assemblyFromFile()` las die
+  Zeile „Assembly“ nur innerhalb eines `assert` (Release-Builds lasen die ganze Datei um eine
+  Zeile versetzt, gleiches Muster viermal in `ASMTLimit`), und `ASMTRefItem::readMarkers()`
+  begrenzte die Marker über die nächste „RefPoint“-Zeile (bei Markern auf Baugruppenebene der
+  Rest der Datei). Seitdem lassen sich FreeCAD-ASMT-Dateien eigenständig nachrechnen (bis auf den
+  bekannten Typnamen „dJointE“ unter GCC).
 
 `GroundedJoint`/`RigidGroupJoint` sind **keine** `JointType`-Varianten - sie haben kein
 `Reference1`/`Reference2` und tauchen deshalb in `AssemblyObject::getJoints()` gar nicht auf
@@ -651,6 +682,22 @@ Zieh-Schritt 0,028 s → 0,015 s. Matrix 35/35, Drag-Rundumtest PASS.
 **Offen:** Der schnelle Löser `GESpMatParPvMarkoFast` meldet bei BG22 weiterhin fälschlich
 „singulär“ (Markowitz-Kriterium wählt kleine Pivots), einmal pro Solve springt dann der genaue
 Löser ein. Das ist der größte verbleibende Block eines Solves.
+
+### 3.2f Schwellen-Pivotisierung im schnellen Löser (2026-10-17)
+
+**Befund:** `GESpMatParPvMarkoFast::doPivoting()` wählt den Pivot einer Spalte nach
+`|a| / 2^Zeilenlänge`, also fast nur nach Dünnbesetztheit. An BG22 schlug so ein Rausch-Eintrag
+(2e-25) in einer kurzen Zeile einen echten Eintrag der Größe 1. Gewählt wurde ein Pivot, der
+praktisch null war: „singulär“ bei einer nicht singulären Matrix (Spalte 1179 = Gleichung von
+Joint008, laut Suche nach Rangfolge unabhängig). Jeder Solve fiel dann auf
+`GESpMatParPvPrecise` zurück.
+
+**Änderung (OndselSolver-Patch):** Für die Dünnbesetzt-Auswahl kommen nur Kandidaten mit
+mindestens 10 % des größten Betrags der Spalte in Frage (übliches Threshold Partial Pivoting).
+Die Positionsbuchhaltung bleibt unverändert.
+
+**Wirkung (BG22):** Solve 1,4 s → 0,44 s, kein Rückfall mehr. Matrix 35/35. Upstream-Kandidat
+(zusammen mit §3.2e).
 
 ### 3.3 Kopplungs-Sequenz (Zusammenfassung von §2.1 + hier)
 

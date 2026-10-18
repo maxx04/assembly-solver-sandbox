@@ -3713,3 +3713,54 @@ schon in `Assembly.qrc`), Auswahlprüfung im Dialog, Simulation lehnt Tangent ab
 **Status:** Code und Patches (`2026.10.16-ondselsolver-point-on-curve.patch`,
 `2026.10.16-freecad-assembly-tangent-joint.patch`) committed; Build und Kinematiktest lokal
 ausstehend.
+
+## 2026-10-18: Tangent-Gelenk, zweiter Schritt: Flächen und Kurvenkontakt
+
+Nutzerauftrag: „Kurve auf Kurve und Spline-Fläche auf Vertex und Kurve“, selbstständig. Neu:
+Vertex auf Fläche, Kante an Fläche, Kante an Kante (Plan: `plans/2026-10-16-tangent-joint.md`,
+„Zweiter Schritt“, Technik: ARCHITECTURE.md §1.3).
+
+**Ansatz:** einseitiger Kontakt. Der Kontaktpunkt auf der Kurve ist der mit dem kleinsten
+orientierten Abstand. Ist dieser null, berührt die Kurve von einer Seite, also braucht es nur
+Translationsgleichungen (1 an der Fläche, 2 an einer ebenen Kurve).
+
+**Wie es zur Konvergenz kam** (Testfall: Rad r = 5, 20 mm über einer gewölbten Fläche, gekippt,
+Marker versetzt):
+1. Erster Stand: Lösung kroch, das Rad drehte sich pro Iteration 0,003 rad um die eigene Achse,
+   der Abstand blieb bei −2e-5 stehen. Ursache: Die eingefrorenen zweiten Ableitungen
+   behandeln den Kontaktpunkt wie einen festen Materialpunkt. Drehen um die Radachse wirkt
+   dadurch steif, mit λ ~ 1e7 multipliziert. Gauss-Newton (zweite Ableitungen weglassen):
+   Das Rad sprang zwischen zwei Lagen hin und her. Lösung: Hüllkurvenkorrektur −λ g gᵀ/f_tt plus
+   Krümmungsterm der Fläche λ J_rᵀ H_D J_r, quadratische Konvergenz in der Nachrechnung.
+2. Nebenwirkungen und ihre Behebung: Der Krümmungsterm galt nur auf der Fläche (d = 0). Im
+   Abstand richtig κ/(1 − dκ), stetig begrenzt statt abgeschaltet, sonst Zweierzyklus. f_tt
+   per Differenzenquotient war zu verrauscht, jetzt exakt. Der Kontaktparameter aus dem goldenen
+   Schnitt war nur auf √ε genau, jetzt mit Newton nachgeschärft. Die Terme werden mit
+   exp(−(d/L)²) eingeblendet.
+3. In FreeCAD scheiterte derselbe Fall weiter, die Nachrechnung der exportierten ASMT-Datei
+   konvergierte. Dafür musste erst der OndselSolver-Dateileser repariert werden (s. u.). Danach
+   zeigte der Vergleich: ab der zweiten Iteration weichen FreeCAD und die Nachrechnung um
+   0,09 mm ab, der Verlauf ist chaotisch. Ursache ist die PosIC-Gewichtung, nicht ein Fehler:
+   1 mm Weg kostet so viel wie ~1 rad Drehung. Aus 20 mm Abstand kippt und dreht der Solver die
+   Kurve lieber, λ wird riesig, und die Iteration hängt an Rundungsunterschieden. Lösung:
+   *Aufsetzen* vor dem Lagelösen. Ein Teil, das nur an diesem Kontakt hängt, wird entlang der
+   Normalen auf die Berührung geschoben (`setDownOnContact()`). Wichtig: vor
+   `Joint::prePosIC()`, sonst rechnet die erste Iteration mit dem alten Abstand. Jetzt
+   1 Iteration.
+
+**OndselSolver-Leser (upstream, behoben):** Der Absturz beim Einlesen aus dem ersten Schritt
+(„Ursache nicht weiter untersucht“) hat zwei Ursachen:
+- `ASMTRefItem::readMarkers()` sucht das Ende der Marker über die nächste Zeile mit „RefPoint“.
+  Bei Markern auf Baugruppenebene folgt keine mehr, also wurde der Rest der Datei als Marker
+  gelesen. Jetzt über die Einrückung.
+- `assemblyFromFile()` (und viermal `ASMTLimit`) liest eine Zeile *innerhalb* eines `assert`.
+  Im Release-Build (NDEBUG) fällt das Lesen weg, alles ist um eine Zeile versetzt. Im
+  Debug-Build ging es deshalb, im Release stürzte es ab (ASan: heap-buffer-overflow).
+- Bleibt: der Typname „dJointE“ für FixedJoint (siehe erster Schritt). Zum Nachrechnen per
+  `sed` durch „FixedJoint“ ersetzen.
+
+**Verifikation:**
+- Solver-Tests (`run-solver-tests.sh`): `test_point_on_curve` und neu `test_tangent_contacts`
+  alle bestanden.
+- `test_tangent_surface_curve_flat` (neu, 7 Fälle) und `test_tangent_vertex_spline_flat`: PASS.
+- Volle Matrix und Drag-Rundumtest: siehe Commit.

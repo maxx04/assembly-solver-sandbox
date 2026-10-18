@@ -174,6 +174,31 @@ AssemblyExport bool getEdgeBSplineInJcs(
     EdgeBSpline& out
 );
 
+// FCPROJECT-PATCH (2026-10-18, Tangent-Gelenk an Flaechen): die Flaeche von propRefName als
+// (rationale) B-Spline-Flaeche in den Koordinaten des JCS propPlcName, beschnitten auf die
+// UV-Grenzen der Flaeche (Loecher und krumme Raender bleiben unberuecksichtigt). poles: x, y, z
+// je Pol, Pol (i, j) an Stelle i * nPolesV + j. false, wenn die Referenz keine Flaeche ist oder
+// sich nicht umwandeln laesst.
+struct FaceBSpline
+{
+    int degreeU = 0;
+    int degreeV = 0;
+    int nPolesU = 0;
+    int nPolesV = 0;
+    std::vector<double> knotsU;
+    std::vector<double> knotsV;
+    std::vector<double> weights;
+    std::vector<double> poles;
+    bool closedU = false;
+    bool closedV = false;
+};
+AssemblyExport bool getFaceBSplineInJcs(
+    const App::DocumentObject* joint,
+    const char* propRefName,
+    const char* propPlcName,
+    FaceBSpline& out
+);
+
 AssemblyExport DistanceType getDistanceType(App::DocumentObject* joint);
 AssemblyExport JointGroup* getJointGroup(const App::Part* part);
 

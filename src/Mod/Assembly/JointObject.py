@@ -82,9 +82,9 @@ JointTypes = [
     "Tangent",
 ]
 
-# FCPROJECT-PATCH (2026-10-16): Tangent, erster Schritt "Vertex auf Kurve" - genau ein Vertex und
-# eine Kante.
-JointTangentElementTypes = ["Vertex", "Edge"]
+# FCPROJECT-PATCH (2026-10-16/18): Tangent - Vertex oder Kante an einer Kante oder Flaeche, also
+# nicht zwei Vertices und nicht zwei Flaechen.
+JointTangentElementTypes = ["Vertex", "Edge", "Face"]
 
 JointUsingAngle = [
     "Angle",
@@ -2629,8 +2629,7 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
                 # Can't join a solid to itself. So the user need to select 2 different parts.
                 acceptable = False
 
-        # FCPROJECT-PATCH (2026-10-16, Tangent-Gelenk, erster Schritt): nur ein Vertex und eine
-        # Kante, je eins.
+        # FCPROJECT-PATCH (2026-10-16/18, Tangent-Gelenk): Vertex oder Kante an Kante oder Flaeche.
         if acceptable and self.jType == "Tangent":
             acceptable = self.isTangentSelectionAcceptable(ref)
 
@@ -2662,11 +2661,17 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
 
         new_type = elementType(ref)
         taken = [elementType(reference) for reference in self.refs]
-        if new_type not in JointTangentElementTypes or new_type in taken:
+        pair = sorted(taken + [new_type])
+        valid_pairs = (["Edge", "Vertex"], ["Face", "Vertex"], ["Edge", "Edge"], ["Edge", "Face"])
+        if (
+            new_type not in JointTangentElementTypes
+            or len(pair) > 2
+            or (len(pair) == 2 and pair not in valid_pairs)
+        ):
             App.Console.PrintWarning(
                 translate(
                     "Assembly",
-                    "Tangent joint: select one vertex and one edge (for now only vertex on curve).",
+                    "Tangent joint: select a vertex or an edge, and an edge or a face.",
                 )
                 + "\n"
             )

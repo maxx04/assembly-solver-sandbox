@@ -57,12 +57,11 @@
 #      src/3rdParty/OndselSolver Symlinks hierher, der Rest von FreeCAD ist
 #      ein eigener, sonst unbemerkt wegdriftender Checkout (siehe Kommentar
 #      an der Stelle im Skript).
-#   9. standalone-check/check-neon-sync.sh (rein lesend, siehe dortiger
-#      Kommentar): prueft nebenbei, ob die eigene Neon-Qt6/PySide6/Shiboken6-
-#      Umgebung noch dem aktuellen Stand des Neon-Repos entspricht - FreeCADs
-#      eigenes CI-Skript pinnt dort selbst keine Version, "synchron mit
-#      FreeCAD" heisst hier "synchron mit dem Neon-Repo". Kein automatisches
-#      Update, nur ein Hinweis.
+#   9. standalone-check/update-neon-env.sh: Neon-Qt6/PySide6/Shiboken6-Umgebung auf den
+#      aktuellen Stand des Neon-Repos bringen (seit 2026-10-10 aktualisierend, vorher nur
+#      check-neon-sync.sh als reine Drift-Pruefung). FreeCADs eigenes CI pinnt dort keine
+#      Version - "synchron mit FreeCAD" heisst "synchron mit dem Neon-Repo". Danach immer
+#      kompletter Neubau: cmake --build standalone-check/build --target rebuild-fresh-and-deploy.
 #
 # Aufruf:
 #   ./update-sandbox.sh                     # Zielcommit = aktueller HEAD von origin/main
@@ -118,7 +117,18 @@ if [[ ! -f "$PATCHES_LIST" ]]; then
   echo "FEHLER: ${PATCHES_LIST} nicht gefunden." >&2
   exit 1
 fi
-mapfile -t PATCHES < <(read_patch_list)
+# "build:"-Zeilen (2026-10-04) sind Patches fuer den Build-Baum (SANDBOX_BUILD_DIR), alle
+# anderen fuer diese Sandbox - siehe PATCHES.txt, Abschnitt "Format".
+PATCHES=()
+BUILD_PATCHES=()
+while IFS= read -r line; do
+  if [[ "$line" == build:* ]]; then
+    bp="${line#build:}"
+    BUILD_PATCHES+=("${bp#"${bp%%[![:space:]]*}"}")
+  else
+    PATCHES+=("$line")
+  fi
+done < <(read_patch_list)
 
 log "Schritt 1/9: git fetch origin (+ Zielcommit-Default aus origin/main, falls keiner angegeben)"
 # FCPROJECT-PATCH 2026-10-03: kein externes Verzeichnis mehr als Referenz - stattdessen
@@ -141,10 +151,26 @@ if [[ ${#PATCHES[@]} -gt 0 ]]; then
     done | sort -u
   )
 fi
+ONDSEL_SUBMODULE="src/3rdParty/OndselSolver"
 for f in "${PATCHED_FILES[@]}"; do
   # Nur zuruecksetzen, was tatsaechlich hier ausgecheckt ist (z.B. src/App/* aus
   # freecad-app-getplacementof-partdesign-feature.patch ist es nicht).
-  [[ -f "$f" ]] && run git checkout -- "$f"
+  [[ -f "$f" ]] || continue
+  if [[ "$f" == "${ONDSEL_SUBMODULE}/"* ]]; then
+    # FCPROJECT-PATCH (2026-10-11): Dateien im OndselSolver-Submodul gehoeren dessen eigenem
+    # Repo - "git checkout -- <pfad>" aus der Sandbox heraus greift dort nicht.
+    rel="${f#"${ONDSEL_SUBMODULE}/"}"
+    if git -C "$ONDSEL_SUBMODULE" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1; then
+      run git -C "$ONDSEL_SUBMODULE" checkout -- "$rel"
+    else
+      # FCPROJECT-PATCH (2026-10-17): vom Patch neu angelegte Datei (z.B. NurbsCurve.cpp fuer das
+      # Tangent-Gelenk) - im Submodul unversioniert, "git checkout" kennt sie nicht. Loeschen, der
+      # Patch legt sie in Schritt 6 neu an.
+      run rm -f -- "$f"
+    fi
+  else
+    run git checkout -- "$f"
+  fi
 done
 
 log "Schritt 3/9: pruefe auf unerwartete lokale Aenderungen an getrackten Dateien"
@@ -246,6 +272,25 @@ if [[ $DRY_RUN -eq 0 ]]; then
       "src/Mod/Assembly:${SANDBOX_DIR}/src/Mod/Assembly"
       "src/3rdParty/OndselSolver:${SANDBOX_DIR}/src/3rdParty/OndselSolver"
     )
+    # FCPROJECT-PATCH (2026-10-04): "build:"-Patches aus PATCHES.txt (z.B. die Qt6-Fixes) werden
+    # vor dem Wechsel zurueckgenommen und danach neu angewendet. Zurueckgenommen wird nur, was
+    # EXAKT so angewendet ist (git apply -R --check) - jede andere Aenderung bleibt "unerwartet"
+    # und fuehrt wie bisher zum Abbruch.
+    REVERSED_BUILD_PATCHES=()
+    BUILD_PATCHES_REAPPLIED=0
+    reapply_reversed_build_patches() {
+      [[ $BUILD_PATCHES_REAPPLIED -eq 1 ]] && return
+      cd "$SANDBOX_BUILD_DIR" || return
+      for bp in "${REVERSED_BUILD_PATCHES[@]}"; do
+        if git apply --check "${PATCHES_DIR}/${bp}" 2>/dev/null; then
+          git apply "${PATCHES_DIR}/${bp}"
+          echo "Build-Baum-Patch wieder angewendet: ${bp}"
+        else
+          echo "WARNUNG: Build-Baum-Patch ${bp} liess sich nicht wieder anwenden - von Hand pruefen." >&2
+        fi
+      done
+      BUILD_PATCHES_REAPPLIED=1
+    }
     restore_build_symlinks() {
       cd "$SANDBOX_BUILD_DIR" || return
       for entry in "${SYMLINK_TARGETS[@]}"; do
@@ -258,9 +303,19 @@ if [[ $DRY_RUN -eq 0 ]]; then
         ln -s "$link_target" "$link_path"
       done
     }
-    trap restore_build_symlinks EXIT
+    trap 'restore_build_symlinks; reapply_reversed_build_patches' EXIT
 
     cd "$SANDBOX_BUILD_DIR"
+
+    for bp in "${BUILD_PATCHES[@]}"; do
+      if git apply -R --check "${PATCHES_DIR}/${bp}" 2>/dev/null; then
+        git apply -R "${PATCHES_DIR}/${bp}"
+        REVERSED_BUILD_PATCHES+=("$bp")
+        echo "Build-Baum-Patch voruebergehend zurueckgenommen: ${bp}"
+      else
+        echo "Build-Baum-Patch ${bp} ist aktuell nicht (exakt) angewendet - wird nach dem Wechsel angewendet."
+      fi
+    done
 
     # Sicherheitscheck analog Schritt 3/9: unerwartete lokale Aenderungen AUSSERHALB der
     # Symlink-Pfade muessen vorher gesichert/committet sein (siehe
@@ -272,6 +327,7 @@ if [[ $DRY_RUN -eq 0 ]]; then
       echo "Symlink-Pfade) - erst sichern (z.B. als eigener Patch, siehe PATCHES.txt-Beispiele)" >&2
       echo "oder committen, dann erneut starten:" >&2
       echo "$UNEXPECTED_BUILD_CHANGES" >&2
+      reapply_reversed_build_patches
       cd "$SANDBOX_DIR"
       exit 1
     fi
@@ -294,12 +350,57 @@ if [[ $DRY_RUN -eq 0 ]]; then
     restore_build_symlinks
     trap - EXIT
 
+    # Alle "build:"-Patches auf den neuen Stand anwenden (auch solche, die vorher nicht angewendet
+    # waren - PATCHES.txt ist die Quelle der Wahrheit).
+    cd "$SANDBOX_BUILD_DIR"
+    BUILD_PATCH_FAIL=0
+    for bp in "${BUILD_PATCHES[@]}"; do
+      if git apply --check "${PATCHES_DIR}/${bp}" 2>/dev/null; then
+        git apply "${PATCHES_DIR}/${bp}"
+        echo "Build-Baum-Patch angewendet: ${bp}"
+      else
+        echo "FEHLER: Build-Baum-Patch ${bp} passt nicht auf ${TARGET_COMMIT:0:10} - neu erzeugen (siehe PATCHES.txt)." >&2
+        BUILD_PATCH_FAIL=1
+      fi
+    done
+    BUILD_PATCHES_REAPPLIED=1
+
     cd "$SANDBOX_DIR"
     echo "Build-Baum jetzt bei $(git -C "$SANDBOX_BUILD_DIR" rev-parse --short HEAD) - Symlinks wiederhergestellt."
+    echo
+    echo "Der Build-Baum steht jetzt auf einem neuen Vanilla-Stand - komplett neu bauen (siehe Ende)."
+    if [[ $BUILD_PATCH_FAIL -ne 0 ]]; then
+      echo "FEHLER: mindestens ein Build-Baum-Patch passt nicht mehr - siehe oben." >&2
+      exit 1
+    fi
   fi
 
-  log "Schritt 9/9: pruefe Neon-Qt6/PySide6/Shiboken6-Umgebung auf Versionsdrift (rein lesend)"
-  "${SANDBOX_DIR}/standalone-check/check-neon-sync.sh" || true
+  # FCPROJECT-PATCH (2026-10-10): Schritt 4 setzt per "git checkout <Ziel> -- <pfade>" auch den
+  # Index auf den Vanilla-Stand, die Patches aus Schritt 6 landen nur im Arbeitsbaum - ohne
+  # Bereinigung zeigte "git status" jede gepatchte Datei als "MM". Index wieder auf HEAD.
+  git reset -q -- src/Mod/Assembly src/3rdParty/OndselSolver
+
+  # FCPROJECT-PATCH (2026-10-10, Nutzerauftrag: woechentliches Update immer komplett, "gleicher
+  # Stand wie FreeCAD"): die Neon-Qt6/PySide6/Shiboken6-Umgebung wird jetzt mit aktualisiert statt
+  # nur auf Drift geprueft. FreeCADs CI installiert ebenfalls immer den aktuellen Neon-Stand.
+  log "Schritt 9/9: Neon-Qt6/PySide6/Shiboken6-Umgebung aktualisieren"
+  "${SANDBOX_DIR}/standalone-check/update-neon-env.sh"
+
+  # FCPROJECT-PATCH (2026-10-10, Nutzerauftrag): Vanilla-Vergleich ist die offizielle Weekly-
+  # AppImage - mit aktualisieren. Ein Fehler hier (z.B. gh nicht angemeldet) bricht das Update
+  # nicht ab, der Vergleich laeuft dann nur gegen die vorige Weekly.
+  log "Schritt 9b/9: Vanilla-Vergleich (FreeCAD-Weekly-AppImage) aktualisieren"
+  "/home/maxx/freecad/App_weekly/update-weekly-appimage.sh" \
+    || echo "WARNUNG: Weekly-AppImage nicht aktualisiert - Vanilla-Vergleich nutzt die vorige." >&2
+
+  echo
+  echo "Naechste Schritte (Standardvorgang, siehe SANDBOX_NOTES.md):"
+  echo "  1. Sandbox-FreeCAD schliessen"
+  echo "  2. cmake --build standalone-check/build --target rebuild-fresh-and-deploy"
+  echo "     (VS Code: Tasks -> rebuild-fresh-and-deploy; kompletter Neubau aus leerem Build-Ordner)"
+  echo "  3. standalone-check/kinematic-tests/common/run-all-tests.sh /home/maxx/freecad-sandbox/install"
+  echo "     (Vanilla-Vergleich: ... run-all-tests.sh /home/maxx/freecad/App_weekly/freecad.App)"
+  echo "  4. VANILLA_BASE in patches/PATCHES.txt aktualisieren, Patch neu erzeugen, check-patches.sh"
 else
   log "Dry-Run Ende - keine Aenderung vorgenommen."
 fi

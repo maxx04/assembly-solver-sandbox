@@ -380,8 +380,8 @@ class CommandCreateJointBelt:
 
 
 class CommandCreateJointTangent:
-    # FCPROJECT-PATCH (2026-10-16, plans/2026-10-16-tangent-joint.md): Tangent, erster Schritt
-    # "Vertex auf Kurve".
+    # FCPROJECT-PATCH (2026-10-16/18, plans/2026-10-16-tangent-joint.md): Tangent - Vertex oder
+    # Kante an Kante oder Flaeche.
     def __init__(self):
         pass
 
@@ -392,8 +392,8 @@ class CommandCreateJointTangent:
             "Accel": "K",
             "ToolTip": QT_TRANSLATE_NOOP(
                 "Assembly_CreateJointTangent",
-                "<p>Creates a tangent joint that keeps a vertex on a curve (spline, arc, line). The vertex slides along the curve and stops at the ends of an open curve; the rotation stays free.</p>"
-                "<p>Select a vertex and an edge.</p>",
+                "<p>Creates a tangent joint. A vertex stays on a curve (spline, arc, line) or on a face and slides along it; on an open curve it stops at the ends. A curve touches a face or another curve from the side it starts on and can roll and slide along it. The rotation stays free as far as the contact allows.</p>"
+                "<p>Select a vertex or an edge, and an edge or a face.</p>",
             ),
             "CmdType": "ForEdit",
         }

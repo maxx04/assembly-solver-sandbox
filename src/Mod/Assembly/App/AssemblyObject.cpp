@@ -69,6 +69,7 @@
 #include <OndselSolver/ASMTPointInPlaneJoint.h>
 #include <OndselSolver/ASMTPointInLineJoint.h>
 #include <OndselSolver/ASMTPointOnCurveJoint.h>
+#include <OndselSolver/ASMTTangentJoint.h>
 #include <OndselSolver/ASMTLineInPlaneJoint.h>
 #include <OndselSolver/ASMTPlanarJoint.h>
 #include <OndselSolver/ASMTRevCylJoint.h>
@@ -3942,42 +3943,103 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointDistance(App::DocumentObj
 
 std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointTangent(App::DocumentObject* joint)
 {
-    // FCPROJECT-PATCH (2026-10-16, plans/2026-10-16-tangent-joint.md, Nutzerentscheidung
-    // "zuerst reicht Vertex auf Spline"): der Vertex bleibt auf der Kante, gleitet frei an ihr
-    // entlang, die Drehung bleibt frei. Die Kante geht als B-Spline in den Koordinaten ihres
-    // JCS an den Solver (OndselSolver PointOnCurveJoint, Marker I = Kante, Marker J = Vertex).
-    // An einer offenen Kurve bleibt der Punkt am Ende stehen (Endanschlaege im Solver).
+    // FCPROJECT-PATCH (2026-10-16/18, plans/2026-10-16-tangent-joint.md): Tangent zwischen
+    // Vertex, Kante (Kurve) und Flaeche. Die hoehere Geometrie (Flaeche > Kante > Vertex) wird
+    // Referenz 1 (Marker I, wie bei Distance PointCurve), beide gehen als B-Spline in den
+    // Koordinaten ihres JCS an den Solver:
+    // - Vertex auf Kante: der Punkt gleitet an der Kurve entlang (PointOnCurveJoint); an einer
+    //   offenen Kurve bleibt er am Ende stehen (Endanschlaege im Solver).
+    // - Vertex auf Flaeche: der Punkt gleitet auf der Flaeche (ASMTTangentJoint).
+    // - Kante an Flaeche / Kante an Kante: die Kurve beruehrt die Flaeche bzw. die andere Kurve
+    //   von der Seite, auf der sie beim ersten Loesen liegt, und kann an ihr abrollen und
+    //   gleiten (einseitiger Kontakt, ASMTTangentJoint).
+    // Die Drehung bleibt jeweils frei, soweit der Kontakt sie nicht bindet.
     std::string type1 = getElementTypeFromProp(joint, "Reference1");
     std::string type2 = getElementTypeFromProp(joint, "Reference2");
-    if (type1 == "Vertex" && type2 == "Edge") {
-        swapJCS(joint);  // Kante muss Referenz 1 sein, wie bei Distance PointCurve.
+    auto rank = [](const std::string& type) {
+        return type == "Face" ? 3 : type == "Edge" ? 2 : type == "Vertex" ? 1 : 0;
+    };
+    if (rank(type1) < rank(type2)) {
+        swapJCS(joint);
         std::swap(type1, type2);
     }
-    if (type1 != "Edge" || type2 != "Vertex") {
+    auto ignored = [&](const char* why) {
         Base::Console().warning(
-            "Assembly: Tangent-Gelenk '{}' ignoriert - bisher wird nur Vertex auf Kante "
-            "unterstuetzt (gewaehlt: {} und {}).\n",
+            "Assembly: Tangent-Gelenk '{}' ignoriert - {} (gewaehlt: {} und {}).\n",
             getJointContextName(joint),
+            why,
             type1.empty() ? "?" : type1,
             type2.empty() ? "?" : type2
         );
         return nullptr;
+    };
+    if (rank(type1) < 2 || rank(type2) < 1 || type2 == "Face") {
+        return ignored("unterstuetzt werden Vertex oder Kante an einer Kante oder Flaeche");
     }
 
-    EdgeBSpline curve;
-    if (!getEdgeBSplineInJcs(joint, "Reference1", "Placement1", curve)) {
-        Base::Console().warning(
-            "Assembly: Tangent-Gelenk '{}' ignoriert - die Kante laesst sich nicht als Kurve "
-            "auslesen.\n",
-            getJointContextName(joint)
-        );
-        return nullptr;
+    auto curveOf = [&](const char* ref, const char* plc, MbD::ASMTTangentJoint::Curve& out) {
+        EdgeBSpline edge;
+        if (!getEdgeBSplineInJcs(joint, ref, plc, edge)) {
+            return false;
+        }
+        out.degree = edge.degree;
+        out.knots = edge.knots;
+        out.weights = edge.weights;
+        out.poles = edge.poles;
+        out.closed = edge.closed;
+        return true;
+    };
+    auto surfaceOf = [&](MbD::ASMTTangentJoint::Surface& out) {
+        FaceBSpline face;
+        if (!getFaceBSplineInJcs(joint, "Reference1", "Placement1", face)) {
+            return false;
+        }
+        out.degreeU = face.degreeU;
+        out.degreeV = face.degreeV;
+        out.nPolesU = face.nPolesU;
+        out.nPolesV = face.nPolesV;
+        out.knotsU = face.knotsU;
+        out.knotsV = face.knotsV;
+        out.weights = face.weights;
+        out.poles = face.poles;
+        out.closedU = face.closedU;
+        out.closedV = face.closedV;
+        return true;
+    };
+
+    if (type1 == "Edge" && type2 == "Vertex") {
+        EdgeBSpline curve;
+        if (!getEdgeBSplineInJcs(joint, "Reference1", "Placement1", curve)) {
+            return ignored("die Kante laesst sich nicht als Kurve auslesen");
+        }
+        auto mbdJoint = CREATE<ASMTPointOnCurveJoint>::With();
+        mbdJoint->setCurve(curve.degree, curve.knots, curve.weights, curve.poles, curve.closed);
+        if (!curve.closed) {
+            hasCurveEndStops = true;
+        }
+        return mbdJoint;
     }
 
-    auto mbdJoint = CREATE<ASMTPointOnCurveJoint>::With();
-    mbdJoint->setCurve(curve.degree, curve.knots, curve.weights, curve.poles, curve.closed);
-    if (!curve.closed) {
-        hasCurveEndStops = true;
+    auto mbdJoint = CREATE<ASMTTangentJoint>::With();
+    MbD::ASMTTangentJoint::Surface surfaceI;
+    MbD::ASMTTangentJoint::Curve curveI, curveJ;
+    if (type1 == "Face" && !surfaceOf(surfaceI)) {
+        return ignored("die Flaeche laesst sich nicht als B-Spline-Flaeche auslesen");
+    }
+    if (type1 == "Edge" && !curveOf("Reference1", "Placement1", curveI)) {
+        return ignored("die Kante laesst sich nicht als Kurve auslesen");
+    }
+    if (type2 == "Edge" && !curveOf("Reference2", "Placement2", curveJ)) {
+        return ignored("die Kante laesst sich nicht als Kurve auslesen");
+    }
+    if (type1 == "Face" && type2 == "Vertex") {
+        mbdJoint->setPointOnSurface(surfaceI);
+    }
+    else if (type1 == "Face") {
+        mbdJoint->setCurveOnSurface(surfaceI, curveJ);
+    }
+    else {
+        mbdJoint->setCurveOnCurve(curveI, curveJ);
     }
     return mbdJoint;
 }

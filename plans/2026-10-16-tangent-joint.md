@@ -156,3 +156,73 @@ Erledigt:
   Cloud-Session ohne FreeCAD/OCC nicht möglich). Die übrigen Testfälle aus Schritt 5
   (3D-Spline, Bogen, verschachtelt) sind bisher nur im Solver-Test abgedeckt.
 - [ ] Prüfen im GUI: Gelenk anlegen (Vertex + Kante), Ziehen, Ende, Speichern/Laden.
+
+## Zweiter Schritt (2026-10-18): Vertex auf Fläche, Kante an Fläche, Kante an Kante
+
+Nutzerauftrag 2026-10-18: „weitere Elemente hinzufügen: Kurve auf Kurve und Spline-Fläche auf
+Vertex und Kurve“, selbstständig umgesetzt.
+
+**Paarungen** (die höhere Geometrie wird Referenz 1 = Marker I, Fläche > Kante > Vertex, per
+`swapJCS()`):
+
+| Auswahl | Solver | Wirkung |
+|---|---|---|
+| Vertex + Kante | `ASMTPointOnCurveJoint` (Schritt 1) | Punkt gleitet auf der Kurve, Anschlag am offenen Ende |
+| Vertex + Fläche | `ASMTTangentJoint` „PointOnSurface“ | Punkt gleitet auf der Fläche (1 Gleichung) |
+| Kante + Fläche | `ASMTTangentJoint` „CurveOnSurface“ | Kurve berührt die Fläche einseitig, kann abrollen und gleiten (1 Gleichung) |
+| Kante + Kante | `ASMTTangentJoint` „CurveOnCurve“ | Kurve berührt die andere Kurve einseitig (2 Gleichungen) |
+
+Zwei Vertices oder zwei Flächen lehnt der Dialog ab; `makeMbdJointTangent()` warnt und baut kein
+Gelenk.
+
+**Einseitiger Kontakt statt Tangentialbedingung:** Der Kontaktpunkt auf Kurve J ist der Punkt mit
+dem kleinsten *orientierten* Abstand zu I (Flächennormale bzw. Normale in der Ebene einer ebenen
+Kurve I). Ist dieser Abstand null, berührt J die Geometrie I von einer Seite: Tangentialität und
+„keine Durchdringung“ folgen aus der Wahl des Punktes, es braucht nur Translationsgleichungen.
+Die Seite ist die, auf der beim ersten Auswerten der größte Teil von J liegt (Median). Verworfen:
+zusätzliche Richtungskosinus-Bedingung „Tangenten parallel“. Mit eingefrorenem Fußpunkt
+linearisiert, hätte sie das Abrollen blockiert. Zwei nicht ebene Raumkurven: nächstes Punktpaar
+(sie treffen sich, Tangentialität nicht erzwungen).
+
+**Fläche aus FreeCAD:** `getFaceBSplineInJcs()` wandelt die Fläche per
+`GeomConvert::SurfaceToBSplineSurface` in eine B-Spline-Fläche, vorher auf die UV-Grenzen der
+Fläche beschnitten (Ebenen und Zylinder sind sonst unendlich). Löcher und krumme Ränder
+(getrimmte Flächen) werden nicht berücksichtigt; am Rand der UV-Fläche bleibt der Fußpunkt am
+Rand stehen.
+
+**Konvergenz (was nötig war, siehe JOURNAL 2026-10-18):**
+1. *Hüllkurven-Korrektur der zweiten Ableitungen.* Der Kontaktpunkt ist ein Minimum über den
+   Kurvenparameter t. Die eingefrorenen zweiten Ableitungen gehören zu einem festen Materialpunkt
+   und machten das Drehen des Rades um die eigene Achse künstlich steif (Lösung kroch in
+   0,003er-Schritten). Korrektur: `+ λ·(J_rᵀ H_D J_r − g gᵀ / f_tt)` mit H_D = Hesse-Matrix des
+   Abstandsfeldes von I (zweite Fundamentalform, im Abstand d: κ/(1 − dκ)), g = Ableitung von
+   df/dt nach den Euler-Parametern und f_tt exakt (nicht per Differenzenquotient, die Terme heben
+   sich fast auf und werden mit großem λ multipliziert). Gewichtet mit exp(−(d/L)²), L = 5 % der
+   Größe von J: exakt am Kontakt, weit weg wie vorher.
+2. *Kontaktpunkt exakt:* Goldener Schnitt plus Newton-Schritte auf df/dt = 0.
+3. *Aufsetzen vor dem Lagelösen* (`setDownOnContact()` in `TangentJoints.cpp`): Hängt ein Teil
+   nur an diesem Kontakt, wird es vor der ersten Iteration entlang der Normalen um −d verschoben
+   („Rad auf die Fläche setzen“). PosIC hält die Teile möglichst nah an der Startlage und
+   gewichtet 1 mm Weg etwa wie 1 rad Drehung (1e6). Aus 20 mm Abstand kippte und drehte es die
+   Kurve deshalb lieber, λ wuchs auf ~1e7, und die Iteration irrte umher (je nach Pivotwahl
+   anders, daher FreeCAD ≠ Nachrechnung). Teile mit weiteren Gelenken bleiben, wo sie sind.
+
+**Tests:**
+- Solver: `standalone-check/solver-tests/test_tangent_contacts.cpp`. Flächenauswertung und
+  Projektion, Punkt auf ebener/gewölbter Fläche (Solve + Ziehen), Rad über/unter Ebene und über
+  der Beule (auch gekippt mit versetztem Marker), Rad an zusätzlicher senkrechter
+  Zylinderführung (kein Aufsetzen, die Korrekturen allein), Kreis rollt um Kreis (Mittenabstand 25),
+  Kreis auf Welle, ASMT-Speichern/Einlesen aller drei Arten. Gemessen wird unabhängig vom
+  Gelenk (Abtastung + Verfeinerung).
+- FreeCAD: `standalone-check/kinematic-tests/test_tangent_surface_curve_flat` (7 Fälle:
+  Vertex/Beule, Rad über/unter Beule, Rad auf Quader-Deckfläche, Rad an Wellenkurve,
+  Referenzen vertauscht, Speichern/Laden), gemessen per OCC `distToShape` und Seitenprüfung.
+
+**Offen:**
+- Simulation lehnt Tangent weiterhin ab (Krümmungsterme für Geschwindigkeit/Beschleunigung
+  fehlen).
+- Getrimmte Flächen (Löcher, Ränder) und Flächen aus mehreren Patches: nur die eine Fläche,
+  UV-Rechteck.
+- Fläche an Fläche (Nocken mit Flächenkontakt) und Kontakt an mehreren Stellen gleichzeitig.
+- `PointOnSurface` nutzt die Korrekturen aus 1. noch nicht (bisher nicht nötig).
+- GUI-Abnahme durch den Nutzer.
