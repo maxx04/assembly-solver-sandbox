@@ -90,6 +90,13 @@ struct JointRef
     std::string nestingPrefix;
 };
 
+// Starre Gruppe (RigidGroupJoint) samt Verschachtelungspfad, wie JointRef.
+struct RigidGroupRef
+{
+    App::DocumentObject* group = nullptr;
+    std::string nestingPrefix;
+};
+
 // Kleine, gemeinsame Hilfsfunktion fuer alle Aufrufer, die (noch) nur die reine Joint-Liste
 // brauchen (Reihenfolge/Inhalt identisch zu getJoints()s vorherigem Rueckgabetyp) - haelt den
 // Migrationsschritt-3-Diff an den meisten Aufrufstellen auf eine einzige Zeile begrenzt.
@@ -273,7 +280,14 @@ public:
         const std::string& nestingPrefix = std::string()
     );
     std::vector<App::DocumentObject*> getGroundedJoints();
-    std::vector<App::DocumentObject*> getRigidGroups();
+    // fixMembers=false: Mitgliederliste nur pruefen, nie bereinigen (fuer starre Gruppen aus
+    // Unterbaugruppen, deren Dokument von aussen nicht veraendert werden darf).
+    std::vector<App::DocumentObject*> getRigidGroups(bool fixMembers = true);
+    // FCPROJECT-PATCH (2026-10-20, starre Gruppe ueber Baugruppengrenze): starre Gruppen dieser
+    // Baugruppe und - wie getJoints() die Gelenke - rekursiv aller flexibel eingebauten
+    // Unterbaugruppen, je mit nestingPrefix. Eine starr eingebaute Unterbaugruppe ist ohnehin EIN
+    // Koerper, ihre inneren Gruppen zaehlen nicht.
+    std::vector<RigidGroupRef> getRigidGroupInstances(const std::string& nestingPrefix = std::string());
     std::vector<App::DocumentObject*> getJointsOfObj(App::DocumentObject* obj);
     // FCPROJECT-PATCH (2026-09-20, "BG25 Slider-Drag beide Instanzen" - siehe
     // todo-bg25-slider-drag-two-instances): Rueckgabetyp von vector<DocumentObject*> auf
@@ -304,8 +318,12 @@ public:
     // Kontexts dieser Ebene, siehe Kommentar in der Implementierung. 'ignoredNestedRoots'
     // (optional) bekommt die verschachtelten Erdungen, die im Kontext dieser Ebene ignoriert
     // werden, jeweils mit der massgeblichen Erdung ihres Clusters (nur fuer die Meldung in solve()).
+    // propagateRigid=false (2026-10-20): Erdung nicht ueber die starren Gruppen DIESER Ebene
+    // verteilen - fuer die Abfrage durch eine einbauende Baugruppe, die selbst ueber ihre (auch
+    // die verschachtelten) Gruppen verteilt.
     std::unordered_set<App::DocumentObject*> getGroundedParts(
-        std::vector<std::pair<App::DocumentObject*, App::DocumentObject*>>* ignoredNestedRoots = nullptr
+        std::vector<std::pair<App::DocumentObject*, App::DocumentObject*>>* ignoredNestedRoots = nullptr,
+        bool propagateRigid = true
     );
     std::unordered_set<App::DocumentObject*> fixGroundedParts();
     void fixGroundedPart(App::DocumentObject* obj, Base::Placement& plc, std::string& jointName);
@@ -348,6 +366,9 @@ public:
     // 2026-09-03 unbedingt eingebaut) nicht mehr in jedem preDrag()-Mausereignis unbedingt
     // laufen. Default false, kein bestehender Aufrufer muss angepasst werden.
     bool isPartConnected(App::DocumentObject* part, bool verboseLog = false);
+    // Kanonische Teile (canonicalizeForMbD()), die von der Erdung aus ueber Gelenke und starre
+    // Gruppen erreichbar sind - einmal berechnet fuer viele Abfragen (preDrag()).
+    std::unordered_set<App::DocumentObject*> getConnectedPartSet();
     // FCPROJECT-PATCH (2026-10-04): Erreichbarkeit von 'part' aus einer VORGEGEBENEN Erdung, mit
     // ausgeblendeten Joints - ohne Joints zu deaktivieren (siehe isJointConnectingPartToGround()).
     bool isPartConnectedExcluding(

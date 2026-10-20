@@ -199,6 +199,10 @@ public:
         const std::string& nestingPrefix
     );
 
+    // Mitglied einer starren Gruppe (RigidGroupJoint) aus einer flexiblen Unterbaugruppe,
+    // nestingPrefix wie bei getRigidGroupInstances()/getJoints().
+    IdentityHandle resolveRigidMember(App::DocumentObject* member, const std::string& nestingPrefix);
+
     SolverHandle resolveForSolver(const IdentityHandle& h);
     UiHandle resolveForUi(const IdentityHandle& h);
 
@@ -274,6 +278,8 @@ public:
 
 private:
     void ensureJointEdgesBuilt();
+    // Adress-Walk von resolveJointRef() ("Prefix.Objekt[.Element]" ab rootAssembly).
+    IdentityHandle resolveAddress(const std::string& fullAddress);
 
     AssemblyObject* rootAssembly;
     // FCPROJECT-PATCH (2026-10-14): Pfad-Index fuer die Lebensdauer dieses Graphen (siehe

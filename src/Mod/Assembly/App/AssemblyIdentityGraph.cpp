@@ -679,7 +679,30 @@ IdentityHandle IdentityGraph::resolveJointRef(
     if (!localSub.empty()) {
         fullAddress += "." + localSub;
     }
+    return resolveAddress(fullAddress);
+}
 
+// FCPROJECT-PATCH (2026-10-20, starre Gruppe ueber Baugruppengrenze): Mitglied einer
+// RigidGroupJoint, die in einer flexiblen Unterbaugruppe liegt (nestingPrefix wie bei
+// getJoints()), aufgeloest wie eine Joint-Referenz auf dieses Objekt. Ohne Prefix wie bisher
+// resolveObject().
+IdentityHandle IdentityGraph::resolveRigidMember(
+    App::DocumentObject* member,
+    const std::string& nestingPrefix
+)
+{
+    if (!member || !member->getNameInDocument()) {
+        return {};
+    }
+    if (nestingPrefix.empty()) {
+        return resolveObject(member);
+    }
+    IdentityHandle handle = resolveAddress(nestingPrefix + member->getNameInDocument());
+    return handle.templateObj ? handle : resolveObject(member);
+}
+
+IdentityHandle IdentityGraph::resolveAddress(const std::string& fullAddress)
+{
     const auto names = Base::Tools::splitSubName(fullAddress);
     if (names.empty()) {
         return {};
@@ -1422,7 +1445,8 @@ void emitClusterTree(
     int& clusterCounter,
     const std::function<void(std::string&, int)>& emitNodeLine,
     const std::function<void(std::string&, AssemblyLink*)>& emitClusterLabel,
-    const std::unordered_map<int, int>& rigidGroupOfNode
+    const std::unordered_map<int, int>& rigidGroupOfNode,
+    const std::unordered_map<int, int>& explicitGroupOfNode
 )
 {
     // Nutzerklarstellung 2026-09-21: "Label" (FreeCADs Label-Property, bei mehrfach eingefuegten
@@ -1444,7 +1468,7 @@ void emitClusterTree(
         out += "    fontname=\"sans-serif Bold\";\n";
         out += "    style=\"dashed,bold\";\n";
         out += "    penwidth=2;\n";
-        emitClusterTree(out, child, clusterCounter, emitNodeLine, emitClusterLabel, rigidGroupOfNode);
+        emitClusterTree(out, child, clusterCounter, emitNodeLine, emitClusterLabel, rigidGroupOfNode, explicitGroupOfNode);
         out += "  }\n";
     }
 
@@ -1479,12 +1503,50 @@ void emitClusterTree(
         // Fassung): DOT vererbt ein auf einem umschliessenden Cluster gesetztes 'label' an
         // verschachtelte Kind-Cluster - explizites 'label="";' bleibt noetig, sonst rendert
         // Graphviz die AssemblyLink-Beschriftung der AEUSSEREN Umrahmung hier zusaetzlich.
+        // FCPROJECT-PATCH (2026-10-20, Nutzerauftrag): explizite starre Gruppen
+        // (RigidGroupJoint, im Solver EIN Koerper - auch aus flexiblen Unterbaugruppen) bekommen
+        // innerhalb davon einen eigenen blauen Rahmen; reine Fixed-Ketten bleiben gruen. Besteht
+        // der gruene Rahmen nur aus einer einzigen starren Gruppe, entfaellt er.
+        std::unordered_map<int, std::vector<int>> byExplicitGroup;
+        std::vector<int> notExplicit;
+        for (int id : ids) {
+            auto ex = explicitGroupOfNode.find(id);
+            if (ex != explicitGroupOfNode.end()) {
+                byExplicitGroup[ex->second].push_back(id);
+            }
+            else {
+                notExplicit.push_back(id);
+            }
+        }
+        auto emitBlue = [&](const std::vector<int>& members) {
+            out += "  subgraph cluster_" + std::to_string(clusterCounter++) + " {\n";
+            out += "    label=\"\";\n";
+            out += "    style=solid;\n";
+            out += "    color=\"#1971c2\";\n";
+            out += "    penwidth=4;\n";
+            for (int id : members) {
+                emitNodeLine(out, id);
+            }
+            out += "  }\n";
+        };
+        if (notExplicit.empty() && byExplicitGroup.size() == 1) {
+            emitBlue(ids);
+            continue;
+        }
         out += "  subgraph cluster_" + std::to_string(clusterCounter++) + " {\n";
         out += "    label=\"\";\n";
         out += "    style=solid;\n";
         out += "    color=\"#2d6a4f\";\n";
         out += "    penwidth=4;\n";
-        for (int id : ids) {
+        for (auto& [explicitId, members] : byExplicitGroup) {
+            (void)explicitId;
+            if (members.size() < 2) {
+                notExplicit.insert(notExplicit.end(), members.begin(), members.end());
+                continue;
+            }
+            emitBlue(members);
+        }
+        for (int id : notExplicit) {
             emitNodeLine(out, id);
         }
         out += "  }\n";
@@ -1538,27 +1600,29 @@ std::string IdentityGraph::exportDot()
             rigidDsu.unite(nodeIdFor(edge.a), nodeIdFor(edge.b));
         }
     }
-    for (auto* rigidGroupObj : rootAssembly->getRigidGroups()) {
-        if (!rigidGroupObj) {
-            continue;
-        }
-        auto* prop = dynamic_cast<App::PropertyLinkList*>(
-            rigidGroupObj->getPropertyByName("ObjectsToRigidGroup")
-        );
+    // Explizite starre Gruppen getrennt merken (blauer Rahmen in emitClusterTree()), seit
+    // 2026-10-20 auch die aus flexibel eingebauten Unterbaugruppen (wie im Solver,
+    // rebuildRigidClusters()).
+    std::vector<std::vector<int>> explicitGroups;
+    for (const auto& groupRef : rootAssembly->getRigidGroupInstances()) {
+        auto* prop = groupRef.group ? dynamic_cast<App::PropertyLinkList*>(
+                         groupRef.group->getPropertyByName("ObjectsToRigidGroup")
+                     )
+                                    : nullptr;
         if (!prop) {
             continue;
         }
-        auto members = prop->getValues();
         std::vector<int> memberNodeIds;
-        for (auto* member : members) {
+        for (auto* member : prop->getValues()) {
             if (!member) {
                 continue;
             }
-            memberNodeIds.push_back(nodeIdFor(resolveObject(member)));
+            memberNodeIds.push_back(nodeIdFor(resolveRigidMember(member, groupRef.nestingPrefix)));
         }
         for (std::size_t i = 1; i < memberNodeIds.size(); ++i) {
             rigidDsu.unite(memberNodeIds[0], memberNodeIds[i]);
         }
+        explicitGroups.push_back(std::move(memberNodeIds));
     }
 
     // Nach ALLEN Unions (inkl. der von getRigidGroups() ggf. neu registrierten Knoten) nach
@@ -1582,6 +1646,19 @@ std::string IdentityGraph::exportDot()
         for (int id : ids) {
             rigidGroupOfNode[id] = groupId;
         }
+    }
+    // Explizite Gruppen, die sich ueber gemeinsame Mitglieder beruehren, als eine zaehlen.
+    DisjointSet explicitDsu;
+    std::unordered_set<int> explicitMembers;
+    for (const auto& group : explicitGroups) {
+        for (int id : group) {
+            explicitMembers.insert(id);
+            explicitDsu.unite(group.front(), id);
+        }
+    }
+    std::unordered_map<int, int> explicitGroupOfNode;
+    for (int id : explicitMembers) {
+        explicitGroupOfNode[id] = explicitDsu.find(id);
     }
 
     std::string out;
@@ -1788,7 +1865,7 @@ std::string IdentityGraph::exportDot()
     out += "    penwidth=5;\n";
     out += "    color=\"#495057\";\n";
     int clusterCounter = 0;
-    emitClusterTree(out, clusterRoot, clusterCounter, emitNodeLine, emitClusterLabel, rigidGroupOfNode);
+    emitClusterTree(out, clusterRoot, clusterCounter, emitNodeLine, emitClusterLabel, rigidGroupOfNode, explicitGroupOfNode);
     out += "  }\n";
 
     // Nutzerklarstellung 2026-09-21 (siehe Kommentar oben bei den Cluster-Labels): Kanten-Label
@@ -2064,20 +2141,18 @@ std::string IdentityGraph::verifyAgainstAsmt()
     for (const auto& h : allHandles) {
         dsu.find(h);
     }
-    for (auto* rigidGroupObj : rootAssembly->getRigidGroups()) {
-        if (!rigidGroupObj) {
-            continue;
-        }
-        auto* prop = dynamic_cast<App::PropertyLinkList*>(
-            rigidGroupObj->getPropertyByName("ObjectsToRigidGroup")
-        );
+    for (const auto& groupRef : rootAssembly->getRigidGroupInstances()) {
+        auto* prop = groupRef.group ? dynamic_cast<App::PropertyLinkList*>(
+                         groupRef.group->getPropertyByName("ObjectsToRigidGroup")
+                     )
+                                    : nullptr;
         if (!prop) {
             continue;
         }
         std::vector<IdentityHandle> memberHandles;
         for (auto* member : prop->getValues()) {
             if (member) {
-                memberHandles.push_back(resolveObject(member));
+                memberHandles.push_back(resolveRigidMember(member, groupRef.nestingPrefix));
             }
         }
         for (std::size_t i = 1; i < memberHandles.size(); ++i) {

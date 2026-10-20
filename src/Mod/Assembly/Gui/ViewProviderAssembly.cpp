@@ -719,8 +719,13 @@ bool ViewProviderAssembly::tryMouseMove(const SbVec2s& cursorPos, Gui::View3DInv
         );
         bool solveOnMove = hGrp->GetBool("SolveOnMove", true);
         // HACK: Re-solve assembly to update rigid groups while dragging.
+        // FCPROJECT-PATCH (2026-10-20, Zieh-Latenz BG22): der volle Solve nur noch im Modus ohne
+        // Zieh-Solver (TranslationNoSolve). doDragStep() fuehrt starre Gruppen selbst mit (ein
+        // Solver-Koerper, setNewPlacements() schreibt alle Mitglieder, siehe
+        // test_nested_rigid_group_flex). Seit die Gruppe des Motors (BG112) in BG22 mitlaeuft,
+        // loeste sonst jede Mausbewegung am Z-Schlitten die ganze BG22 (~1 s, Ansicht sprang).
         if (solveOnMove && (dragMode != DragMode::TranslationNoSolve || forceSolveOnMoveForRigid)) {
-            if (forceSolveOnMoveForRigid) {
+            if (forceSolveOnMoveForRigid && dragMode == DragMode::TranslationNoSolve) {
                 assemblyPart->solve();
             }
             else {

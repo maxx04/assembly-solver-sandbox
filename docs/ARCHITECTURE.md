@@ -882,6 +882,39 @@ Graphen).
 **Wirkung (BG22):** Zieh-Start headless 1,6 s → 0,48 s, Solve 0,73 s → 0,54 s, in der GUI laut
 Nutzer etwa 50 % schneller.
 
+### 4.4 Starre Gruppen über die Baugruppengrenze (2026-10-20)
+
+Anlass: BG112 (Motor, flexibel) in BG22. Die 21 Gehäuseteile hängen in BG112 nur über eine
+starre Gruppe (`RigidGroupJoint`) zusammen; in BG22 lief beim Ziehen nur das per Fixed
+angebundene Teil mit. Ursache: `getRigidGroups()` las nur die Gelenkgruppe der aktiven Baugruppe.
+
+- **Einsammeln:** `getRigidGroupInstances()` liefert die Gruppen dieser Baugruppe und - wie
+  `getJoints()` die Gelenke - rekursiv aller flexibel eingebauten Unterbaugruppen, je mit
+  `nestingPrefix` (`RigidGroupRef`). Starr eingebaute Unterbaugruppen sind ohnehin ein Körper.
+  Fremde Dokumente werden dabei nicht verändert (`getRigidGroups(fixMembers=false)`).
+- **Abbilden:** `IdentityGraph::resolveRigidMember()` löst ein Mitglied über dieselbe Adresse
+  wie eine Gelenk-Referenz auf (`resolveAddress()`, aus `resolveJointRef()` herausgezogen);
+  `rebuildRigidClusters()` vereinigt die daraus materialisierten Solver-Schlüssel (Instanz im
+  aktiven Kontext, also die Spiegel - Originale bleiben unberührt).
+- **Körper:** der Gruppen-Zweig in `getMbDData()` rechnet in Weltkoordinaten
+  (`containerChainPlacement()`), Versätze relativ zum Körperursprung, auch wenn der
+  Repräsentant schon gebündelt ist.
+- **Erdung:** die Unterbaugruppe liefert der einbauenden Ebene nur ihre echten Erdungswurzeln
+  (`getGroundedParts(nullptr, propagateRigid=false)`); verteilt wird auf der einbauenden Ebene über
+  deren Gruppen. Die Kontext-Auflösung („angebunden → innere Erdung ignorieren") zählt
+  Gruppenmitgliedschaft als Verbindung. Vorher galt in BG22 der ganze Motor als geerdet.
+- **Ziehen:** `addConnectedFixedParts()` nimmt beim Bündeln die ganze Gruppe eines per Fixed
+  angebundenen Teils in den Körper auf (vorher riss die Gruppe auseinander und ordnete sich neu an).
+- **Diagramm:** explizite starre Gruppen (ein Solver-Körper) haben einen blauen Rahmen, reine
+  Fixed-Ketten weiter den grünen; die ASMT-Gegenkontrolle zählt die verschachtelten Gruppen mit.
+- Test: `test_nested_rigid_group_flex` (Vanilla verliert die Gruppe schon beim Lösen).
+- **Zieh-Latenz (Folge, 2026-10-20):** der Z-Schlitten zieht jetzt 27 statt 5 Teile. (1)
+  `preDrag()` prüfte die Erreichbarkeit je Teil (`isPartConnected()` baute Erdung, Gelenkliste und
+  Traversierung jedes Mal neu) - jetzt einmal über `getConnectedPartSet()` in einem gemeinsamen
+  IdentityGraph (Zieh-Start 1,26 s -> 0,60 s). (2) `ViewProviderAssembly::tryMouseMove()` löste
+  bei einem Mitglied einer starren Gruppe pro Mausbewegung die ganze Baugruppe (Vanilla-„HACK“,
+  ~1 s, Ansicht sprang) - jetzt nur noch im Modus `TranslationNoSolve`, sonst `doDragStep()`.
+
 ## 5. "Adressieren statt Kopieren" - Migrationsstatus
 
 Ursprungskonzept: [JOURNAL.md](JOURNAL.md), Abschnitt "Fix-Konzept: Adressieren statt Kopieren".

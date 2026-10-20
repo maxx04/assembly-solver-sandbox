@@ -1084,8 +1084,25 @@ bool AssemblyObject::requiresRigidSolveForMove(const std::vector<App::DocumentOb
 void AssemblyObject::preDrag(std::vector<App::DocumentObject*> dragParts)
 {
     bundleFixed = true;
-    bool hasUnconnectedDragPart = std::ranges::any_of(dragParts, [this](App::DocumentObject* part) {
-        return part && !isPartConnected(part);
+    // FCPROJECT-PATCH (2026-10-20, Zieh-Start-Latenz): Erreichbarkeit EINMAL fuer alle gezogenen
+    // Teile statt isPartConnected() je Teil - jede Abfrage baute Erdung, Gelenkliste und
+    // Traversierung neu auf. Seit der Motor (BG112) in BG22 als starre Gruppe mitlaeuft, zieht
+    // der Z-Schlitten 27 statt 5 Teile; der Zieh-Start wurde dadurch spuerbar langsamer.
+    std::unordered_set<App::DocumentObject*> connectedDragParts;
+    {
+        ScopedIdentityGraph graphScope(this, scopedGraph);
+        const auto connectedParts = getConnectedPartSet();
+        for (auto* part : dragParts) {
+            if (part && connectedParts.contains(canonicalizeForMbD(part))) {
+                connectedDragParts.insert(part);
+            }
+        }
+    }
+    auto isConnected = [&](App::DocumentObject* part) {
+        return connectedDragParts.contains(part);
+    };
+    bool hasUnconnectedDragPart = std::ranges::any_of(dragParts, [&](App::DocumentObject* part) {
+        return part && !isConnected(part);
     });
 
     if (hasUnconnectedDragPart) {
@@ -1111,7 +1128,7 @@ void AssemblyObject::preDrag(std::vector<App::DocumentObject*> dragParts)
         // During ungrounded island dragging, prepareMbdForIslandDrag seeds the MBD system from
         // the dragged parts, so objectPartMap is the source of truth instead.
         // - Active rigid-cluster members are solver-connected through the shared MbD part.
-        if (!isPartConnected(part) && (!objectPartMap.contains(part) || !isRigidClustered)) {
+        if (!isConnected(part) && (!objectPartMap.contains(part) || !isRigidClustered)) {
             continue;
         }
 
@@ -1503,26 +1520,36 @@ void AssemblyObject::rebuildRigidClusters()
         }
     };
 
-    for (auto* const rigidGroup : getRigidGroups()) {
-        if (!rigidGroup) {
-            continue;
-        }
-
-        auto* const prop = dynamic_cast<App::PropertyLinkList*>(
-            rigidGroup->getPropertyByName("ObjectsToRigidGroup")
-        );
+    // FCPROJECT-PATCH (2026-10-20, starre Gruppe ueber Baugruppengrenze, BG112 in BG22): auch
+    // die starren Gruppen flexibel eingebauter Unterbaugruppen, Mitglieder ueber den
+    // IdentityGraph auf dieselben Solver-Schluessel abgebildet wie Gelenk-Referenzen (Instanz im
+    // aktiven Kontext). Vorher las dies nur die eigene Gelenkgruppe: im Kontext von BG22 hing vom
+    // Motor (BG112, 21 Teile in einer starren Gruppe) nur das per Gelenk angebundene Teil.
+    std::optional<IdentityGraph> ownGraph;
+    IdentityGraph& graph = scopedGraph ? *scopedGraph : ownGraph.emplace(this);
+    for (const auto& groupRef : getRigidGroupInstances()) {
+        auto* const prop = groupRef.group ? dynamic_cast<App::PropertyLinkList*>(
+                               groupRef.group->getPropertyByName("ObjectsToRigidGroup")
+                           )
+                                          : nullptr;
         if (!prop) {
             continue;
         }
 
-        const auto members = prop->getValues();
-        if (members.size() < 2) {
+        std::vector<App::DocumentObject*> keys;
+        for (auto* const member : prop->getValues()) {
+            IdentityHandle handle = graph.resolveRigidMember(member, groupRef.nestingPrefix);
+            if (auto* key = handle.templateObj ? graph.materializeForObjectPartMap(handle) : nullptr) {
+                keys.push_back(key);
+            }
+        }
+        if (keys.size() < 2) {
             continue;
         }
 
-        auto* const first = members.front();
-        for (auto* const member : members | std::views::drop(1)) {
-            unite(first, member);
+        auto* const first = keys.front();
+        for (auto* const key : keys | std::views::drop(1)) {
+            unite(first, key);
         }
     }
 
@@ -2515,7 +2542,7 @@ std::vector<App::DocumentObject*> AssemblyObject::getGroundedJoints()
     return joints;
 }
 
-std::vector<App::DocumentObject*> AssemblyObject::getRigidGroups()
+std::vector<App::DocumentObject*> AssemblyObject::getRigidGroups(bool fixMembers)
 {
     std::vector<App::DocumentObject*> rigid_groups {};
 
@@ -2566,7 +2593,7 @@ std::vector<App::DocumentObject*> AssemblyObject::getRigidGroups()
                 continue;
             }
 
-            if (validMembers.size() != rawMembers.size()) {
+            if (fixMembers && validMembers.size() != rawMembers.size()) {
                 prop->setValue(validMembers);
             }
 
@@ -2575,6 +2602,29 @@ std::vector<App::DocumentObject*> AssemblyObject::getRigidGroups()
     }
 
     return rigid_groups;
+}
+
+std::vector<RigidGroupRef> AssemblyObject::getRigidGroupInstances(const std::string& nestingPrefix)
+{
+    std::vector<RigidGroupRef> groups;
+    for (auto* group : getRigidGroups(/*fixMembers=*/nestingPrefix.empty())) {
+        groups.push_back({group, nestingPrefix});
+    }
+    // Rekursion wie in getJoints(): nur flexible Unterbaugruppen.
+    for (auto* assembly : getSubAssemblies()) {
+        if (!assembly || assembly->isRigid()) {
+            continue;
+        }
+        AssemblyObject* nestedAssembly = assembly->getLinkedAssembly();
+        if (!nestedAssembly || nestedAssembly == this) {
+            continue;
+        }
+        auto nested = nestedAssembly->getRigidGroupInstances(
+            nestingPrefix + assembly->getNameInDocument() + "."
+        );
+        groups.insert(groups.end(), nested.begin(), nested.end());
+    }
+    return groups;
 }
 
 std::vector<App::DocumentObject*> AssemblyObject::getJointsOfObj(App::DocumentObject* obj)
@@ -2707,7 +2757,8 @@ App::DocumentObject* findInstanceUnder(
 }  // namespace
 
 std::unordered_set<App::DocumentObject*> AssemblyObject::getGroundedParts(
-    std::vector<std::pair<App::DocumentObject*, App::DocumentObject*>>* ignoredNestedRoots
+    std::vector<std::pair<App::DocumentObject*, App::DocumentObject*>>* ignoredNestedRoots,
+    bool propagateRigid
 )
 {
     std::unordered_set<App::DocumentObject*> groundedSet;
@@ -2858,7 +2909,12 @@ std::unordered_set<App::DocumentObject*> AssemblyObject::getGroundedParts(
         // sichtbar als minimales, aber bei jedem Solve weiterdriftendes Zittern.
         App::DocumentObject* nestedOrigin = nestedAssembly->Origin.getValue();
         bool hasOwnGround = false;
-        for (auto* g : nestedAssembly->getGroundedParts()) {
+        // FCPROJECT-PATCH (2026-10-20, starre Gruppe ueber Baugruppengrenze): nur die echten
+        // Erdungswurzeln der Unterbaugruppe, nicht ueber deren starre Gruppen verteilt - sonst
+        // galten im Kontext von BG22 alle 21 Teile des Motors (BG112) als eigene Erdungen,
+        // obwohl die eine echte Wurzel wegen der Anbindung ignoriert wird. Verteilt wird unten
+        // ueber die Gruppen dieser Ebene (rigidMembersByRep, inkl. verschachtelter Gruppen).
+        for (auto* g : nestedAssembly->getGroundedParts(nullptr, /*propagateRigid=*/false)) {
             if (g && g != nestedOrigin) {
                 nestedCandidates.push_back({assembly, subIndex, g});
                 hasOwnGround = true;
@@ -2961,6 +3017,15 @@ std::unordered_set<App::DocumentObject*> AssemblyObject::getGroundedParts(
                 bodyEdges.emplace_back(a, b);
             }
         }
+        // Mitglieder einer starren Gruppe sind ebenso verbunden (gleiche Solver-Schluessel, siehe
+        // rebuildRigidClusters()).
+        for (const auto& [rep, members] : rigidMembersByRep) {
+            for (auto* member : members) {
+                if (member && member != rep) {
+                    bodyEdges.emplace_back(rep, member);
+                }
+            }
+        }
 
         std::vector<int> clusterOf(roots.size(), -1);
         for (std::size_t i = 0; i < roots.size(); ++i) {
@@ -3025,6 +3090,9 @@ std::unordered_set<App::DocumentObject*> AssemblyObject::getGroundedParts(
     }
 
     // Propagate grounding through active rigid clusters.
+    if (!propagateRigid) {
+        return groundedSet;
+    }
     std::vector<App::DocumentObject*> groundedSnapshot(groundedSet.begin(), groundedSet.end());
     for (auto* groundedObj : groundedSnapshot) {
         if (!groundedObj) {
@@ -3520,7 +3588,30 @@ bool AssemblyObject::isPartConnected(App::DocumentObject* obj, bool verboseLog)
     // Richtung ziehen (genau das vom Nutzer beobachtete Symptom, trotz korrekt aufgeloestem
     // getMovingPartFromSel()-Ergebnis).
     App::DocumentObject* canonicalObj = canonicalizeForMbD(obj);
+    const auto connected = getConnectedPartSet();
 
+    if (verboseLog) {
+        std::string names;
+        for (auto* part : connected) {
+            if (!names.empty()) {
+                names += ", ";
+            }
+            names += part->getFullName();
+        }
+        Base::Console().log(
+            "FCPROJECT-DEBUG isPartConnected: obj='{}' canonicalObj='{}' -> connectedParts=[{}] -> {}\n",
+            obj->getFullName().c_str(),
+            canonicalObj ? canonicalObj->getFullName().c_str() : "<null>",
+            names.c_str(),
+            connected.contains(canonicalObj) ? "TRUE" : "FALSE"
+        );
+    }
+    return connected.contains(canonicalObj);
+}
+
+std::unordered_set<App::DocumentObject*> AssemblyObject::getConnectedPartSet()
+{
+    ScopedIdentityGraph graphScope(this, scopedGraph);
     auto groundedObjs = getGroundedParts();
     // FCPROJECT-PATCH (Mehrfachinstanz-Fix): direkt der
     // JointRef-Vektor statt extractJointObjects() - traverseAndMarkConnectedParts() braucht das
@@ -3549,42 +3640,13 @@ bool AssemblyObject::isPartConnected(App::DocumentObject* obj, bool verboseLog)
         traverseAndMarkConnectedParts(groundedObj, connectedParts, joints);
     }
 
-    // FCPROJECT-PATCH (Teilschritt 3.1b): der Drag-Pfad aus der urspruenglichen Befund-3-Diagnose
-    // ist inzwischen nachvollzogen (siehe Kommentar oben an canonicalizeForMbD()) - Logs bleiben
-    // fuer kuenftige Diagnosen erhalten, laufen aber nur noch hinter verboseLog, da
-    // isPartConnected() auch aus dem preDrag()-Heisspfad heraus pro Mausereignis aufgerufen wird.
-    if (verboseLog) {
-        std::string names;
-        for (auto& objRef : connectedParts) {
-            if (!objRef.obj) {
-                continue;
-            }
-            if (!names.empty()) {
-                names += ", ";
-            }
-            names += objRef.obj->getFullName();
-        }
-        Base::Console().log(
-            "FCPROJECT-DEBUG isPartConnected: obj='{}' canonicalObj='{}' -> connectedParts=[{}]\n",
-            obj->getFullName().c_str(),
-            canonicalObj ? canonicalObj->getFullName().c_str() : "<null>",
-            names.c_str()
-        );
-    }
-
+    std::unordered_set<App::DocumentObject*> result;
     for (auto& objRef : connectedParts) {
-        if (canonicalObj == objRef.obj) {
-            if (verboseLog) {
-                Base::Console().log("FCPROJECT-DEBUG isPartConnected: -> TRUE\n");
-            }
-            return true;
+        if (objRef.obj) {
+            result.insert(objRef.obj);
         }
     }
-
-    if (verboseLog) {
-        Base::Console().log("FCPROJECT-DEBUG isPartConnected: -> FALSE\n");
-    }
-    return false;
+    return result;
 }
 
 std::string AssemblyObject::exportIdentityGraphDot()
@@ -4808,18 +4870,34 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
 
     // Associate objects that belong to an active rigid cluster.
     if (auto* rep = getRigidRepresentative(part)) {
-        Base::Placement repPlc = getPlacementFromProp(rep, "Placement");
+        // FCPROJECT-PATCH (2026-10-20, starre Gruppe ueber Baugruppengrenze): Mitglieder einer
+        // Gruppe aus einer flexiblen Unterbaugruppe liegen in deren Container, ihre Placement ist
+        // relativ dazu. Koerper und Versaetze deshalb in Weltkoordinaten (Container-Kette wie im
+        // normalen Pfad unten), setNewPlacements() rechnet ueber containerChainPlc zurueck. Fuer
+        // Gruppen dieser Baugruppe selbst ist die Kette Identity, also unveraendert.
+        std::optional<IdentityGraph> ownGraph;
+        IdentityGraph& graph = scopedGraph ? *scopedGraph : ownGraph.emplace(this);
+        auto worldOf = [&](App::DocumentObject* obj, Base::Placement& chain) {
+            chain = graph.containerChainPlacement(obj);
+            return chain * getPlacementFromProp(obj, "Placement");
+        };
+        Base::Placement repChain;
+        Base::Placement repWorld = worldOf(rep, repChain);
 
         std::shared_ptr<ASMTPart> mbdPart;
+        // Liegt der Repraesentant schon mit Versatz in einem (gebuendelten) Koerper, beziehen
+        // sich die Mitglieder auf dessen Ursprung: Koerper = repWorld * offset^-1.
+        Base::Placement bodyWorld = repWorld;
         const auto repMapped = objectPartMap.find(rep);
         if (repMapped != objectPartMap.end()) {
             mbdPart = repMapped->second.part;
+            bodyWorld = repWorld * repMapped->second.offsetPlc.inverse();
         }
         else {
             std::string repName = rep->getFullName();
-            mbdPart = makeMbdPart(repName, repPlc);
+            mbdPart = makeMbdPart(repName, repWorld);
             mbdAssembly->addPart(mbdPart);
-            objectPartMap[rep] = {mbdPart, Base::Placement()};
+            objectPartMap[rep] = {mbdPart, Base::Placement(), repChain};
         }
 
         if (const auto* members = getRigidMembers(rep)) {
@@ -4828,8 +4906,9 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
                     continue;
                 }
 
-                Base::Placement memberPlc = getPlacementFromProp(member, "Placement");
-                objectPartMap[member] = {mbdPart, repPlc.inverse() * memberPlc};
+                Base::Placement memberChain;
+                Base::Placement memberWorld = worldOf(member, memberChain);
+                objectPartMap[member] = {mbdPart, bodyWorld.inverse() * memberWorld, memberChain};
             }
         }
 
@@ -4964,8 +5043,29 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
                         joint->getFullName().c_str()
                     );
 
-                    // Recursively call for partToAdd
-                    self(partToAdd, self);
+                    // FCPROJECT-PATCH (2026-10-20, starre Gruppe ueber Baugruppengrenze, BG22):
+                    // gehoert partToAdd zu einer starren Gruppe, kommt die ganze Gruppe in diesen
+                    // Koerper - sonst steckte das per Fixed angebundene Teil (Motor-Teil 091 am
+                    // Spindelhalter) im gebuendelten Koerper und der Rest der Gruppe blieb ein
+                    // eigener, loser Koerper, der sich beim Ziehen neu anordnete.
+                    std::vector<App::DocumentObject*> added {partToAdd};
+                    if (const auto* members = getRigidMembers(partToAdd)) {
+                        for (auto* member : *members) {
+                            if (!member || objectPartMap.find(member) != objectPartMap.end()) {
+                                continue;
+                            }
+                            Base::Placement memberChain = graph.containerChainPlacement(member);
+                            Base::Placement memberWorld
+                                = memberChain * getPlacementFromProp(member, "Placement");
+                            objectPartMap[member] = {mbdPart, plc.inverse() * memberWorld, memberChain};
+                            added.push_back(member);
+                        }
+                    }
+
+                    // Recursively call for partToAdd (and the rest of its rigid group)
+                    for (auto* addedPart : added) {
+                        self(addedPart, self);
+                    }
                 }
             }
         };

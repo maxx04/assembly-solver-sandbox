@@ -1,9 +1,9 @@
 diff --git a/src/Mod/Assembly/App/AssemblyIdentityGraph.cpp b/src/Mod/Assembly/App/AssemblyIdentityGraph.cpp
 new file mode 100644
-index 00000000000..aff75184c93
+index 00000000000..47def4aba5b
 --- /dev/null
 +++ b/src/Mod/Assembly/App/AssemblyIdentityGraph.cpp
-@@ -0,0 +1,2127 @@
+@@ -0,0 +1,2202 @@
 +// SPDX-License-Identifier: LGPL-2.1-or-later
 +/****************************************************************************
 + *                                                                          *
@@ -685,7 +685,30 @@ index 00000000000..aff75184c93
 +    if (!localSub.empty()) {
 +        fullAddress += "." + localSub;
 +    }
++    return resolveAddress(fullAddress);
++}
 +
++// FCPROJECT-PATCH (2026-10-20, starre Gruppe ueber Baugruppengrenze): Mitglied einer
++// RigidGroupJoint, die in einer flexiblen Unterbaugruppe liegt (nestingPrefix wie bei
++// getJoints()), aufgeloest wie eine Joint-Referenz auf dieses Objekt. Ohne Prefix wie bisher
++// resolveObject().
++IdentityHandle IdentityGraph::resolveRigidMember(
++    App::DocumentObject* member,
++    const std::string& nestingPrefix
++)
++{
++    if (!member || !member->getNameInDocument()) {
++        return {};
++    }
++    if (nestingPrefix.empty()) {
++        return resolveObject(member);
++    }
++    IdentityHandle handle = resolveAddress(nestingPrefix + member->getNameInDocument());
++    return handle.templateObj ? handle : resolveObject(member);
++}
++
++IdentityHandle IdentityGraph::resolveAddress(const std::string& fullAddress)
++{
 +    const auto names = Base::Tools::splitSubName(fullAddress);
 +    if (names.empty()) {
 +        return {};
@@ -1428,7 +1451,8 @@ index 00000000000..aff75184c93
 +    int& clusterCounter,
 +    const std::function<void(std::string&, int)>& emitNodeLine,
 +    const std::function<void(std::string&, AssemblyLink*)>& emitClusterLabel,
-+    const std::unordered_map<int, int>& rigidGroupOfNode
++    const std::unordered_map<int, int>& rigidGroupOfNode,
++    const std::unordered_map<int, int>& explicitGroupOfNode
 +)
 +{
 +    // Nutzerklarstellung 2026-09-21: "Label" (FreeCADs Label-Property, bei mehrfach eingefuegten
@@ -1450,7 +1474,7 @@ index 00000000000..aff75184c93
 +        out += "    fontname=\"sans-serif Bold\";\n";
 +        out += "    style=\"dashed,bold\";\n";
 +        out += "    penwidth=2;\n";
-+        emitClusterTree(out, child, clusterCounter, emitNodeLine, emitClusterLabel, rigidGroupOfNode);
++        emitClusterTree(out, child, clusterCounter, emitNodeLine, emitClusterLabel, rigidGroupOfNode, explicitGroupOfNode);
 +        out += "  }\n";
 +    }
 +
@@ -1485,12 +1509,50 @@ index 00000000000..aff75184c93
 +        // Fassung): DOT vererbt ein auf einem umschliessenden Cluster gesetztes 'label' an
 +        // verschachtelte Kind-Cluster - explizites 'label="";' bleibt noetig, sonst rendert
 +        // Graphviz die AssemblyLink-Beschriftung der AEUSSEREN Umrahmung hier zusaetzlich.
++        // FCPROJECT-PATCH (2026-10-20, Nutzerauftrag): explizite starre Gruppen
++        // (RigidGroupJoint, im Solver EIN Koerper - auch aus flexiblen Unterbaugruppen) bekommen
++        // innerhalb davon einen eigenen blauen Rahmen; reine Fixed-Ketten bleiben gruen. Besteht
++        // der gruene Rahmen nur aus einer einzigen starren Gruppe, entfaellt er.
++        std::unordered_map<int, std::vector<int>> byExplicitGroup;
++        std::vector<int> notExplicit;
++        for (int id : ids) {
++            auto ex = explicitGroupOfNode.find(id);
++            if (ex != explicitGroupOfNode.end()) {
++                byExplicitGroup[ex->second].push_back(id);
++            }
++            else {
++                notExplicit.push_back(id);
++            }
++        }
++        auto emitBlue = [&](const std::vector<int>& members) {
++            out += "  subgraph cluster_" + std::to_string(clusterCounter++) + " {\n";
++            out += "    label=\"\";\n";
++            out += "    style=solid;\n";
++            out += "    color=\"#1971c2\";\n";
++            out += "    penwidth=4;\n";
++            for (int id : members) {
++                emitNodeLine(out, id);
++            }
++            out += "  }\n";
++        };
++        if (notExplicit.empty() && byExplicitGroup.size() == 1) {
++            emitBlue(ids);
++            continue;
++        }
 +        out += "  subgraph cluster_" + std::to_string(clusterCounter++) + " {\n";
 +        out += "    label=\"\";\n";
 +        out += "    style=solid;\n";
 +        out += "    color=\"#2d6a4f\";\n";
 +        out += "    penwidth=4;\n";
-+        for (int id : ids) {
++        for (auto& [explicitId, members] : byExplicitGroup) {
++            (void)explicitId;
++            if (members.size() < 2) {
++                notExplicit.insert(notExplicit.end(), members.begin(), members.end());
++                continue;
++            }
++            emitBlue(members);
++        }
++        for (int id : notExplicit) {
 +            emitNodeLine(out, id);
 +        }
 +        out += "  }\n";
@@ -1544,27 +1606,29 @@ index 00000000000..aff75184c93
 +            rigidDsu.unite(nodeIdFor(edge.a), nodeIdFor(edge.b));
 +        }
 +    }
-+    for (auto* rigidGroupObj : rootAssembly->getRigidGroups()) {
-+        if (!rigidGroupObj) {
-+            continue;
-+        }
-+        auto* prop = dynamic_cast<App::PropertyLinkList*>(
-+            rigidGroupObj->getPropertyByName("ObjectsToRigidGroup")
-+        );
++    // Explizite starre Gruppen getrennt merken (blauer Rahmen in emitClusterTree()), seit
++    // 2026-10-20 auch die aus flexibel eingebauten Unterbaugruppen (wie im Solver,
++    // rebuildRigidClusters()).
++    std::vector<std::vector<int>> explicitGroups;
++    for (const auto& groupRef : rootAssembly->getRigidGroupInstances()) {
++        auto* prop = groupRef.group ? dynamic_cast<App::PropertyLinkList*>(
++                         groupRef.group->getPropertyByName("ObjectsToRigidGroup")
++                     )
++                                    : nullptr;
 +        if (!prop) {
 +            continue;
 +        }
-+        auto members = prop->getValues();
 +        std::vector<int> memberNodeIds;
-+        for (auto* member : members) {
++        for (auto* member : prop->getValues()) {
 +            if (!member) {
 +                continue;
 +            }
-+            memberNodeIds.push_back(nodeIdFor(resolveObject(member)));
++            memberNodeIds.push_back(nodeIdFor(resolveRigidMember(member, groupRef.nestingPrefix)));
 +        }
 +        for (std::size_t i = 1; i < memberNodeIds.size(); ++i) {
 +            rigidDsu.unite(memberNodeIds[0], memberNodeIds[i]);
 +        }
++        explicitGroups.push_back(std::move(memberNodeIds));
 +    }
 +
 +    // Nach ALLEN Unions (inkl. der von getRigidGroups() ggf. neu registrierten Knoten) nach
@@ -1588,6 +1652,19 @@ index 00000000000..aff75184c93
 +        for (int id : ids) {
 +            rigidGroupOfNode[id] = groupId;
 +        }
++    }
++    // Explizite Gruppen, die sich ueber gemeinsame Mitglieder beruehren, als eine zaehlen.
++    DisjointSet explicitDsu;
++    std::unordered_set<int> explicitMembers;
++    for (const auto& group : explicitGroups) {
++        for (int id : group) {
++            explicitMembers.insert(id);
++            explicitDsu.unite(group.front(), id);
++        }
++    }
++    std::unordered_map<int, int> explicitGroupOfNode;
++    for (int id : explicitMembers) {
++        explicitGroupOfNode[id] = explicitDsu.find(id);
 +    }
 +
 +    std::string out;
@@ -1794,7 +1871,7 @@ index 00000000000..aff75184c93
 +    out += "    penwidth=5;\n";
 +    out += "    color=\"#495057\";\n";
 +    int clusterCounter = 0;
-+    emitClusterTree(out, clusterRoot, clusterCounter, emitNodeLine, emitClusterLabel, rigidGroupOfNode);
++    emitClusterTree(out, clusterRoot, clusterCounter, emitNodeLine, emitClusterLabel, rigidGroupOfNode, explicitGroupOfNode);
 +    out += "  }\n";
 +
 +    // Nutzerklarstellung 2026-09-21 (siehe Kommentar oben bei den Cluster-Labels): Kanten-Label
@@ -2070,20 +2147,18 @@ index 00000000000..aff75184c93
 +    for (const auto& h : allHandles) {
 +        dsu.find(h);
 +    }
-+    for (auto* rigidGroupObj : rootAssembly->getRigidGroups()) {
-+        if (!rigidGroupObj) {
-+            continue;
-+        }
-+        auto* prop = dynamic_cast<App::PropertyLinkList*>(
-+            rigidGroupObj->getPropertyByName("ObjectsToRigidGroup")
-+        );
++    for (const auto& groupRef : rootAssembly->getRigidGroupInstances()) {
++        auto* prop = groupRef.group ? dynamic_cast<App::PropertyLinkList*>(
++                         groupRef.group->getPropertyByName("ObjectsToRigidGroup")
++                     )
++                                    : nullptr;
 +        if (!prop) {
 +            continue;
 +        }
 +        std::vector<IdentityHandle> memberHandles;
 +        for (auto* member : prop->getValues()) {
 +            if (member) {
-+                memberHandles.push_back(resolveObject(member));
++                memberHandles.push_back(resolveRigidMember(member, groupRef.nestingPrefix));
 +            }
 +        }
 +        for (std::size_t i = 1; i < memberHandles.size(); ++i) {
@@ -2133,10 +2208,10 @@ index 00000000000..aff75184c93
 +}  // namespace Assembly
 diff --git a/src/Mod/Assembly/App/AssemblyIdentityGraph.h b/src/Mod/Assembly/App/AssemblyIdentityGraph.h
 new file mode 100644
-index 00000000000..0fc5454582b
+index 00000000000..c44380d9475
 --- /dev/null
 +++ b/src/Mod/Assembly/App/AssemblyIdentityGraph.h
-@@ -0,0 +1,292 @@
+@@ -0,0 +1,298 @@
 +// SPDX-License-Identifier: LGPL-2.1-or-later
 +/****************************************************************************
 + *                                                                          *
@@ -2338,6 +2413,10 @@ index 00000000000..0fc5454582b
 +        const std::string& nestingPrefix
 +    );
 +
++    // Mitglied einer starren Gruppe (RigidGroupJoint) aus einer flexiblen Unterbaugruppe,
++    // nestingPrefix wie bei getRigidGroupInstances()/getJoints().
++    IdentityHandle resolveRigidMember(App::DocumentObject* member, const std::string& nestingPrefix);
++
 +    SolverHandle resolveForSolver(const IdentityHandle& h);
 +    UiHandle resolveForUi(const IdentityHandle& h);
 +
@@ -2413,6 +2492,8 @@ index 00000000000..0fc5454582b
 +
 +private:
 +    void ensureJointEdgesBuilt();
++    // Adress-Walk von resolveJointRef() ("Prefix.Objekt[.Element]" ab rootAssembly).
++    IdentityHandle resolveAddress(const std::string& fullAddress);
 +
 +    AssemblyObject* rootAssembly;
 +    // FCPROJECT-PATCH (2026-10-14): Pfad-Index fuer die Lebensdauer dieses Graphen (siehe
@@ -3261,7 +3342,7 @@ index 7ca17b4e3be..6e38571c0c2 100644
  
      return ret;
 diff --git a/src/Mod/Assembly/App/AssemblyObject.cpp b/src/Mod/Assembly/App/AssemblyObject.cpp
-index 2f5b06dacf6..38764b58bc1 100644
+index 2f5b06dacf6..229f439cabd 100644
 --- a/src/Mod/Assembly/App/AssemblyObject.cpp
 +++ b/src/Mod/Assembly/App/AssemblyObject.cpp
 @@ -24,6 +24,10 @@
@@ -3911,7 +3992,7 @@ index 2f5b06dacf6..38764b58bc1 100644
 +                lastConflictingJoints.push_back(objName);
 +            }
 +        }
-     }
++    }
 +    // Gruppen kommen nur aus einer frischen Suche; sonst die gemerkten.
 +    const auto& freshGroups = mbdAssembly->mbdSystem->redundancyGroups;
 +    const auto groupSource = freshGroups.empty() ? currentRedundancyCache().groups : freshGroups;
@@ -3929,8 +4010,8 @@ index 2f5b06dacf6..38764b58bc1 100644
 +        currentRedundancyCache().removed = removedNow;
 +        currentRedundancyCache().conflicts = conflictsNow;
 +        currentRedundancyCache().groups = groupSource;
-+    }
-+
+     }
+ 
 +    std::set<std::vector<App::DocumentObject*>> reportedGroups;
 +    for (const auto& [removed, members] : groupSource) {
 +        if (conflictingSolverNames.count(removed) == 0) {
@@ -3985,7 +4066,7 @@ index 2f5b06dacf6..38764b58bc1 100644
 +    // lastRedundantJoints/lastRedundancyStates.
 +    lastHasConflict = !lastConflictingJoints.empty();
 +    lastHasRedundancies = lastHasConflict;
- 
++
      signalSolverUpdate();
  }
  
@@ -4024,7 +4105,35 @@ index 2f5b06dacf6..38764b58bc1 100644
      redrawJointPlacements(jointDocs);
      return 0;
  }
-@@ -557,6 +1097,7 @@ void AssemblyObject::preDrag(std::vector<App::DocumentObject*> dragParts)
+@@ -544,8 +1084,25 @@ bool AssemblyObject::requiresRigidSolveForMove(const std::vector<App::DocumentOb
+ void AssemblyObject::preDrag(std::vector<App::DocumentObject*> dragParts)
+ {
+     bundleFixed = true;
+-    bool hasUnconnectedDragPart = std::ranges::any_of(dragParts, [this](App::DocumentObject* part) {
+-        return part && !isPartConnected(part);
++    // FCPROJECT-PATCH (2026-10-20, Zieh-Start-Latenz): Erreichbarkeit EINMAL fuer alle gezogenen
++    // Teile statt isPartConnected() je Teil - jede Abfrage baute Erdung, Gelenkliste und
++    // Traversierung neu auf. Seit der Motor (BG112) in BG22 als starre Gruppe mitlaeuft, zieht
++    // der Z-Schlitten 27 statt 5 Teile; der Zieh-Start wurde dadurch spuerbar langsamer.
++    std::unordered_set<App::DocumentObject*> connectedDragParts;
++    {
++        ScopedIdentityGraph graphScope(this, scopedGraph);
++        const auto connectedParts = getConnectedPartSet();
++        for (auto* part : dragParts) {
++            if (part && connectedParts.contains(canonicalizeForMbD(part))) {
++                connectedDragParts.insert(part);
++            }
++        }
++    }
++    auto isConnected = [&](App::DocumentObject* part) {
++        return connectedDragParts.contains(part);
++    };
++    bool hasUnconnectedDragPart = std::ranges::any_of(dragParts, [&](App::DocumentObject* part) {
++        return part && !isConnected(part);
+     });
+ 
+     if (hasUnconnectedDragPart) {
+@@ -557,6 +1114,7 @@ void AssemblyObject::preDrag(std::vector<App::DocumentObject*> dragParts)
      bundleFixed = false;
  
      draggedParts.clear();
@@ -4032,7 +4141,16 @@ index 2f5b06dacf6..38764b58bc1 100644
  
      for (auto part : dragParts) {
          const bool isRigidClustered = getRigidRepresentative(part) != nullptr;
-@@ -591,11 +1132,33 @@ void AssemblyObject::preDrag(std::vector<App::DocumentObject*> dragParts)
+@@ -570,7 +1128,7 @@ void AssemblyObject::preDrag(std::vector<App::DocumentObject*> dragParts)
+         // During ungrounded island dragging, prepareMbdForIslandDrag seeds the MBD system from
+         // the dragged parts, so objectPartMap is the source of truth instead.
+         // - Active rigid-cluster members are solver-connected through the shared MbD part.
+-        if (!isPartConnected(part) && (!objectPartMap.contains(part) || !isRigidClustered)) {
++        if (!isConnected(part) && (!objectPartMap.contains(part) || !isRigidClustered)) {
+             continue;
+         }
+ 
+@@ -591,11 +1149,33 @@ void AssemblyObject::preDrag(std::vector<App::DocumentObject*> dragParts)
              // If not identity, then it's a bundled object. Some bundled objects may
              // have identity placement if they have the same position as the main object of
              // the bundle. But they're not going to be a problem.
@@ -4066,7 +4184,7 @@ index 2f5b06dacf6..38764b58bc1 100644
  }
  
  void AssemblyObject::prepareMbdForIslandDrag(std::vector<App::DocumentObject*> dragParts)
-@@ -614,7 +1177,7 @@ void AssemblyObject::prepareMbdForIslandDrag(std::vector<App::DocumentObject*> d
+@@ -614,7 +1194,7 @@ void AssemblyObject::prepareMbdForIslandDrag(std::vector<App::DocumentObject*> d
          }
      }
  
@@ -4075,7 +4193,7 @@ index 2f5b06dacf6..38764b58bc1 100644
      removeUnconnectedJoints(joints, seededParts);
      if (joints.empty()) {
          objectPartMap.clear();
-@@ -624,8 +1187,17 @@ void AssemblyObject::prepareMbdForIslandDrag(std::vector<App::DocumentObject*> d
+@@ -624,8 +1204,17 @@ void AssemblyObject::prepareMbdForIslandDrag(std::vector<App::DocumentObject*> d
  
      jointParts(joints);
  
@@ -4093,7 +4211,7 @@ index 2f5b06dacf6..38764b58bc1 100644
      }
      catch (const std::exception& e) {
          FC_ERR("Drag setup failed: " << e.what());
-@@ -650,6 +1222,9 @@ void AssemblyObject::doDragStep()
+@@ -650,6 +1239,9 @@ void AssemblyObject::doDragStep()
      try {
          std::vector<std::shared_ptr<MbD::ASMTPart>> dragMbdParts;
          std::unordered_set<ASMTPart*> seenMbdParts;
@@ -4103,7 +4221,7 @@ index 2f5b06dacf6..38764b58bc1 100644
  
          for (auto& part : draggedParts) {
              if (!part) {
-@@ -668,34 +1243,77 @@ void AssemblyObject::doDragStep()
+@@ -668,34 +1260,77 @@ void AssemblyObject::doDragStep()
              dragMbdParts.push_back(mbdPart);
  
              Base::Placement plc = getPlacementFromProp(part, "Placement");
@@ -4197,7 +4315,7 @@ index 2f5b06dacf6..38764b58bc1 100644
              for (auto* joint : joints) {
                  if (joint->Visibility.getValue()) {
                      // redraw only the moving joint as its quite slow as its python code.
-@@ -743,6 +1361,23 @@ bool AssemblyObject::validateNewPlacements()
+@@ -743,6 +1378,23 @@ bool AssemblyObject::validateNewPlacements()
                      newPlacement = newPlacement * it->second.offsetPlc;
                  }
  
@@ -4221,7 +4339,7 @@ index 2f5b06dacf6..38764b58bc1 100644
                  if (!oldPlc.isSame(newPlacement, Precision::Confusion())) {
                      Base::Console().warning(
                          "Assembly : Ignoring bad solve, a grounded object ({}) moved.\n",
-@@ -831,9 +1466,9 @@ void AssemblyObject::exportAsASMT(std::string fileName)
+@@ -831,9 +1483,9 @@ void AssemblyObject::exportAsASMT(std::string fileName)
      rebuildRigidClusters();
      fixGroundedParts();
  
@@ -4233,7 +4351,57 @@ index 2f5b06dacf6..38764b58bc1 100644
  
      mbdAssembly->outputFile(fileName);
  }
-@@ -1058,8 +1693,49 @@ bool isFinitePlacement(const Base::Placement& plc)
+@@ -868,26 +1520,36 @@ void AssemblyObject::rebuildRigidClusters()
+         }
+     };
+ 
+-    for (auto* const rigidGroup : getRigidGroups()) {
+-        if (!rigidGroup) {
+-            continue;
+-        }
+-
+-        auto* const prop = dynamic_cast<App::PropertyLinkList*>(
+-            rigidGroup->getPropertyByName("ObjectsToRigidGroup")
+-        );
++    // FCPROJECT-PATCH (2026-10-20, starre Gruppe ueber Baugruppengrenze, BG112 in BG22): auch
++    // die starren Gruppen flexibel eingebauter Unterbaugruppen, Mitglieder ueber den
++    // IdentityGraph auf dieselben Solver-Schluessel abgebildet wie Gelenk-Referenzen (Instanz im
++    // aktiven Kontext). Vorher las dies nur die eigene Gelenkgruppe: im Kontext von BG22 hing vom
++    // Motor (BG112, 21 Teile in einer starren Gruppe) nur das per Gelenk angebundene Teil.
++    std::optional<IdentityGraph> ownGraph;
++    IdentityGraph& graph = scopedGraph ? *scopedGraph : ownGraph.emplace(this);
++    for (const auto& groupRef : getRigidGroupInstances()) {
++        auto* const prop = groupRef.group ? dynamic_cast<App::PropertyLinkList*>(
++                               groupRef.group->getPropertyByName("ObjectsToRigidGroup")
++                           )
++                                          : nullptr;
+         if (!prop) {
+             continue;
+         }
+ 
+-        const auto members = prop->getValues();
+-        if (members.size() < 2) {
++        std::vector<App::DocumentObject*> keys;
++        for (auto* const member : prop->getValues()) {
++            IdentityHandle handle = graph.resolveRigidMember(member, groupRef.nestingPrefix);
++            if (auto* key = handle.templateObj ? graph.materializeForObjectPartMap(handle) : nullptr) {
++                keys.push_back(key);
++            }
++        }
++        if (keys.size() < 2) {
+             continue;
+         }
+ 
+-        auto* const first = members.front();
+-        for (auto* const member : members | std::views::drop(1)) {
+-            unite(first, member);
++        auto* const first = keys.front();
++        for (auto* const key : keys | std::views::drop(1)) {
++            unite(first, key);
+         }
+     }
+ 
+@@ -1058,8 +1720,49 @@ bool isFinitePlacement(const Base::Placement& plc)
  }
  }  // namespace
  
@@ -4283,7 +4451,7 @@ index 2f5b06dacf6..38764b58bc1 100644
      for (auto& pair : objectPartMap) {
          App::DocumentObject* obj = pair.first;
          std::shared_ptr<ASMTPart> mbdPart = pair.second.part;
-@@ -1079,6 +1755,23 @@ void AssemblyObject::setNewPlacements()
+@@ -1079,6 +1782,23 @@ void AssemblyObject::setNewPlacements()
          if (!pair.second.offsetPlc.isIdentity()) {
              newPlacement = newPlacement * pair.second.offsetPlc;
          }
@@ -4307,7 +4475,7 @@ index 2f5b06dacf6..38764b58bc1 100644
          if (!isFinitePlacement(newPlacement)) {
              Base::Console().warning(
                  "Assembly: solver returned a non-finite placement for '{}'; keeping its "
-@@ -1087,11 +1780,174 @@ void AssemblyObject::setNewPlacements()
+@@ -1087,11 +1807,174 @@ void AssemblyObject::setNewPlacements()
              );
              continue;
          }
@@ -4483,7 +4651,7 @@ index 2f5b06dacf6..38764b58bc1 100644
  }
  
  void AssemblyObject::redrawJointPlacements(std::vector<App::DocumentObject*> joints)
-@@ -1142,8 +1998,153 @@ void AssemblyObject::redrawJointPlacement(App::DocumentObject* joint)
+@@ -1142,8 +2025,153 @@ void AssemblyObject::redrawJointPlacement(App::DocumentObject* joint)
      }
  }
  
@@ -4637,7 +4805,7 @@ index 2f5b06dacf6..38764b58bc1 100644
      auto assembly = CREATE<ASMTAssembly>::With();
      assembly->externalSystem->freecadAssemblyObject = this;
      assembly->setName("OndselAssembly");
-@@ -1159,16 +2160,39 @@ std::shared_ptr<ASMTAssembly> AssemblyObject::makeMbdAssembly()
+@@ -1159,16 +2187,39 @@ std::shared_ptr<ASMTAssembly> AssemblyObject::makeMbdAssembly()
  App::DocumentObject* AssemblyObject::getJointOfPartConnectingToGround(
      App::DocumentObject* part,
      std::string& name,
@@ -4680,7 +4848,7 @@ index 2f5b06dacf6..38764b58bc1 100644
          if (!joint) {
              continue;
          }
-@@ -1177,18 +2201,28 @@ App::DocumentObject* AssemblyObject::getJointOfPartConnectingToGround(
+@@ -1177,18 +2228,28 @@ App::DocumentObject* AssemblyObject::getJointOfPartConnectingToGround(
              continue;
          }
  
@@ -4713,7 +4881,7 @@ index 2f5b06dacf6..38764b58bc1 100644
              return joint;
          }
      }
-@@ -1204,8 +2238,13 @@ App::DocumentObject* AssemblyObject::getJointOfPartForUngroundedDrag(
+@@ -1204,8 +2265,13 @@ App::DocumentObject* AssemblyObject::getJointOfPartForUngroundedDrag(
          return nullptr;
      }
  
@@ -4729,7 +4897,7 @@ index 2f5b06dacf6..38764b58bc1 100644
          if (!joint || !isJointTypeConnecting(joint)) {
              continue;
          }
-@@ -1275,15 +2314,43 @@ ViewGroup* AssemblyObject::getExplodedViewGroup() const
+@@ -1275,15 +2341,43 @@ ViewGroup* AssemblyObject::getExplodedViewGroup() const
      return nullptr;
  }
  
@@ -4775,7 +4943,7 @@ index 2f5b06dacf6..38764b58bc1 100644
      Base::PyGILStateLocker lock;
      for (auto joint : jointGroup->getObjects()) {
          if (!joint) {
-@@ -1291,16 +2358,58 @@ std::vector<App::DocumentObject*> AssemblyObject::getJoints(bool delBadJoints, b
+@@ -1291,16 +2385,58 @@ std::vector<App::DocumentObject*> AssemblyObject::getJoints(bool delBadJoints, b
          }
  
          auto* prop = dynamic_cast<App::PropertyBool*>(joint->getPropertyByName("Suppressed"));
@@ -4834,7 +5002,7 @@ index 2f5b06dacf6..38764b58bc1 100644
              if (delBadJoints) {
                  getDocument()->removeObject(joint->getNameInDocument());
              }
-@@ -1310,16 +2419,71 @@ std::vector<App::DocumentObject*> AssemblyObject::getJoints(bool delBadJoints, b
+@@ -1310,16 +2446,71 @@ std::vector<App::DocumentObject*> AssemblyObject::getJoints(bool delBadJoints, b
          auto proxy = dynamic_cast<App::PropertyPythonObject*>(joint->getPropertyByName("Proxy"));
          if (proxy) {
              if (proxy->getValue().hasAttr("setJointConnectors")) {
@@ -4910,7 +5078,54 @@ index 2f5b06dacf6..38764b58bc1 100644
          }
      }
  
-@@ -1419,7 +2583,7 @@ std::vector<App::DocumentObject*> AssemblyObject::getJointsOfObj(App::DocumentOb
+@@ -1351,7 +2542,7 @@ std::vector<App::DocumentObject*> AssemblyObject::getGroundedJoints()
+     return joints;
+ }
+ 
+-std::vector<App::DocumentObject*> AssemblyObject::getRigidGroups()
++std::vector<App::DocumentObject*> AssemblyObject::getRigidGroups(bool fixMembers)
+ {
+     std::vector<App::DocumentObject*> rigid_groups {};
+ 
+@@ -1402,7 +2593,7 @@ std::vector<App::DocumentObject*> AssemblyObject::getRigidGroups()
+                 continue;
+             }
+ 
+-            if (validMembers.size() != rawMembers.size()) {
++            if (fixMembers && validMembers.size() != rawMembers.size()) {
+                 prop->setValue(validMembers);
+             }
+ 
+@@ -1413,13 +2604,36 @@ std::vector<App::DocumentObject*> AssemblyObject::getRigidGroups()
+     return rigid_groups;
+ }
+ 
++std::vector<RigidGroupRef> AssemblyObject::getRigidGroupInstances(const std::string& nestingPrefix)
++{
++    std::vector<RigidGroupRef> groups;
++    for (auto* group : getRigidGroups(/*fixMembers=*/nestingPrefix.empty())) {
++        groups.push_back({group, nestingPrefix});
++    }
++    // Rekursion wie in getJoints(): nur flexible Unterbaugruppen.
++    for (auto* assembly : getSubAssemblies()) {
++        if (!assembly || assembly->isRigid()) {
++            continue;
++        }
++        AssemblyObject* nestedAssembly = assembly->getLinkedAssembly();
++        if (!nestedAssembly || nestedAssembly == this) {
++            continue;
++        }
++        auto nested = nestedAssembly->getRigidGroupInstances(
++            nestingPrefix + assembly->getNameInDocument() + "."
++        );
++        groups.insert(groups.end(), nested.begin(), nested.end());
++    }
++    return groups;
++}
++
+ std::vector<App::DocumentObject*> AssemblyObject::getJointsOfObj(App::DocumentObject* obj)
+ {
+     if (!obj) {
          return {};
      }
  
@@ -4919,7 +5134,7 @@ index 2f5b06dacf6..38764b58bc1 100644
      std::vector<App::DocumentObject*> jointsOf;
  
      for (auto joint : joints) {
-@@ -1433,26 +2597,118 @@ std::vector<App::DocumentObject*> AssemblyObject::getJointsOfObj(App::DocumentOb
+@@ -1433,26 +2647,119 @@ std::vector<App::DocumentObject*> AssemblyObject::getJointsOfObj(App::DocumentOb
      return jointsOf;
  }
  
@@ -5042,12 +5257,13 @@ index 2f5b06dacf6..38764b58bc1 100644
 +}  // namespace
 +
 +std::unordered_set<App::DocumentObject*> AssemblyObject::getGroundedParts(
-+    std::vector<std::pair<App::DocumentObject*, App::DocumentObject*>>* ignoredNestedRoots
++    std::vector<std::pair<App::DocumentObject*, App::DocumentObject*>>* ignoredNestedRoots,
++    bool propagateRigid
 +)
  {
      std::unordered_set<App::DocumentObject*> groundedSet;
      std::vector<App::DocumentObject*> allParts = getAssemblyComponents(this);
-@@ -1482,8 +2738,291 @@ std::unordered_set<App::DocumentObject*> AssemblyObject::getGroundedParts()
+@@ -1482,10 +2789,310 @@ std::unordered_set<App::DocumentObject*> AssemblyObject::getGroundedParts()
          }
      }
  
@@ -5173,7 +5389,12 @@ index 2f5b06dacf6..38764b58bc1 100644
 +        // sichtbar als minimales, aber bei jedem Solve weiterdriftendes Zittern.
 +        App::DocumentObject* nestedOrigin = nestedAssembly->Origin.getValue();
 +        bool hasOwnGround = false;
-+        for (auto* g : nestedAssembly->getGroundedParts()) {
++        // FCPROJECT-PATCH (2026-10-20, starre Gruppe ueber Baugruppengrenze): nur die echten
++        // Erdungswurzeln der Unterbaugruppe, nicht ueber deren starre Gruppen verteilt - sonst
++        // galten im Kontext von BG22 alle 21 Teile des Motors (BG112) als eigene Erdungen,
++        // obwohl die eine echte Wurzel wegen der Anbindung ignoriert wird. Verteilt wird unten
++        // ueber die Gruppen dieser Ebene (rigidMembersByRep, inkl. verschachtelter Gruppen).
++        for (auto* g : nestedAssembly->getGroundedParts(nullptr, /*propagateRigid=*/false)) {
 +            if (g && g != nestedOrigin) {
 +                nestedCandidates.push_back({assembly, subIndex, g});
 +                hasOwnGround = true;
@@ -5276,6 +5497,15 @@ index 2f5b06dacf6..38764b58bc1 100644
 +                bodyEdges.emplace_back(a, b);
 +            }
 +        }
++        // Mitglieder einer starren Gruppe sind ebenso verbunden (gleiche Solver-Schluessel, siehe
++        // rebuildRigidClusters()).
++        for (const auto& [rep, members] : rigidMembersByRep) {
++            for (auto* member : members) {
++                if (member && member != rep) {
++                    bodyEdges.emplace_back(rep, member);
++                }
++            }
++        }
 +
 +        std::vector<int> clusterOf(roots.size(), -1);
 +        for (std::size_t i = 0; i < roots.size(); ++i) {
@@ -5340,8 +5570,13 @@ index 2f5b06dacf6..38764b58bc1 100644
 +    }
  
      // Propagate grounding through active rigid clusters.
++    if (!propagateRigid) {
++        return groundedSet;
++    }
      std::vector<App::DocumentObject*> groundedSnapshot(groundedSet.begin(), groundedSet.end());
-@@ -1508,14 +3047,69 @@ std::unordered_set<App::DocumentObject*> AssemblyObject::fixGroundedParts()
+     for (auto* groundedObj : groundedSnapshot) {
+         if (!groundedObj) {
+@@ -1508,14 +3115,69 @@ std::unordered_set<App::DocumentObject*> AssemblyObject::fixGroundedParts()
  {
      auto groundedParts = getGroundedParts();
  
@@ -5414,7 +5649,7 @@ index 2f5b06dacf6..38764b58bc1 100644
      }
      return groundedParts;
  }
-@@ -1530,7 +3124,21 @@ void AssemblyObject::fixGroundedPart(App::DocumentObject* obj, Base::Placement&
+@@ -1530,7 +3192,21 @@ void AssemblyObject::fixGroundedPart(App::DocumentObject* obj, Base::Placement&
      auto mbdMarker1 = makeMbdMarker(markerName1, plc);
      mbdAssembly->addMarker(mbdMarker1);
  
@@ -5437,7 +5672,7 @@ index 2f5b06dacf6..38764b58bc1 100644
  
      std::string markerName2 = "FixingMarker";
      Base::Placement basePlc = Base::Placement();
-@@ -1548,13 +3156,23 @@ void AssemblyObject::fixGroundedPart(App::DocumentObject* obj, Base::Placement&
+@@ -1548,13 +3224,23 @@ void AssemblyObject::fixGroundedPart(App::DocumentObject* obj, Base::Placement&
      mbdAssembly->addJoint(mbdJoint);
  }
  
@@ -5463,7 +5698,7 @@ index 2f5b06dacf6..38764b58bc1 100644
      if (!part) {
          return false;
      }
-@@ -1572,31 +3190,17 @@ bool AssemblyObject::isJointConnectingPartToGround(App::DocumentObject* joint, c
+@@ -1572,31 +3258,17 @@ bool AssemblyObject::isJointConnectingPartToGround(App::DocumentObject* joint, c
      }
  
      // to know if a joint is connecting to ground we disable all the other joints
@@ -5504,7 +5739,7 @@ index 2f5b06dacf6..38764b58bc1 100644
  }
  
  bool AssemblyObject::isJointTypeConnecting(App::DocumentObject* joint)
-@@ -1626,60 +3230,156 @@ bool AssemblyObject::isObjInSetOfObjRefs(App::DocumentObject* obj, const std::ve
+@@ -1626,60 +3298,156 @@ bool AssemblyObject::isObjInSetOfObjRefs(App::DocumentObject* obj, const std::ve
  }
  
  void AssemblyObject::removeUnconnectedJoints(
@@ -5665,13 +5900,13 @@ index 2f5b06dacf6..38764b58bc1 100644
 +                }
 +                next.push_back({member, nullptr});
 +            }
-+        }
+         }
 +        for (auto& nextObjRef : next) {
 +            if (!isObjInSetOfObjRefs(nextObjRef.obj, connectedParts)) {
 +                connectedParts.push_back(nextObjRef);
 +                visit(nextObjRef.obj);
 +            }
-         }
++        }
 +    };
 +    if (currentObj) {
 +        visit(currentObj);
@@ -5685,7 +5920,7 @@ index 2f5b06dacf6..38764b58bc1 100644
  )
  {
      if (!part) {
-@@ -1688,13 +3388,21 @@ std::vector<ObjRef> AssemblyObject::getConnectedParts(
+@@ -1688,13 +3456,21 @@ std::vector<ObjRef> AssemblyObject::getConnectedParts(
  
      std::vector<ObjRef> connectedParts;
  
@@ -5710,7 +5945,7 @@ index 2f5b06dacf6..38764b58bc1 100644
  
          if (!obj1 || !obj2) {
              continue;
-@@ -1746,44 +3454,205 @@ bool AssemblyObject::isPartGrounded(App::DocumentObject* obj)
+@@ -1746,44 +3522,199 @@ bool AssemblyObject::isPartGrounded(App::DocumentObject* obj)
      return false;
  }
  
@@ -5781,7 +6016,30 @@ index 2f5b06dacf6..38764b58bc1 100644
 +    // Richtung ziehen (genau das vom Nutzer beobachtete Symptom, trotz korrekt aufgeloestem
 +    // getMovingPartFromSel()-Ergebnis).
 +    App::DocumentObject* canonicalObj = canonicalizeForMbD(obj);
++    const auto connected = getConnectedPartSet();
++
++    if (verboseLog) {
++        std::string names;
++        for (auto* part : connected) {
++            if (!names.empty()) {
++                names += ", ";
++            }
++            names += part->getFullName();
++        }
++        Base::Console().log(
++            "FCPROJECT-DEBUG isPartConnected: obj='{}' canonicalObj='{}' -> connectedParts=[{}] -> {}\n",
++            obj->getFullName().c_str(),
++            canonicalObj ? canonicalObj->getFullName().c_str() : "<null>",
++            names.c_str(),
++            connected.contains(canonicalObj) ? "TRUE" : "FALSE"
++        );
++    }
++    return connected.contains(canonicalObj);
++}
  
++std::unordered_set<App::DocumentObject*> AssemblyObject::getConnectedPartSet()
++{
++    ScopedIdentityGraph graphScope(this, scopedGraph);
      auto groundedObjs = getGroundedParts();
 -    std::vector<App::DocumentObject*> joints = getJoints();
 +    // FCPROJECT-PATCH (Mehrfachinstanz-Fix): direkt der
@@ -5813,50 +6071,18 @@ index 2f5b06dacf6..38764b58bc1 100644
          traverseAndMarkConnectedParts(groundedObj, connectedParts, joints);
      }
  
-+    // FCPROJECT-PATCH (Teilschritt 3.1b): der Drag-Pfad aus der urspruenglichen Befund-3-Diagnose
-+    // ist inzwischen nachvollzogen (siehe Kommentar oben an canonicalizeForMbD()) - Logs bleiben
-+    // fuer kuenftige Diagnosen erhalten, laufen aber nur noch hinter verboseLog, da
-+    // isPartConnected() auch aus dem preDrag()-Heisspfad heraus pro Mausereignis aufgerufen wird.
-+    if (verboseLog) {
-+        std::string names;
-+        for (auto& objRef : connectedParts) {
-+            if (!objRef.obj) {
-+                continue;
-+            }
-+            if (!names.empty()) {
-+                names += ", ";
-+            }
-+            names += objRef.obj->getFullName();
-+        }
-+        Base::Console().log(
-+            "FCPROJECT-DEBUG isPartConnected: obj='{}' canonicalObj='{}' -> connectedParts=[{}]\n",
-+            obj->getFullName().c_str(),
-+            canonicalObj ? canonicalObj->getFullName().c_str() : "<null>",
-+            names.c_str()
-+        );
-+    }
-+
++    std::unordered_set<App::DocumentObject*> result;
      for (auto& objRef : connectedParts) {
 -        if (obj == objRef.obj) {
-+        if (canonicalObj == objRef.obj) {
-+            if (verboseLog) {
-+                Base::Console().log("FCPROJECT-DEBUG isPartConnected: -> TRUE\n");
-+            }
-             return true;
-         }
-     }
- 
-+    if (verboseLog) {
-+        Base::Console().log("FCPROJECT-DEBUG isPartConnected: -> FALSE\n");
++        if (objRef.obj) {
++            result.insert(objRef.obj);
++        }
 +    }
-     return false;
- }
- 
--void AssemblyObject::jointParts(std::vector<App::DocumentObject*> joints)
++    return result;
++}
++
 +std::string AssemblyObject::exportIdentityGraphDot()
- {
--    for (auto* joint : joints) {
--        if (!joint) {
++{
 +    IdentityGraph graph(this);
 +    return graph.exportDot();
 +}
@@ -5904,17 +6130,21 @@ index 2f5b06dacf6..38764b58bc1 100644
 +                    return false;
 +                }
 +            }
-+            return true;
-+        }
-+    }
-+
+             return true;
+         }
+     }
+ 
+-    return false;
 +    // Blatt (oder rigide AssemblyLink, fuer den Solver bereits atomar) - echte Konnektivitaets-
 +    // pruefung.
 +    return !isPartConnected(obj);
-+}
-+
+ }
+ 
+-void AssemblyObject::jointParts(std::vector<App::DocumentObject*> joints)
 +void AssemblyObject::jointParts(const std::vector<JointRef>& joints)
-+{
+ {
+-    for (auto* joint : joints) {
+-        if (!joint) {
 +    for (auto& jr : joints) {
 +        if (!jr.joint) {
              continue;
@@ -5925,7 +6155,7 @@ index 2f5b06dacf6..38764b58bc1 100644
          for (auto& mbdJoint : mbdJoints) {
              mbdAssembly->addJoint(mbdJoint);
          }
-@@ -2050,7 +3919,10 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointDistance(App::DocumentObj
+@@ -2050,7 +3981,10 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointDistance(App::DocumentObj
      }
  }
  
@@ -5937,7 +6167,7 @@ index 2f5b06dacf6..38764b58bc1 100644
  {
      if (!joint) {
          return {};
-@@ -2059,7 +3931,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2059,7 +3993,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
      JointType jointType = getJointType(joint);
  
      std::shared_ptr<ASMTJoint> mbdJoint = makeMbdJointOfType(joint, jointType);
@@ -5946,7 +6176,7 @@ index 2f5b06dacf6..38764b58bc1 100644
          return {};
      }
      if ((jointType == JointType::Gears || jointType == JointType::Belt)
-@@ -2069,17 +3941,20 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2069,17 +4003,20 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
  
      std::string fullMarkerNameI, fullMarkerNameJ;
      if (jointType == JointType::RackPinion) {
@@ -5971,7 +6201,7 @@ index 2f5b06dacf6..38764b58bc1 100644
      mbdJoint->setMarkerI(fullMarkerNameI);
      mbdJoint->setMarkerJ(fullMarkerNameJ);
  
-@@ -2113,10 +3988,15 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2113,10 +4050,15 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
                      minEnabled = maxEnabled;
                      maxEnabled = pMaxEnabled->getValue();
                  }
@@ -5988,7 +6218,7 @@ index 2f5b06dacf6..38764b58bc1 100644
                      limit->setMarkerI(fullMarkerNameI);
                      limit->setMarkerJ(fullMarkerNameJ);
                      limit->settype("=>");
-@@ -2127,7 +4007,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2127,7 +4069,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
  
                  if (maxEnabled) {
                      auto limit2 = ASMTTranslationLimit::With();
@@ -5997,7 +6227,7 @@ index 2f5b06dacf6..38764b58bc1 100644
                      limit2->setMarkerI(fullMarkerNameI);
                      limit2->setMarkerJ(fullMarkerNameJ);
                      limit2->settype("=<");
-@@ -2164,10 +4044,15 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2164,10 +4106,15 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
                      minEnabled = maxEnabled;
                      maxEnabled = pMaxEnabled->getValue();
                  }
@@ -6014,7 +6244,7 @@ index 2f5b06dacf6..38764b58bc1 100644
                      limit->setMarkerI(fullMarkerNameI);
                      limit->setMarkerJ(fullMarkerNameJ);
                      limit->settype("=>");
-@@ -2178,7 +4063,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2178,7 +4125,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
  
                  if (maxEnabled) {
                      auto limit2 = ASMTRotationLimit::With();
@@ -6023,7 +6253,7 @@ index 2f5b06dacf6..38764b58bc1 100644
                      limit2->setMarkerI(fullMarkerNameI);
                      limit2->setMarkerJ(fullMarkerNameJ);
                      limit2->settype("=<");
-@@ -2191,10 +4076,26 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2191,10 +4138,26 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
      }
      std::vector<App::DocumentObject*> done;
  
@@ -6052,7 +6282,7 @@ index 2f5b06dacf6..38764b58bc1 100644
  
                  std::ostringstream out;
                  out.precision(10);
-@@ -2219,7 +4120,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2219,7 +4182,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
              continue;
          }
          App::DocumentObject* motionJoint = pJoint->getValue();
@@ -6061,7 +6291,7 @@ index 2f5b06dacf6..38764b58bc1 100644
              continue;
          }
  
-@@ -2244,7 +4145,8 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2244,7 +4207,8 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
                  continue;
              }
              motionJoint = pJoint->getValue();
@@ -6071,7 +6301,7 @@ index 2f5b06dacf6..38764b58bc1 100644
                  continue;
              }
  
-@@ -2267,7 +4169,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2267,7 +4231,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
              replaceInitialValue(formula2, joint, motionType2);
  
              auto ASMTmotion = CREATE<ASMTGeneralMotion>::With();
@@ -6080,7 +6310,7 @@ index 2f5b06dacf6..38764b58bc1 100644
              ASMTmotion->setMarkerI(fullMarkerNameI);
              ASMTmotion->setMarkerJ(fullMarkerNameJ);
              ASMTmotion->rIJI->atiput(2, motionType == "Angular" ? formula2 : formula);
-@@ -2279,7 +4181,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2279,7 +4243,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
  
          if (motionType == "Angular") {
              auto ASMTmotion = CREATE<ASMTRotationalMotion>::With();
@@ -6089,7 +6319,7 @@ index 2f5b06dacf6..38764b58bc1 100644
              ASMTmotion->setMarkerI(fullMarkerNameI);
              ASMTmotion->setMarkerJ(fullMarkerNameJ);
              ASMTmotion->setRotationZ(formula);
-@@ -2287,7 +4189,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2287,7 +4251,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
          }
          else if (motionType == "Linear") {
              auto ASMTmotion = CREATE<ASMTTranslationalMotion>::With();
@@ -6098,7 +6328,7 @@ index 2f5b06dacf6..38764b58bc1 100644
              ASMTmotion->setMarkerI(fullMarkerNameI);
              ASMTmotion->setMarkerJ(fullMarkerNameJ);
              ASMTmotion->setTranslationZ(formula);
-@@ -2302,10 +4204,18 @@ std::string AssemblyObject::handleOneSideOfJoint(
+@@ -2302,10 +4266,18 @@ std::string AssemblyObject::handleOneSideOfJoint(
      App::DocumentObject* joint,
      const char* propRefName,
      const char* propPlcName,
@@ -6119,7 +6349,7 @@ index 2f5b06dacf6..38764b58bc1 100644
      App::DocumentObject* obj = getObjFromJointRef(joint, propRefName);
  
      if (!part || !obj) {
-@@ -2314,7 +4224,9 @@ std::string AssemblyObject::handleOneSideOfJoint(
+@@ -2314,7 +4286,9 @@ std::string AssemblyObject::handleOneSideOfJoint(
          return "";
      }
  
@@ -6130,7 +6360,7 @@ index 2f5b06dacf6..38764b58bc1 100644
      std::shared_ptr<ASMTPart> mbdPart = data.part;
      Base::Placement plc = getPlacementFromProp(joint, propPlcName);
      // Now we have plc which is the JCS placement, but its relative to the Object, not to the
-@@ -2327,10 +4239,38 @@ std::string AssemblyObject::handleOneSideOfJoint(
+@@ -2327,10 +4301,38 @@ std::string AssemblyObject::handleOneSideOfJoint(
      // This plc adjustment should be necessary only if obj != part. But for some objects like
      // draft links, we can have obj == part and still need to get global placement to adjust
      // by the element placement.
@@ -6171,7 +6401,7 @@ index 2f5b06dacf6..38764b58bc1 100644
      plc = part_global_plc.inverse() * plc;
  
      // check if we need to add an offset in case of bundled parts.
-@@ -2338,7 +4278,7 @@ std::string AssemblyObject::handleOneSideOfJoint(
+@@ -2338,7 +4340,7 @@ std::string AssemblyObject::handleOneSideOfJoint(
          plc = data.offsetPlc * plc;
      }
  
@@ -6180,7 +6410,7 @@ index 2f5b06dacf6..38764b58bc1 100644
      auto mbdMarker = makeMbdMarker(markerNameCopy, plc);
      mbdPart->addMarker(mbdMarker);
  
-@@ -2348,7 +4288,8 @@ std::string AssemblyObject::handleOneSideOfJoint(
+@@ -2348,7 +4350,8 @@ std::string AssemblyObject::handleOneSideOfJoint(
  void AssemblyObject::getRackPinionMarkers(
      App::DocumentObject* joint,
      std::string& markerNameI,
@@ -6190,7 +6420,7 @@ index 2f5b06dacf6..38764b58bc1 100644
  )
  {
      // ASMT rack pinion joint must get the rack as I and pinion as J.
-@@ -2366,7 +4307,12 @@ void AssemblyObject::getRackPinionMarkers(
+@@ -2366,7 +4369,12 @@ void AssemblyObject::getRackPinionMarkers(
          swapJCS(joint);  // make sure that rack is first.
      }
  
@@ -6204,7 +6434,7 @@ index 2f5b06dacf6..38764b58bc1 100644
      App::DocumentObject* obj1 = getObjFromJointRef(joint, "Reference1");
      Base::Placement plc1 = getPlacementFromProp(joint, "Placement1");
  
-@@ -2379,7 +4325,7 @@ void AssemblyObject::getRackPinionMarkers(
+@@ -2379,7 +4387,7 @@ void AssemblyObject::getRackPinionMarkers(
      }
  
      // For the pinion nothing special needed :
@@ -6213,7 +6443,7 @@ index 2f5b06dacf6..38764b58bc1 100644
  
      // For the rack we need to change the placement :
      // make the pinion plc relative to the rack placement.
-@@ -2418,7 +4364,9 @@ void AssemblyObject::getRackPinionMarkers(
+@@ -2418,7 +4426,9 @@ void AssemblyObject::getRackPinionMarkers(
      plc1.setRotation(adjustedRotation);
  
      // Then end of processing similar to handleOneSideOfJoint :
@@ -6224,7 +6454,7 @@ index 2f5b06dacf6..38764b58bc1 100644
      std::shared_ptr<ASMTPart> mbdPart = data1.part;
      if (obj1->getNameInDocument() != part1->getNameInDocument()) {
          plc1 = rack_global_plc * plc1;
-@@ -2431,7 +4379,7 @@ void AssemblyObject::getRackPinionMarkers(
+@@ -2431,7 +4441,7 @@ void AssemblyObject::getRackPinionMarkers(
          plc1 = data1.offsetPlc * plc1;
      }
  
@@ -6233,7 +6463,7 @@ index 2f5b06dacf6..38764b58bc1 100644
      auto mbdMarker = makeMbdMarker(markerName, plc1);
      mbdPart->addMarker(mbdMarker);
  
-@@ -2449,7 +4397,8 @@ int AssemblyObject::slidingPartIndex(App::DocumentObject* joint)
+@@ -2449,7 +4459,8 @@ int AssemblyObject::slidingPartIndex(App::DocumentObject* joint)
      Base::Placement plc2 = getJointSideGlobalPlacement(joint, "Reference2", "Placement2");
  
      int slidingFound = 0;
@@ -6243,7 +6473,7 @@ index 2f5b06dacf6..38764b58bc1 100644
          if (getJointType(jt) == JointType::Slider) {
              App::DocumentObject* jpart1 = getMovingPartFromRef(jt, "Reference1");
              App::DocumentObject* jpart2 = getMovingPartFromRef(jt, "Reference2");
-@@ -2482,31 +4431,375 @@ int AssemblyObject::slidingPartIndex(App::DocumentObject* joint)
+@@ -2482,31 +4493,375 @@ int AssemblyObject::slidingPartIndex(App::DocumentObject* joint)
      return slidingFound;
  }
  
@@ -6626,7 +6856,57 @@ index 2f5b06dacf6..38764b58bc1 100644
      auto it = objectPartMap.find(part);
      if (it != objectPartMap.end()) {
          // part has been associated with an ASMTPart before
-@@ -2548,21 +4841,77 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
+@@ -2515,18 +4870,34 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
+ 
+     // Associate objects that belong to an active rigid cluster.
+     if (auto* rep = getRigidRepresentative(part)) {
+-        Base::Placement repPlc = getPlacementFromProp(rep, "Placement");
++        // FCPROJECT-PATCH (2026-10-20, starre Gruppe ueber Baugruppengrenze): Mitglieder einer
++        // Gruppe aus einer flexiblen Unterbaugruppe liegen in deren Container, ihre Placement ist
++        // relativ dazu. Koerper und Versaetze deshalb in Weltkoordinaten (Container-Kette wie im
++        // normalen Pfad unten), setNewPlacements() rechnet ueber containerChainPlc zurueck. Fuer
++        // Gruppen dieser Baugruppe selbst ist die Kette Identity, also unveraendert.
++        std::optional<IdentityGraph> ownGraph;
++        IdentityGraph& graph = scopedGraph ? *scopedGraph : ownGraph.emplace(this);
++        auto worldOf = [&](App::DocumentObject* obj, Base::Placement& chain) {
++            chain = graph.containerChainPlacement(obj);
++            return chain * getPlacementFromProp(obj, "Placement");
++        };
++        Base::Placement repChain;
++        Base::Placement repWorld = worldOf(rep, repChain);
+ 
+         std::shared_ptr<ASMTPart> mbdPart;
++        // Liegt der Repraesentant schon mit Versatz in einem (gebuendelten) Koerper, beziehen
++        // sich die Mitglieder auf dessen Ursprung: Koerper = repWorld * offset^-1.
++        Base::Placement bodyWorld = repWorld;
+         const auto repMapped = objectPartMap.find(rep);
+         if (repMapped != objectPartMap.end()) {
+             mbdPart = repMapped->second.part;
++            bodyWorld = repWorld * repMapped->second.offsetPlc.inverse();
+         }
+         else {
+             std::string repName = rep->getFullName();
+-            mbdPart = makeMbdPart(repName, repPlc);
++            mbdPart = makeMbdPart(repName, repWorld);
+             mbdAssembly->addPart(mbdPart);
+-            objectPartMap[rep] = {mbdPart, Base::Placement()};
++            objectPartMap[rep] = {mbdPart, Base::Placement(), repChain};
+         }
+ 
+         if (const auto* members = getRigidMembers(rep)) {
+@@ -2535,8 +4906,9 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
+                     continue;
+                 }
+ 
+-                Base::Placement memberPlc = getPlacementFromProp(member, "Placement");
+-                objectPartMap[member] = {mbdPart, repPlc.inverse() * memberPlc};
++                Base::Placement memberChain;
++                Base::Placement memberWorld = worldOf(member, memberChain);
++                objectPartMap[member] = {mbdPart, bodyWorld.inverse() * memberWorld, memberChain};
+             }
+         }
+ 
+@@ -2548,21 +4920,77 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
  
      // part has not been associated with an ASMTPart before
      std::string str = part->getFullName();
@@ -6710,7 +6990,7 @@ index 2f5b06dacf6..38764b58bc1 100644
                      App::DocumentObject* partToAdd = currentPart == part1 ? part2 : part1;
  
                      if (objectPartMap.find(partToAdd) != objectPartMap.end()) {
-@@ -2570,9 +4919,50 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
+@@ -2570,12 +4998,74 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
                          continue;
                      }
  
@@ -6760,10 +7040,36 @@ index 2f5b06dacf6..38764b58bc1 100644
 +                        mbdPart->name.c_str(),
 +                        joint->getFullName().c_str()
 +                    );
++
++                    // FCPROJECT-PATCH (2026-10-20, starre Gruppe ueber Baugruppengrenze, BG22):
++                    // gehoert partToAdd zu einer starren Gruppe, kommt die ganze Gruppe in diesen
++                    // Koerper - sonst steckte das per Fixed angebundene Teil (Motor-Teil 091 am
++                    // Spindelhalter) im gebuendelten Koerper und der Rest der Gruppe blieb ein
++                    // eigener, loser Koerper, der sich beim Ziehen neu anordnete.
++                    std::vector<App::DocumentObject*> added {partToAdd};
++                    if (const auto* members = getRigidMembers(partToAdd)) {
++                        for (auto* member : *members) {
++                            if (!member || objectPartMap.find(member) != objectPartMap.end()) {
++                                continue;
++                            }
++                            Base::Placement memberChain = graph.containerChainPlacement(member);
++                            Base::Placement memberWorld
++                                = memberChain * getPlacementFromProp(member, "Placement");
++                            objectPartMap[member] = {mbdPart, plc.inverse() * memberWorld, memberChain};
++                            added.push_back(member);
++                        }
++                    }
  
-                     // Recursively call for partToAdd
-                     self(partToAdd, self);
-@@ -2585,12 +4975,12 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
+-                    // Recursively call for partToAdd
+-                    self(partToAdd, self);
++                    // Recursively call for partToAdd (and the rest of its rigid group)
++                    for (auto* addedPart : added) {
++                        self(addedPart, self);
++                    }
+                 }
+             }
+         };
+@@ -2585,12 +5075,12 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
      return data;
  }
  
@@ -6778,7 +7084,7 @@ index 2f5b06dacf6..38764b58bc1 100644
  }
  
  std::shared_ptr<ASMTPart> AssemblyObject::makeMbdPart(std::string& name, Base::Placement plc, double mass)
-@@ -2641,32 +5031,96 @@ std::shared_ptr<ASMTMarker> AssemblyObject::makeMbdMarker(std::string& name, Bas
+@@ -2641,32 +5131,96 @@ std::shared_ptr<ASMTMarker> AssemblyObject::makeMbdMarker(std::string& name, Bas
  
  std::vector<ObjRef> AssemblyObject::getDownstreamParts(
      App::DocumentObject* part,
@@ -6880,7 +7186,7 @@ index 2f5b06dacf6..38764b58bc1 100644
      if (joint) {
          setJointActivated(joint, state);
      }
-@@ -2674,6 +5128,18 @@ std::vector<ObjRef> AssemblyObject::getDownstreamParts(
+@@ -2674,6 +5228,18 @@ std::vector<ObjRef> AssemblyObject::getDownstreamParts(
      return downstreamParts;
  }
  
@@ -6899,7 +7205,7 @@ index 2f5b06dacf6..38764b58bc1 100644
  App::DocumentObject* AssemblyObject::getUpstreamMovingPart(
      App::DocumentObject* part,
      App::DocumentObject*& joint,
-@@ -2681,23 +5147,146 @@ App::DocumentObject* AssemblyObject::getUpstreamMovingPart(
+@@ -2681,23 +5247,146 @@ App::DocumentObject* AssemblyObject::getUpstreamMovingPart(
      std::vector<App::DocumentObject*> excludeJoints
  )
  {
@@ -7048,7 +7354,7 @@ index 2f5b06dacf6..38764b58bc1 100644
  double AssemblyObject::getObjMass(App::DocumentObject* obj)
  {
      if (!obj) {
-@@ -2717,22 +5306,129 @@ void AssemblyObject::setObjMasses(std::vector<std::pair<App::DocumentObject*, do
+@@ -2717,22 +5406,129 @@ void AssemblyObject::setObjMasses(std::vector<std::pair<App::DocumentObject*, do
      objMasses = objectMasses;
  }
  
@@ -7188,7 +7494,7 @@ index 2f5b06dacf6..38764b58bc1 100644
  }
  
  void AssemblyObject::ensureIdentityPlacements()
-@@ -2781,6 +5477,30 @@ void AssemblyObject::syncGroundedJoints()
+@@ -2781,6 +5577,30 @@ void AssemblyObject::syncGroundedJoints()
          }
      }
  
@@ -7219,7 +7525,7 @@ index 2f5b06dacf6..38764b58bc1 100644
      std::vector<App::DocumentObject*> allParts = getAssemblyComponents(this);
  
      for (auto part : allParts) {
-@@ -2794,13 +5514,46 @@ void AssemblyObject::syncGroundedJoints()
+@@ -2794,13 +5614,46 @@ void AssemblyObject::syncGroundedJoints()
  
          bool isReadOnly = propPlc->isReadOnly();
          auto it = groundedMap.find(part);
@@ -7269,7 +7575,7 @@ index 2f5b06dacf6..38764b58bc1 100644
                  std::string asmName = getNameInDocument();
                  std::string partName = part->getNameInDocument();
                  std::string code = "import FreeCAD\n"
-@@ -2809,11 +5562,14 @@ void AssemblyObject::syncGroundedJoints()
+@@ -2809,11 +5662,14 @@ void AssemblyObject::syncGroundedJoints()
                                     "    import UtilsAssembly\n"
                                     "    doc = FreeCAD.getDocument('"
                      + docName
@@ -7285,7 +7591,7 @@ index 2f5b06dacf6..38764b58bc1 100644
                      + partName
                      + "')\n"
                        "    jg = UtilsAssembly.getJointGroup(asm)\n"
-@@ -2831,10 +5587,18 @@ void AssemblyObject::syncGroundedJoints()
+@@ -2831,10 +5687,18 @@ void AssemblyObject::syncGroundedJoints()
              catch (...) {
              }
          }
@@ -7309,7 +7615,7 @@ index 2f5b06dacf6..38764b58bc1 100644
  }
  
 diff --git a/src/Mod/Assembly/App/AssemblyObject.h b/src/Mod/Assembly/App/AssemblyObject.h
-index 63bb7168d88..82e232c5c02 100644
+index 63bb7168d88..cf1476f0bec 100644
 --- a/src/Mod/Assembly/App/AssemblyObject.h
 +++ b/src/Mod/Assembly/App/AssemblyObject.h
 @@ -25,7 +25,10 @@
@@ -7331,7 +7637,7 @@ index 63bb7168d88..82e232c5c02 100644
  class ViewGroup;
  enum class JointType;
  
-@@ -72,6 +76,27 @@ struct ObjRef
+@@ -72,6 +76,34 @@ struct ObjRef
      App::PropertyXLinkSub* ref;
  };
  
@@ -7349,6 +7655,13 @@ index 63bb7168d88..82e232c5c02 100644
 +    std::string nestingPrefix;
 +};
 +
++// Starre Gruppe (RigidGroupJoint) samt Verschachtelungspfad, wie JointRef.
++struct RigidGroupRef
++{
++    App::DocumentObject* group = nullptr;
++    std::string nestingPrefix;
++};
++
 +// Kleine, gemeinsame Hilfsfunktion fuer alle Aufrufer, die (noch) nur die reine Joint-Liste
 +// brauchen (Reihenfolge/Inhalt identisch zu getJoints()s vorherigem Rueckgabetyp) - haelt den
 +// Migrationsschritt-3-Diff an den meisten Aufrufstellen auf eine einzige Zeile begrenzt.
@@ -7359,7 +7672,7 @@ index 63bb7168d88..82e232c5c02 100644
  class AssemblyExport AssemblyObject: public App::Part
  {
      PROPERTY_HEADER_WITH_OVERRIDE(Assembly::AssemblyObject);
-@@ -109,6 +134,16 @@ public:
+@@ -109,6 +141,16 @@ public:
  
      Base::Placement getMbdPlacement(std::shared_ptr<MbD::ASMTPart> mbdPart);
      bool validateNewPlacements();
@@ -7376,7 +7689,7 @@ index 63bb7168d88..82e232c5c02 100644
      void setNewPlacements();
      static void redrawJointPlacements(std::vector<App::DocumentObject*> joints);
      static void redrawJointPlacement(App::DocumentObject* joint);
-@@ -126,7 +161,16 @@ public:
+@@ -126,7 +168,16 @@ public:
          Base::Placement plc = Base::Placement(),
          double mass = 1.0
      );
@@ -7394,7 +7707,7 @@ index 63bb7168d88..82e232c5c02 100644
      // To help the solver, during dragging, we are bundling parts connected by a fixed joint.
      // So several assembly components are bundled in a single ASMTPart.
      // So we need to store the plc of each bundled object relative to the bundle origin (first obj
-@@ -135,69 +179,216 @@ public:
+@@ -135,69 +186,230 @@ public:
      {
          std::shared_ptr<MbD::ASMTPart> part;
          Base::Placement offsetPlc;  // This is the offset within the bundled parts
@@ -7498,7 +7811,15 @@ index 63bb7168d88..82e232c5c02 100644
 +        const std::string& nestingPrefix = std::string()
 +    );
      std::vector<App::DocumentObject*> getGroundedJoints();
-     std::vector<App::DocumentObject*> getRigidGroups();
+-    std::vector<App::DocumentObject*> getRigidGroups();
++    // fixMembers=false: Mitgliederliste nur pruefen, nie bereinigen (fuer starre Gruppen aus
++    // Unterbaugruppen, deren Dokument von aussen nicht veraendert werden darf).
++    std::vector<App::DocumentObject*> getRigidGroups(bool fixMembers = true);
++    // FCPROJECT-PATCH (2026-10-20, starre Gruppe ueber Baugruppengrenze): starre Gruppen dieser
++    // Baugruppe und - wie getJoints() die Gelenke - rekursiv aller flexibel eingebauten
++    // Unterbaugruppen, je mit nestingPrefix. Eine starr eingebaute Unterbaugruppe ist ohnehin EIN
++    // Koerper, ihre inneren Gruppen zaehlen nicht.
++    std::vector<RigidGroupRef> getRigidGroupInstances(const std::string& nestingPrefix = std::string());
      std::vector<App::DocumentObject*> getJointsOfObj(App::DocumentObject* obj);
 -    std::vector<App::DocumentObject*> getJointsOfPart(App::DocumentObject* part);
 +    // FCPROJECT-PATCH (2026-09-20, "BG25 Slider-Drag beide Instanzen" - siehe
@@ -7532,8 +7853,12 @@ index 63bb7168d88..82e232c5c02 100644
 +    // Kontexts dieser Ebene, siehe Kommentar in der Implementierung. 'ignoredNestedRoots'
 +    // (optional) bekommt die verschachtelten Erdungen, die im Kontext dieser Ebene ignoriert
 +    // werden, jeweils mit der massgeblichen Erdung ihres Clusters (nur fuer die Meldung in solve()).
++    // propagateRigid=false (2026-10-20): Erdung nicht ueber die starren Gruppen DIESER Ebene
++    // verteilen - fuer die Abfrage durch eine einbauende Baugruppe, die selbst ueber ihre (auch
++    // die verschachtelten) Gruppen verteilt.
 +    std::unordered_set<App::DocumentObject*> getGroundedParts(
-+        std::vector<std::pair<App::DocumentObject*, App::DocumentObject*>>* ignoredNestedRoots = nullptr
++        std::vector<std::pair<App::DocumentObject*, App::DocumentObject*>>* ignoredNestedRoots = nullptr,
++        bool propagateRigid = true
 +    );
      std::unordered_set<App::DocumentObject*> fixGroundedParts();
      void fixGroundedPart(App::DocumentObject* obj, Base::Placement& plc, std::string& jointName);
@@ -7581,6 +7906,9 @@ index 63bb7168d88..82e232c5c02 100644
 +    // 2026-09-03 unbedingt eingebaut) nicht mehr in jedem preDrag()-Mausereignis unbedingt
 +    // laufen. Default false, kein bestehender Aufrufer muss angepasst werden.
 +    bool isPartConnected(App::DocumentObject* part, bool verboseLog = false);
++    // Kanonische Teile (canonicalizeForMbD()), die von der Erdung aus ueber Gelenke und starre
++    // Gruppen erreichbar sind - einmal berechnet fuer viele Abfragen (preDrag()).
++    std::unordered_set<App::DocumentObject*> getConnectedPartSet();
 +    // FCPROJECT-PATCH (2026-10-04): Erreichbarkeit von 'part' aus einer VORGEGEBENEN Erdung, mit
 +    // ausgeblendeten Joints - ohne Joints zu deaktivieren (siehe isJointConnectingPartToGround()).
 +    bool isPartConnectedExcluding(
@@ -7626,7 +7954,7 @@ index 63bb7168d88..82e232c5c02 100644
      );
      App::DocumentObject* getUpstreamMovingPart(
          App::DocumentObject* part,
-@@ -205,15 +396,98 @@ public:
+@@ -205,15 +417,98 @@ public:
          std::string& name,
          std::vector<App::DocumentObject*> excludeJoints = {}
      );
@@ -7727,7 +8055,7 @@ index 63bb7168d88..82e232c5c02 100644
  
      bool isEmpty() const;
      int numberOfComponents() const;
-@@ -251,6 +525,21 @@ public:
+@@ -251,6 +546,21 @@ public:
      {
          return lastRedundantJoints;
      }
@@ -7749,7 +8077,7 @@ index 63bb7168d88..82e232c5c02 100644
      inline const std::vector<std::string>& getLastPartiallyRedundant() const
      {
          return lastPartialRedundantJoints;
-@@ -261,7 +550,30 @@ public:
+@@ -261,7 +571,30 @@ public:
      }
      fastsignals::signal<void()> signalSolverUpdate;
  
@@ -7780,7 +8108,7 @@ index 63bb7168d88..82e232c5c02 100644
      void rebuildRigidClusters();
      App::DocumentObject* getRigidRepresentative(App::DocumentObject* part) const;
      const std::vector<App::DocumentObject*>* getRigidMembers(App::DocumentObject* part) const;
-@@ -269,9 +581,99 @@ private:
+@@ -269,9 +602,99 @@ private:
      void updateRigidPlacementCache();
      void prepareMbdForIslandDrag(std::vector<App::DocumentObject*> dragParts);
  
@@ -7880,7 +8208,7 @@ index 63bb7168d88..82e232c5c02 100644
      std::unordered_map<App::DocumentObject*, App::DocumentObject*> rigidRepByPart;
      std::unordered_map<App::DocumentObject*, std::vector<App::DocumentObject*>> rigidMembersByRep;
      std::unordered_map<App::DocumentObject*, Base::Placement> rigidPlacementCache;
-@@ -283,6 +685,9 @@ private:
+@@ -283,6 +706,9 @@ private:
  
      bool bundleFixed;
  
@@ -7890,7 +8218,7 @@ index 63bb7168d88..82e232c5c02 100644
      // True while solve() is running; breaks the solve()/updateSolveStatus() cycle.
      bool solveInProgress {false};
  
-@@ -294,6 +699,61 @@ private:
+@@ -294,6 +720,61 @@ private:
      int lastSolverStatus;
  
      std::vector<std::string> lastRedundantJoints;
@@ -9780,7 +10108,7 @@ index 10ebe705fe6..22633cc4dfb 100644
       <property name="orientation">
        <enum>Qt::Vertical</enum>
 diff --git a/src/Mod/Assembly/Gui/ViewProviderAssembly.cpp b/src/Mod/Assembly/Gui/ViewProviderAssembly.cpp
-index 4a27e982913..51189120fae 100644
+index 4a27e982913..a10408ffcb4 100644
 --- a/src/Mod/Assembly/Gui/ViewProviderAssembly.cpp
 +++ b/src/Mod/Assembly/Gui/ViewProviderAssembly.cpp
 @@ -53,6 +53,7 @@
@@ -9983,7 +10311,22 @@ index 4a27e982913..51189120fae 100644
  
                      Base::Vector3d pos = propPlacement->getValue().getPosition() + delta;
                      plc.setPosition(pos);
-@@ -650,7 +728,7 @@ bool ViewProviderAssembly::tryMouseMove(const SbVec2s& cursorPos, Gui::View3DInv
+@@ -641,8 +719,13 @@ bool ViewProviderAssembly::tryMouseMove(const SbVec2s& cursorPos, Gui::View3DInv
+         );
+         bool solveOnMove = hGrp->GetBool("SolveOnMove", true);
+         // HACK: Re-solve assembly to update rigid groups while dragging.
++        // FCPROJECT-PATCH (2026-10-20, Zieh-Latenz BG22): der volle Solve nur noch im Modus ohne
++        // Zieh-Solver (TranslationNoSolve). doDragStep() fuehrt starre Gruppen selbst mit (ein
++        // Solver-Koerper, setNewPlacements() schreibt alle Mitglieder, siehe
++        // test_nested_rigid_group_flex). Seit die Gruppe des Motors (BG112) in BG22 mitlaeuft,
++        // loeste sonst jede Mausbewegung am Z-Schlitten die ganze BG22 (~1 s, Ansicht sprang).
+         if (solveOnMove && (dragMode != DragMode::TranslationNoSolve || forceSolveOnMoveForRigid)) {
+-            if (forceSolveOnMoveForRigid) {
++            if (forceSolveOnMoveForRigid && dragMode == DragMode::TranslationNoSolve) {
+                 assemblyPart->solve();
+             }
+             else {
+@@ -650,7 +733,7 @@ bool ViewProviderAssembly::tryMouseMove(const SbVec2s& cursorPos, Gui::View3DInv
              }
          }
          else {
@@ -9992,7 +10335,7 @@ index 4a27e982913..51189120fae 100644
          }
      }
      return false;
-@@ -729,29 +807,89 @@ void ViewProviderAssembly::doubleClickedIn3dView()
+@@ -729,29 +812,89 @@ void ViewProviderAssembly::doubleClickedIn3dView()
      }
  }
  
@@ -10088,7 +10431,7 @@ index 4a27e982913..51189120fae 100644
                  return true;
              }
          }
-@@ -845,7 +983,12 @@ bool ViewProviderAssembly::getSelectedObjectsWithinAssembly(bool addPreselection
+@@ -845,7 +988,12 @@ bool ViewProviderAssembly::getSelectedObjectsWithinAssembly(bool addPreselection
          App::DocumentObject* selRoot = Gui::Selection().getPreselection().Object.getObject();
          std::string sub = Gui::Selection().getPreselection().pSubName;
  
@@ -10102,7 +10445,7 @@ index 4a27e982913..51189120fae 100644
          if (canDragObjectIn3d(obj)) {
  
              bool alreadyIn = false;
-@@ -882,8 +1025,26 @@ void ViewProviderAssembly::collectMovableObjects(
+@@ -882,8 +1030,26 @@ void ViewProviderAssembly::collectMovableObjects(
      auto* assemblyPart = getObject<AssemblyObject>();
  
      // Handling of special case: flexible AssemblyLink
@@ -10130,7 +10473,7 @@ index 4a27e982913..51189120fae 100644
          std::vector<App::DocumentObject*> children = asmLink->Group.getValues();
          for (auto* child : children) {
              // Recurse on children, appending the child's name to the subName prefix
-@@ -913,7 +1074,12 @@ void ViewProviderAssembly::collectMovableObjects(
+@@ -913,7 +1079,12 @@ void ViewProviderAssembly::collectMovableObjects(
          return;
      }
  
@@ -10144,7 +10487,7 @@ index 4a27e982913..51189120fae 100644
  
      if (onlySolids && assemblyPart->isPartConnected(part)) {
          return;  // No dragger for connected parts.
-@@ -981,7 +1147,41 @@ ViewProviderAssembly::DragMode ViewProviderAssembly::findDragMode()
+@@ -981,7 +1152,41 @@ ViewProviderAssembly::DragMode ViewProviderAssembly::findDragMode()
              addPartsToMove(connectedParts);
          }
  
@@ -10186,7 +10529,7 @@ index 4a27e982913..51189120fae 100644
          if (jointType == JointType::Fixed) {
              // If fixed joint we need to find the upstream joint to find move mode.
              // For example : Gnd -(revolute)- A -(fixed)- B : if user try to move B, then we should
-@@ -1028,14 +1228,44 @@ ViewProviderAssembly::DragMode ViewProviderAssembly::findDragMode()
+@@ -1028,14 +1233,44 @@ ViewProviderAssembly::DragMode ViewProviderAssembly::findDragMode()
          if (!ref) {
              return DragMode::Translation;
          }
@@ -10235,7 +10578,7 @@ index 4a27e982913..51189120fae 100644
              addPartsToMove(downstreamParts);
          }
  
-@@ -1074,6 +1304,12 @@ void ViewProviderAssembly::initMove(const SbVec2s& cursorPos, Gui::View3DInvento
+@@ -1074,6 +1309,12 @@ void ViewProviderAssembly::initMove(const SbVec2s& cursorPos, Gui::View3DInvento
  
  void ViewProviderAssembly::tryInitMove(const SbVec2s& cursorPos, Gui::View3DInventorViewer* viewer)
  {
@@ -10248,7 +10591,7 @@ index 4a27e982913..51189120fae 100644
      dragMode = findDragMode();
      if (dragMode == DragMode::None) {
          return;
-@@ -1082,7 +1318,7 @@ void ViewProviderAssembly::tryInitMove(const SbVec2s& cursorPos, Gui::View3DInve
+@@ -1082,7 +1323,7 @@ void ViewProviderAssembly::tryInitMove(const SbVec2s& cursorPos, Gui::View3DInve
      auto* assemblyPart = getObject<AssemblyObject>();
      // When the user drag parts, we switch off all joints visibility and only show the movingjoint
      jointVisibilitiesBackup.clear();
@@ -10257,7 +10600,7 @@ index 4a27e982913..51189120fae 100644
      for (auto* joint : joints) {
          if (!joint) {
              continue;
-@@ -1167,7 +1403,7 @@ void ViewProviderAssembly::tryInitMove(const SbVec2s& cursorPos, Gui::View3DInve
+@@ -1167,7 +1408,7 @@ void ViewProviderAssembly::tryInitMove(const SbVec2s& cursorPos, Gui::View3DInve
          assemblyPart->preDrag(dragParts);
      }
      else {
@@ -10266,7 +10609,7 @@ index 4a27e982913..51189120fae 100644
      }
  }
  
-@@ -1368,7 +1604,16 @@ bool ViewProviderAssembly::canDelete(App::DocumentObject* objBeingDeleted) const
+@@ -1368,7 +1609,16 @@ bool ViewProviderAssembly::canDelete(App::DocumentObject* objBeingDeleted) const
                  if (subAsmLink || link) {
                      if (std::ranges::find(objs, obj) == objs.end()) {
                          objs.push_back(obj);
@@ -10284,7 +10627,7 @@ index 4a27e982913..51189120fae 100644
                              addSubComponents(subAsmLink, objs);
                          }
                      }
-@@ -1381,17 +1626,40 @@ bool ViewProviderAssembly::canDelete(App::DocumentObject* objBeingDeleted) const
+@@ -1381,17 +1631,40 @@ bool ViewProviderAssembly::canDelete(App::DocumentObject* objBeingDeleted) const
              addSubComponents(asmLink, objsBeingDeleted);
          }
  
@@ -10329,7 +10672,7 @@ index 4a27e982913..51189120fae 100644
                      objToDel.push_back(joint);
                  }
              }
-@@ -1399,7 +1667,7 @@ bool ViewProviderAssembly::canDelete(App::DocumentObject* objBeingDeleted) const
+@@ -1399,7 +1672,7 @@ bool ViewProviderAssembly::canDelete(App::DocumentObject* objBeingDeleted) const
              // List its grounded joints
              std::vector<App::DocumentObject*> inList = obj->getInList();
              for (auto* parent : inList) {
@@ -10338,7 +10681,7 @@ index 4a27e982913..51189120fae 100644
                      continue;
                  }
  
-@@ -1486,22 +1754,46 @@ void ViewProviderAssembly::applyIsolationRecursively(
+@@ -1486,22 +1759,46 @@ void ViewProviderAssembly::applyIsolationRecursively(
          }
          return;
      }
@@ -10393,7 +10736,7 @@ index 4a27e982913..51189120fae 100644
  
      auto* vp = Gui::Application::Instance->getViewProvider(current);
      auto* vpl = dynamic_cast<Gui::ViewProviderLink*>(vp);
-@@ -1589,8 +1881,29 @@ void ViewProviderAssembly::isolateJointReferences(App::DocumentObject* joint, Is
+@@ -1589,8 +1886,29 @@ void ViewProviderAssembly::isolateJointReferences(App::DocumentObject* joint, Is
          return;
      }
  
@@ -10425,7 +10768,7 @@ index 4a27e982913..51189120fae 100644
      if (!part1 || !part2) {
          return;
      }
-@@ -1847,6 +2160,22 @@ Base::Vector3d ViewProviderAssembly::getCenterOfBoundingBox(const std::vector<Mo
+@@ -1847,6 +2165,22 @@ Base::Vector3d ViewProviderAssembly::getCenterOfBoundingBox(const std::vector<Mo
      return center;
  }
  
@@ -10448,7 +10791,7 @@ index 4a27e982913..51189120fae 100644
  inline QString objListHelper(const AssemblyObject* assembly, const std::vector<std::string>& names)
  {
      if (!assembly) {
-@@ -1856,7 +2185,7 @@ inline QString objListHelper(const AssemblyObject* assembly, const std::vector<s
+@@ -1856,7 +2190,7 @@ inline QString objListHelper(const AssemblyObject* assembly, const std::vector<s
  
      std::vector<App::DocumentObject*> joints;
      for (const auto& name : names) {
@@ -10457,7 +10800,7 @@ index 4a27e982913..51189120fae 100644
              joints.push_back(obj);
          }
      }
-@@ -1890,6 +2219,17 @@ void ViewProviderAssembly::UpdateSolverInformation()
+@@ -1890,6 +2224,17 @@ void ViewProviderAssembly::UpdateSolverInformation()
      // Updates Solver Information with the Last solver execution at AssemblyObject level
      auto* assembly = getObject<AssemblyObject>();
  
@@ -10475,7 +10818,7 @@ index 4a27e982913..51189120fae 100644
      int dofs = assembly->getLastDoF();
      bool hasRedundancies = assembly->getLastHasRedundancies();
      bool hasMalformed = assembly->getLastHasMalformedConstraints();
-@@ -1905,11 +2245,14 @@ void ViewProviderAssembly::UpdateSolverInformation()
+@@ -1905,11 +2250,14 @@ void ViewProviderAssembly::UpdateSolverInformation()
                      QStringLiteral("(%1)").arg(objListHelper(assembly,
             assembly->getLastConflicting())));*/
          // So for now we report like follows:
@@ -10491,7 +10834,7 @@ index 4a27e982913..51189120fae 100644
          );
      }
      else if (hasMalformed) {  // malformed joints
-@@ -1970,13 +2313,25 @@ void ViewProviderAssembly::updateTaskPanel(bool show)
+@@ -1970,13 +2318,25 @@ void ViewProviderAssembly::updateTaskPanel(bool show)
          return;
      }
  

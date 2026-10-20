@@ -3670,3 +3670,50 @@ Zwischenebenen-Gap) - betrifft nur den Fall, dass `Top` UNABHAENGIG von `GrandTo
 geoeffnet/angezeigt wird. Fuer `GrandTop`s eigene 3D-Ansicht irrelevant. Nicht weiter verfolgt.
 
 **Status:** Fix im Baum, Patch (v8) aktualisiert und per Worktree-Test verifiziert, committed.
+
+## 2026-10-20: Starre Gruppe über die Baugruppengrenze (BG112/BG119 in BG22)
+
+Nutzerbefund: in BG22 neu eingebaut BG112 (775-DC-Motor, flexibel) und BG119 (ER11, starr). Beim
+Ziehen des Z-Schlittens bleibt der Motor stehen, nur das geerdete Teil läuft mit; ER11 ebenso.
+
+**Befund (headless nachgespielt):** BG112 hält 21 Gehäuseteile über eine `RigidGroupJoint`
+zusammen (geerdet: `091`, ebenfalls Mitglied). `Joint023` (Fixed) verbindet den Spindelhalter mit
+`091`, `Joint024` (Fixed) ER11 mit dem Rotor `090` (Drehverbindung an `111`, nicht in der Gruppe).
+`getRigidGroups()` las nur die Gelenkgruppe von BG22 - die Motor-Gruppe existierte im BG22-Solver
+nicht. Bekanntes offenes Thema (todo-rigid-group-nested-boundary, 2026-09-09).
+
+**Umsetzung** (ARCHITECTURE §4.4), Richtung "Adressieren statt Kopieren":
+1. `getRigidGroupInstances()` rekursiv wie `getJoints()`, Mitglieder per
+   `IdentityGraph::resolveRigidMember()` auf die Solver-Schlüssel (Spiegel im aktiven Kontext).
+2. Gruppen-Körper in Weltkoordinaten (Container-Kette).
+3. Folgefehler 1: BG112 verteilte seine Erdung über die eigene Gruppe auf alle 21 Teile und
+   meldete sie so an BG22 - Motor festgefroren. Jetzt nur echte Wurzeln, Verteilung auf der
+   einbauenden Ebene; Gruppenmitgliedschaft zählt bei "angebunden?" als Verbindung.
+4. Folgefehler 2: beim Zieh-Start bündelte `addConnectedFixedParts()` nur `091` in den
+   Spindelhalter-Körper, der Rest der Gruppe ordnete sich neu an. Jetzt kommt die ganze Gruppe mit.
+5. IdentityGraph-Diagramm: blauer Rahmen für explizite starre Gruppen (Nutzerauftrag).
+
+**Ergebnis BG22:** beim Ziehen über `Joint008` laufen alle 21 Motorteile exakt mit dem
+Spindelhalter, ER11 und Rotor ebenso; mitten im Ziehen und danach keine Gelenkverletzung.
+Rotor + ER11 drehen dabei um ~3° um die Welle (freier Freiheitsgrad der Drehverbindung,
+kinematisch zulässig - offen, ob das beim Ziehen unterdrückt werden soll).
+
+**Nebenbefund (Vanilla, Upstream-Kandidat):** `RigidGroupJoint.__init__` setzt
+`ObjectsToRigidGroup`, bevor `RigidPlacements` existiert (AttributeError im onChanged); beim
+Laden meldet `restoreFromPlacements()` deshalb "Rigid group sync broken, skipping restore".
+
+**Verifikation:** neuer Test `test_nested_rigid_group_flex` PASS (Vanilla: Gruppe schon nach dem
+Lösen zerrissen, BoxB 65 mm daneben). Matrix 36/36 OK, Drag-Rundumtest PASS.
+
+### Nachtrag 2026-10-20: Zieh-Latenz nach dem Fix
+
+Nutzer: Ziehen am Z-Schlitten spürbar träger (~1 s). Bildschirmvideo per `gst-launch-1.0` in
+Einzelbilder (50 ms) zerlegt und per Bilddifferenz ausgewertet: nach dem Anfassen ~3 s Stillstand,
+dann Sprünge. Im Log liefen während des Ziehens volle Solves hintereinander.
+1. `preDrag()`: Erreichbarkeit einmal statt je gezogenem Teil (27 statt 5 Teile seit dem Fix) -
+   Zieh-Start 1,26 s -> 0,60 s (headless gemessen).
+2. `ViewProviderAssembly::tryMouseMove()`: der Vanilla-„HACK“ (voller `solve()` pro Mausbewegung,
+   sobald ein Mitglied einer starren Gruppe gezogen wird) nur noch im Modus `TranslationNoSolve`.
+   `doDragStep()` führt die Gruppe selbst mit (test_nested_rigid_group_flex).
+Nutzer: "jetzt ist viel besser". Matrix 36/36, Drag-Rundumtest PASS (nach Punkt 1; Punkt 2 nur
+GUI-Pfad, vom Nutzer geprüft).
