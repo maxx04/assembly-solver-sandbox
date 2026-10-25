@@ -11410,10 +11410,10 @@ index 841105d2956..52a553489c0 100644
          t = placement.Base
          self.transform.translation.setValue(t.x, t.y, t.z)
 diff --git a/src/Mod/Assembly/UtilsAssembly.py b/src/Mod/Assembly/UtilsAssembly.py
-index 872543d222d..87f18a9fd4e 100644
+index ff000e06748..7b288a31ce0 100644
 --- a/src/Mod/Assembly/UtilsAssembly.py
 +++ b/src/Mod/Assembly/UtilsAssembly.py
-@@ -378,7 +378,12 @@ def getRootPath(obj, part):
+@@ -379,7 +379,12 @@ def getRootPath(obj, part):
  
  # Return the jcs global placement
  def getJcsGlobalPlc(jcsPlc, ref):
@@ -11427,7 +11427,7 @@ index 872543d222d..87f18a9fd4e 100644
      return obj_global_plc * jcsPlc
  
  
-@@ -487,7 +492,7 @@ def findElementClosestVertex(ref, mousePos):
+@@ -488,7 +493,7 @@ def findElementClosestVertex(ref, mousePos):
      # We need mousePos to be in the same lcs as obj
      plc = App.Placement()
      plc.Base = mousePos
@@ -11436,7 +11436,7 @@ index 872543d222d..87f18a9fd4e 100644
      plc = global_plc.inverse() * plc  # We make it relative to obj Origin
      plc = obj.Placement * plc  # Make plc in the same lcs as obj
      mousePos = plc.Base
-@@ -653,6 +658,25 @@ def getJointsOfType(asm, jointTypes):
+@@ -654,6 +659,25 @@ def getJointsOfType(asm, jointTypes):
      return joints
  
  
@@ -11462,7 +11462,7 @@ index 872543d222d..87f18a9fd4e 100644
  def getBomGroup(assembly):
      bom_group = None
  
-@@ -1307,6 +1331,22 @@ def getComponentReference(assembly, root_obj, sub_string):
+@@ -1308,6 +1332,22 @@ def getComponentReference(assembly, root_obj, sub_string):
              continue
          if obj.isDerivedFrom("Assembly::AssemblyLink"):
              if hasattr(obj, "Rigid") and not obj.Rigid:
