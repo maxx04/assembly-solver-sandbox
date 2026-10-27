@@ -192,3 +192,17 @@ Offen (nicht Phase 2): `distance_edgefirst__duplicate` divergiert aus der Startl
 altem Code). Allgemein: Flaeche am beweglichen Teil weit von dessen Ursprung + Abstand > 0
 konvergiert nicht (Punkt-Ebene, auch Vanilla) - Newton dreht statt zu schieben. Eigener Punkt
 (Solver-Robustheit, ggf. Upstream).
+
+### OndselSolver-Fehler gefunden (2026-10-27): Ebene am beweglichen Teil
+
+Das "Konvergenzproblem" aus Phase 2 war ein echter Rechenfehler in OndselSolver:
+`DispCompIecJecKeqc::calcPostDynCorrectorIteration()` setzt die Nebendiagonale der zweiten
+Ableitung nach den Euler-Parametern des Bezugsrahmens K mit `at(i)` statt `at(j)`. Betrifft jede
+Translationsbedingung (z.B. Abstand Punkt-Ebene), deren Bezugsebene an einem beweglichen Teil
+haengt. Minimal: Ebene an beweglicher BoxB, Punkt an geerdeter BoxA, exakter Start, Abstand 0 -> 8
+scheitert (Sandbox alt und Vanilla). Fix ein Zeichen, Test `test_distance_plane_on_moving_part`
+(alt/Vanilla FAIL, neu PASS). Upstream-Kandidat #14.
+
+`distance_edgefirst__duplicate` war dagegen ein Fixturmangel: bei deckungsgleichen JCS steht die
+Kante senkrecht auf der Ebene (singulaer fuer "parallel"), Start jetzt mit Kante in der Ebene
+(`LINE_IN_PLANE`), auch fuer `distance_lineplane`. Matrix 60/60, Testreihe 38/38.

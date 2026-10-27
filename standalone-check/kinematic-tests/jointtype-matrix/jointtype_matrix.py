@@ -119,6 +119,12 @@ def check_line_plane(j1, j2, props):
     return ok, f"|n . Linie| = {par:.2e}, Abstand = {d:.9f} (soll {props['Distance']})"
 
 
+# Kante-Ebene: bei deckungsgleichen JCS steht die Kante senkrecht auf der Ebene - dort hat
+# "Linie parallel zur Ebene" keine Steigung (singulaer), 20 Grad daneben bleibt Newton je nach
+# Lage haengen. Startlage deshalb mit der Kante in der Ebene (90 Grad um x), dann gestoert.
+LINE_IN_PLANE = App.Placement(App.Vector(), App.Rotation(App.Vector(1, 0, 0), 90))
+
+
 def fjcs(face, flip=False, rot=0):
     return jtu.face_jcs_placement(face, flip=flip, extra_z_rotation_deg=rot)
 
@@ -147,7 +153,7 @@ PAIR_CASES = {
     "distance_lineline": dict(type=DISTANCE, elem=("Edge10", "Edge9"), plc=(ejcs("Edge10"), ejcs("Edge9", rot=20)),
                               props={"Distance": 6.0}, check=check_line_line),
     "distance_lineplane": dict(type=DISTANCE, elem=("Face6", "Edge9"), plc=(fjcs("Face6"), ejcs("Edge9")),
-                               props={"Distance": 4.0}, check=check_line_plane),
+                               props={"Distance": 4.0}, check=check_line_plane, start=LINE_IN_PLANE),
     # Punkt bzw. Kante als ERSTE Referenz: getDistanceType() tauscht dann per swapJCS() die Seiten
     # im Gelenkobjekt selbst (Plan Phase 2) - bei verschachtelten Gelenken das Original im
     # Unterdokument. Gebaut ohne Solve (SolveInJointCreation/SolveOnRecompute aus), sonst tauscht
@@ -159,7 +165,7 @@ PAIR_CASES = {
                                 no_solve_on_create=True, reverse=True),
     "distance_edgefirst": dict(type=DISTANCE, elem=("Edge9", "Face6"), plc=(ejcs("Edge9"), fjcs("Face6")),
                                props={"Distance": 4.0}, check=lambda j1, j2, p: check_line_plane(j2, j1, p),
-                               no_solve_on_create=True, reverse=True),
+                               no_solve_on_create=True, reverse=True, start=LINE_IN_PLANE),
 }
 
 
@@ -246,10 +252,11 @@ def build_content(case, doc, asm, directory):
         first, second = (b, a) if spec.get("reverse") else (a, b)
         _joint(asm, spec["type"], first, second, spec["plc"][0], spec["plc"][1], spec["elem"], spec["props"])
         # Start: JCS deckungsgleich, dann gestoert - der Solver muss die Bedingung herstellen.
+        start = spec.get("start", App.Placement())
         if spec.get("reverse"):
-            b.Placement = a.Placement.multiply(spec["plc"][1]).multiply(spec["plc"][0].inverse()).multiply(B_PERTURB)
+            b.Placement = a.Placement.multiply(spec["plc"][1]).multiply(start).multiply(spec["plc"][0].inverse()).multiply(B_PERTURB)
         else:
-            b.Placement = a.Placement.multiply(spec["plc"][0]).multiply(spec["plc"][1].inverse()).multiply(B_PERTURB)
+            b.Placement = a.Placement.multiply(spec["plc"][0]).multiply(start).multiply(spec["plc"][1].inverse()).multiply(B_PERTURB)
     else:
         spec = MECH_CASES[case]
         for label, jtype, plc_a, plc_part in spec["carriers"]:

@@ -105,6 +105,19 @@ index 1bd8b2b..336f8c8 100644
          size_t nqsu = SIZE_MAX;
          FColDsptr qsuOld;
          DiagMatDsptr qsuWeights;
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/DispCompIecJecKeqc.cpp b/src/3rdParty/OndselSolver/OndselSolver/DispCompIecJecKeqc.cpp
+index a365064..b2848c0 100644
+--- a/src/3rdParty/OndselSolver/OndselSolver/DispCompIecJecKeqc.cpp
++++ b/src/3rdParty/OndselSolver/OndselSolver/DispCompIecJecKeqc.cpp
+@@ -49,7 +49,7 @@ void DispCompIecJecKeqc::calcPostDynCorrectorIteration()
+ 		ppriIeJeKepEKipEK->at(i) = ((ppAjOKepEKipEK->at(i))->dot(rIeJeO));
+ 		for (size_t j = i + 1; j < 4; j++)
+ 		{
+-			auto ppriIeJeKepEKipEKj = (ppAjOKepEKipEK->at(i))->dot(rIeJeO);
++			auto ppriIeJeKepEKipEKj = (ppAjOKepEKipEK->at(j))->dot(rIeJeO);
+ 			ppriIeJeKepEKipEK->at(j) = ppriIeJeKepEKipEKj;
+ 			ppriIeJeKepEKpEK->at(j)->at(i) = ppriIeJeKepEKipEKj;
+ 		}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/GESpMatParPvMarkoFast.cpp b/src/3rdParty/OndselSolver/OndselSolver/GESpMatParPvMarkoFast.cpp
 index fb72e15..cbf3ab4 100644
 --- a/src/3rdParty/OndselSolver/OndselSolver/GESpMatParPvMarkoFast.cpp
