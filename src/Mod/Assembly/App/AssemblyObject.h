@@ -679,6 +679,13 @@ private:
     // - computeGroundCorrection() liefert dann Identity, unveraendertes Verhalten.
     App::DocumentObject* groundedTargetObj = nullptr;
     Base::Placement groundedTargetPlc;
+    // FCPROJECT-PATCH (2026-10-27, jointtype-matrix belt__nested): alle in fixGroundedParts()
+    // fixierten Solver-Koerper dieses Durchlaufs. setNewPlacements() schreibt sie nie - geerdet
+    // heisst fest. computeGroundCorrection() biegt nur groundedTargetObj exakt zurueck; hat die
+    // Redundanz-Elimination nach einem divergierten Newton die Drehgleichungen der Erdungen
+    // verworfen, bekamen weitere geerdete Koerper (z.B. das Origin) sonst eine verdrehte Lage,
+    // die mitgespeichert wurde.
+    std::unordered_set<App::DocumentObject*> groundedBodies;
 
     std::unordered_map<App::DocumentObject*, MbDPartData> objectPartMap;
     // FCPROJECT-PATCH (Mehrfachinstanz-Fix - siehe

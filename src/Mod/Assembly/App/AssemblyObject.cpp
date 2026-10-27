@@ -1777,6 +1777,13 @@ void AssemblyObject::setNewPlacements()
             continue;
         }
 
+        // Geerdet heisst fest (siehe groundedBodies in AssemblyObject.h).
+        if (groundedBodies.count(obj)) {
+            if (obj->isTouched()) {
+                obj->purgeTouched();
+            }
+            continue;
+        }
 
         Base::Placement newPlacement = getMbdPlacement(mbdPart);
         if (!pair.second.offsetPlc.isIdentity()) {
@@ -3153,7 +3160,7 @@ std::unordered_set<App::DocumentObject*> AssemblyObject::fixGroundedParts()
     // abbilden wie die Joints; Ziel-Placement, Fixierung und Ground-Korrektur haengen damit am
     // selben Koerper. Mehrere Erdungen desselben Koerpers werden nur einmal fixiert.
     IdentityGraph graph(this);
-    std::unordered_set<App::DocumentObject*> fixedBodies;
+    groundedBodies.clear();
     for (auto obj : groundedParts) {
         if (!obj) {
             continue;
@@ -3163,7 +3170,7 @@ std::unordered_set<App::DocumentObject*> AssemblyObject::fixGroundedParts()
         if (!body) {
             body = obj;
         }
-        if (!fixedBodies.insert(body).second) {
+        if (!groundedBodies.insert(body).second) {
             continue;
         }
 
