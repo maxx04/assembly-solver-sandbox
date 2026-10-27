@@ -170,3 +170,25 @@ Absturz nach gescheitertem Solve geklaert: `preDrag()` ignorierte den Rueckgabew
 `DirectionCosineIeqcJec::calcPostDynCorrectorIteration`). Fix: Modell verwerfen wie im
 Insel-Zweig. Regressionstest `test_drag_after_failed_solve` (koaxiale Zahnraeder ohne
 gemeinsamen Traeger), Testreihe 37/37. Upstream-Kandidat #13.
+
+### Phase 2 umgesetzt (2026-10-27): Solve schreibt kein Gelenk mehr um
+
+Nachweis: neue Faelle `distance_pointfirst`/`distance_edgefirst` (Punkt bzw. Kante als
+Referenz 1), gebaut ohne Solve (`SolveInJointCreation`/`SolveOnRecompute` aus - mit
+Standardeinstellungen tauscht schon das eigene Dokument beim Anlegen/Recompute und speichert
+das). Neue Pruefung in run_matrix: Reference1/2 + Placement1/2 aller Gelenke in Unterdokumenten.
+Alter Code: "Gelenk-Originale veraendert" in nested/double/duplicate (sub#Joint Reference1/2,
+Placement1/2).
+
+Fix: `getDistanceType(joint, &swapSides)` meldet den Tausch nur noch; `makeMbdJoint()` nimmt
+dann Referenz 2 als Marker I. Ebenso Screw (Slider zuerst) und `getRackPinionMarkers()`
+(Zahnstange zuerst). Vertauschte Laengen-/Winkelgrenzen werden nur lokal sortiert, nicht
+zurueckgeschrieben. Kein Solve-Pfad ruft `swapJCS()` mehr auf (Funktion bleibt fuer Aufrufer
+ausserhalb). Hinweis fuer Phase 6: Zweig `tangent-joint` nutzt `swapJCS()` - beim Merge
+auf dieselbe Sicht umstellen.
+
+Ergebnis: Gelenk-Originale ueberall unveraendert, Testreihe 37/37, Matrix 59/60.
+Offen (nicht Phase 2): `distance_edgefirst__duplicate` divergiert aus der Startlage (auch mit
+altem Code). Allgemein: Flaeche am beweglichen Teil weit von dessen Ursprung + Abstand > 0
+konvergiert nicht (Punkt-Ebene, auch Vanilla) - Newton dreht statt zu schieben. Eigener Punkt
+(Solver-Robustheit, ggf. Upstream).

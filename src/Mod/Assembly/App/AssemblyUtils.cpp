@@ -161,7 +161,10 @@ double getEdgeRadius(const App::DocumentObject* obj, const std::string& elt)
     return sf.GetType() == GeomAbs_Circle ? sf.Circle().Radius() : 0.0;
 }
 
-DistanceType getDistanceType(App::DocumentObject* joint)
+// FCPROJECT-PATCH (2026-10-27, Plan Phase 2): tauscht NICHT mehr im Gelenkobjekt (swapJCS()),
+// sondern meldet ueber 'swapSides', dass der Solver Referenz 2 als Marker I nehmen muss. Sonst
+// schrieb jeder Solve ein verschachteltes Gelenk im Unterdokument um (Original veraendert).
+static DistanceType getDistanceTypeImpl(App::DocumentObject* joint, bool& swapSides)
 {
     if (!joint) {
         return DistanceType::Other;
@@ -180,7 +183,7 @@ DistanceType getDistanceType(App::DocumentObject* joint)
     else if (type1 == "Edge" && type2 == "Edge") {
         if (isEdgeType(obj1, elt1, GeomAbs_Line) || isEdgeType(obj2, elt2, GeomAbs_Line)) {
             if (!isEdgeType(obj1, elt1, GeomAbs_Line)) {
-                swapJCS(joint);  // make sure that line is first if not 2 lines.
+                swapSides = !swapSides;  // make sure that line is first if not 2 lines.
                 std::swap(elt1, elt2);
                 std::swap(obj1, obj2);
             }
@@ -196,7 +199,7 @@ DistanceType getDistanceType(App::DocumentObject* joint)
 
         else if (isEdgeType(obj1, elt1, GeomAbs_Circle) || isEdgeType(obj2, elt2, GeomAbs_Circle)) {
             if (!isEdgeType(obj1, elt1, GeomAbs_Circle)) {
-                swapJCS(joint);  // make sure that circle is first if not 2 lines.
+                swapSides = !swapSides;  // make sure that circle is first if not 2 lines.
                 std::swap(elt1, elt2);
                 std::swap(obj1, obj2);
             }
@@ -210,7 +213,7 @@ DistanceType getDistanceType(App::DocumentObject* joint)
     else if (type1 == "Face" && type2 == "Face") {
         if (isFaceType(obj1, elt1, GeomAbs_Plane) || isFaceType(obj2, elt2, GeomAbs_Plane)) {
             if (!isFaceType(obj1, elt1, GeomAbs_Plane)) {
-                swapJCS(joint);  // make sure plane is first if its not 2 planes.
+                swapSides = !swapSides;  // make sure plane is first if its not 2 planes.
                 std::swap(elt1, elt2);
                 std::swap(obj1, obj2);
             }
@@ -234,7 +237,7 @@ DistanceType getDistanceType(App::DocumentObject* joint)
 
         else if (isFaceType(obj1, elt1, GeomAbs_Cylinder) || isFaceType(obj2, elt2, GeomAbs_Cylinder)) {
             if (!isFaceType(obj1, elt1, GeomAbs_Cylinder)) {
-                swapJCS(joint);  // make sure cylinder is first if its not 2 cylinders.
+                swapSides = !swapSides;  // make sure cylinder is first if its not 2 cylinders.
                 std::swap(elt1, elt2);
                 std::swap(obj1, obj2);
             }
@@ -255,7 +258,7 @@ DistanceType getDistanceType(App::DocumentObject* joint)
 
         else if (isFaceType(obj1, elt1, GeomAbs_Cone) || isFaceType(obj2, elt2, GeomAbs_Cone)) {
             if (!isFaceType(obj1, elt1, GeomAbs_Cone)) {
-                swapJCS(joint);  // make sure cone is first if its not 2 cones.
+                swapSides = !swapSides;  // make sure cone is first if its not 2 cones.
                 std::swap(elt1, elt2);
                 std::swap(obj1, obj2);
             }
@@ -273,7 +276,7 @@ DistanceType getDistanceType(App::DocumentObject* joint)
 
         else if (isFaceType(obj1, elt1, GeomAbs_Torus) || isFaceType(obj2, elt2, GeomAbs_Torus)) {
             if (!isFaceType(obj1, elt1, GeomAbs_Torus)) {
-                swapJCS(joint);  // make sure torus is first if its not 2 torus.
+                swapSides = !swapSides;  // make sure torus is first if its not 2 torus.
                 std::swap(elt1, elt2);
                 std::swap(obj1, obj2);
             }
@@ -288,7 +291,7 @@ DistanceType getDistanceType(App::DocumentObject* joint)
 
         else if (isFaceType(obj1, elt1, GeomAbs_Sphere) || isFaceType(obj2, elt2, GeomAbs_Sphere)) {
             if (!isFaceType(obj1, elt1, GeomAbs_Sphere)) {
-                swapJCS(joint);  // make sure sphere is first if its not 2 spheres.
+                swapSides = !swapSides;  // make sure sphere is first if its not 2 spheres.
                 std::swap(elt1, elt2);
                 std::swap(obj1, obj2);
             }
@@ -300,7 +303,7 @@ DistanceType getDistanceType(App::DocumentObject* joint)
     }
     else if ((type1 == "Vertex" && type2 == "Face") || (type1 == "Face" && type2 == "Vertex")) {
         if (type1 == "Vertex") {  // Make sure face is the first.
-            swapJCS(joint);
+            swapSides = !swapSides;
             std::swap(elt1, elt2);
             std::swap(obj1, obj2);
         }
@@ -322,7 +325,7 @@ DistanceType getDistanceType(App::DocumentObject* joint)
     }
     else if ((type1 == "Edge" && type2 == "Face") || (type1 == "Face" && type2 == "Edge")) {
         if (type1 == "Edge") {  // Make sure face is the first.
-            swapJCS(joint);
+            swapSides = !swapSides;
             std::swap(elt1, elt2);
             std::swap(obj1, obj2);
         }
@@ -364,7 +367,7 @@ DistanceType getDistanceType(App::DocumentObject* joint)
     }
     else if ((type1 == "Vertex" && type2 == "Edge") || (type1 == "Edge" && type2 == "Vertex")) {
         if (type1 == "Vertex") {  // Make sure edge is the first.
-            swapJCS(joint);
+            swapSides = !swapSides;
             std::swap(elt1, elt2);
             std::swap(obj1, obj2);
         }
@@ -379,6 +382,16 @@ DistanceType getDistanceType(App::DocumentObject* joint)
         }
     }
     return DistanceType::Other;
+}
+
+DistanceType getDistanceType(App::DocumentObject* joint, bool* swapSides)
+{
+    bool swapped = false;
+    const DistanceType type = getDistanceTypeImpl(joint, swapped);
+    if (swapSides) {
+        *swapSides = swapped;
+    }
+    return type;
 }
 
 JointGroup* getJointGroup(const App::Part* part)

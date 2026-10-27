@@ -38,6 +38,7 @@ def run_case(case, context, workdir):
     msgs = []
     top = App.openDocument(os.path.join(dst, "top.FCStd"))
     ntu.remember_originals(top)
+    jtm.remember_joint_originals(top)
     top_asm = [o for o in top.Objects if o.TypeId == "Assembly::AssemblyObject"][0]
     top.recompute()
     rc = top_asm.solve()
@@ -60,6 +61,9 @@ def run_case(case, context, workdir):
         good = ntu.originals_unchanged(cid)
         ok &= good
         msgs.append(f"Originale unveraendert: {'ja' if good else 'NEIN'}")
+        good, changed = jtm.joint_originals_unchanged()
+        ok &= good
+        msgs.append(f"Gelenk-Originale unveraendert: {'ja' if good else 'NEIN ' + ', '.join(changed)}")
     return ("OK" if ok else "FEHLER"), msgs
 
 

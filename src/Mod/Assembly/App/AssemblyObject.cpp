@@ -3770,8 +3770,10 @@ void Assembly::AssemblyObject::create_mbdSimulationParameters(App::DocumentObjec
     mbdSim->seterrorTol(valueOf(sim, "fGlobalErrorTolerance"));
 }
 
-std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointOfType(App::DocumentObject* joint, JointType type)
+std::shared_ptr<ASMTJoint>
+AssemblyObject::makeMbdJointOfType(App::DocumentObject* joint, JointType type, bool& swapSides)
 {
+    swapSides = false;
     switch (type) {
         case JointType::Fixed:
             if (bundleFixed) {
@@ -3792,7 +3794,7 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointOfType(App::DocumentObjec
             return CREATE<ASMTSphericalJoint>::With();
 
         case JointType::Distance:
-            return makeMbdJointDistance(joint);
+            return makeMbdJointDistance(joint, swapSides);
 
         case JointType::Parallel:
             return CREATE<ASMTParallelAxesJoint>::With();
@@ -3822,9 +3824,7 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointOfType(App::DocumentObjec
                 return nullptr;
             }
 
-            if (slidingIndex != 1) {
-                swapJCS(joint);  // make sure that sliding is first.
-            }
+            swapSides = slidingIndex != 1;  // make sure that sliding is first.
 
             auto mbdJoint = CREATE<ASMTScrewJoint>::With();
             mbdJoint->pitch = getJointDistance(joint);
@@ -3850,14 +3850,17 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointOfType(App::DocumentObjec
     }
 }
 
-std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointDistance(App::DocumentObject* joint)
+std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointDistance(App::DocumentObject* joint, bool& swapSides)
 {
-    DistanceType type = getDistanceType(joint);
+    DistanceType type = getDistanceType(joint, &swapSides);
 
-    std::string elt1 = getElementFromProp(joint, "Reference1");
-    std::string elt2 = getElementFromProp(joint, "Reference2");
-    auto* obj1 = getLinkedObjFromRef(joint, "Reference1");
-    auto* obj2 = getLinkedObjFromRef(joint, "Reference2");
+    // Seite 1/2 in der Sicht des Solvers (ggf. getauscht, siehe getDistanceType()).
+    const char* refName1 = swapSides ? "Reference2" : "Reference1";
+    const char* refName2 = swapSides ? "Reference1" : "Reference2";
+    std::string elt1 = getElementFromProp(joint, refName1);
+    std::string elt2 = getElementFromProp(joint, refName2);
+    auto* obj1 = getLinkedObjFromRef(joint, refName1);
+    auto* obj2 = getLinkedObjFromRef(joint, refName2);
 
     switch (type) {
         case DistanceType::PointPoint: {
@@ -4020,7 +4023,8 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(
 
     JointType jointType = getJointType(joint);
 
-    std::shared_ptr<ASMTJoint> mbdJoint = makeMbdJointOfType(joint, jointType);
+    bool swapSides = false;
+    std::shared_ptr<ASMTJoint> mbdJoint = makeMbdJointOfType(joint, jointType, swapSides);
     if (!mbdJoint || !isMbDJointValid(joint, nestingPrefix)) {
         return {};
     }
@@ -4034,8 +4038,12 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(
         getRackPinionMarkers(joint, fullMarkerNameI, fullMarkerNameJ, nestingPrefix);
     }
     else {
-        fullMarkerNameI = handleOneSideOfJoint(joint, "Reference1", "Placement1", std::string(), nestingPrefix);
-        fullMarkerNameJ = handleOneSideOfJoint(joint, "Reference2", "Placement2", std::string(), nestingPrefix);
+        const char* refI = swapSides ? "Reference2" : "Reference1";
+        const char* plcI = swapSides ? "Placement2" : "Placement1";
+        const char* refJ = swapSides ? "Reference1" : "Reference2";
+        const char* plcJ = swapSides ? "Placement1" : "Placement2";
+        fullMarkerNameI = handleOneSideOfJoint(joint, refI, plcI, std::string(), nestingPrefix);
+        fullMarkerNameJ = handleOneSideOfJoint(joint, refJ, plcJ, std::string(), nestingPrefix);
     }
     if (fullMarkerNameI == "" || fullMarkerNameJ == "") {
         return {};
@@ -4068,15 +4076,9 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(
                 double maxLength = pLenMax->getValue();
 
                 if ((minLength > maxLength) && minEnabled && maxEnabled) {
-                    pLenMin->setValue(maxLength);
-                    pLenMax->setValue(minLength);
-                    minLength = maxLength;
-                    maxLength = pLenMax->getValue();
-
-                    pMinEnabled->setValue(maxEnabled);
-                    pMaxEnabled->setValue(minEnabled);
-                    minEnabled = maxEnabled;
-                    maxEnabled = pMaxEnabled->getValue();
+                    // Nur fuer den Solver sortieren, nicht ins Gelenk zurueckschreiben (Plan
+                    // Phase 2: ein Solve veraendert kein Gelenk, schon gar nicht ein Original).
+                    std::swap(minLength, maxLength);
                 }
                 if (minEnabled || maxEnabled) {
                     activeLimits.push_back(
@@ -4124,15 +4126,9 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(
                 double minAngle = pRotMin->getValue();
                 double maxAngle = pRotMax->getValue();
                 if ((minAngle > maxAngle) && minEnabled && maxEnabled) {
-                    pRotMin->setValue(maxAngle);
-                    pRotMax->setValue(minAngle);
-                    minAngle = maxAngle;
-                    maxAngle = pRotMax->getValue();
-
-                    pMinEnabled->setValue(maxEnabled);
-                    pMaxEnabled->setValue(minEnabled);
-                    minEnabled = maxEnabled;
-                    maxEnabled = pMaxEnabled->getValue();
+                    // Nur fuer den Solver sortieren, nicht ins Gelenk zurueckschreiben (Plan
+                    // Phase 2: ein Solve veraendert kein Gelenk, schon gar nicht ein Original).
+                    std::swap(minAngle, maxAngle);
                 }
                 if (minEnabled || maxEnabled) {
                     activeLimits.push_back(
@@ -4393,21 +4389,25 @@ void AssemblyObject::getRackPinionMarkers(
         return;
     }
 
-    if (slidingIndex != 1) {
-        swapJCS(joint);  // make sure that rack is first.
-    }
+    // Zahnstange als Seite 1 - nur in der Sicht des Solvers, das Gelenk bleibt unveraendert
+    // (Plan Phase 2).
+    const bool swapSides = slidingIndex != 1;
+    const char* refRack = swapSides ? "Reference2" : "Reference1";
+    const char* plcRack = swapSides ? "Placement2" : "Placement1";
+    const char* refPinion = swapSides ? "Reference1" : "Reference2";
+    const char* plcPinion = swapSides ? "Placement1" : "Placement2";
 
     // FCPROJECT-PATCH (Teilschritt 2 "adressieren statt kopieren", solver-root-cause-fix): part1
     // (das einzige hier fuer getMbDData()/den MbD-Koerper verwendete Ergebnis, s.u.) auf
     // resolvePartForMbD() umgestellt - siehe handleOneSideOfJoint() fuer die Begruendung. obj1/ref1
     // bleiben bewusst bei der alten, joint-lokalen Aufloesung (nur fuer die Rack/Pinion-spezifische
     // Placement-Anpassung unten gebraucht).
-    App::DocumentObject* part1 = resolvePartForMbD(joint, "Reference1", nestingPrefix);
-    App::DocumentObject* obj1 = getObjFromJointRef(joint, "Reference1");
-    Base::Placement plc1 = getPlacementFromProp(joint, "Placement1");
+    App::DocumentObject* part1 = resolvePartForMbD(joint, refRack, nestingPrefix);
+    App::DocumentObject* obj1 = getObjFromJointRef(joint, refRack);
+    Base::Placement plc1 = getPlacementFromProp(joint, plcRack);
 
-    App::DocumentObject* obj2 = getObjFromJointRef(joint, "Reference2");
-    Base::Placement plc2 = getPlacementFromProp(joint, "Placement2");
+    App::DocumentObject* obj2 = getObjFromJointRef(joint, refPinion);
+    Base::Placement plc2 = getPlacementFromProp(joint, plcPinion);
 
     if (!part1 || !obj1) {
         Base::Console().warning("Reference1 of Joint {} is bad.\n", joint->getFullName());
@@ -4415,12 +4415,12 @@ void AssemblyObject::getRackPinionMarkers(
     }
 
     // For the pinion nothing special needed :
-    markerNameJ = handleOneSideOfJoint(joint, "Reference2", "Placement2", std::string(), nestingPrefix);
+    markerNameJ = handleOneSideOfJoint(joint, refPinion, plcPinion, std::string(), nestingPrefix);
 
     // For the rack we need to change the placement :
     // make the pinion plc relative to the rack placement.
-    auto* ref1 = dynamic_cast<App::PropertyXLinkSub*>(joint->getPropertyByName("Reference1"));
-    auto* ref2 = dynamic_cast<App::PropertyXLinkSub*>(joint->getPropertyByName("Reference2"));
+    auto* ref1 = dynamic_cast<App::PropertyXLinkSub*>(joint->getPropertyByName(refRack));
+    auto* ref2 = dynamic_cast<App::PropertyXLinkSub*>(joint->getPropertyByName(refPinion));
     if (!ref1 || !ref2) {
         return;
     }

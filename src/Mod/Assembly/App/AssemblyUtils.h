@@ -150,7 +150,9 @@ AssemblyExport bool isFaceType(
 AssemblyExport double getFaceRadius(const App::DocumentObject* obj, const std::string& elName);
 AssemblyExport double getEdgeRadius(const App::DocumentObject* obj, const std::string& elName);
 
-AssemblyExport DistanceType getDistanceType(App::DocumentObject* joint);
+// swapSides (optional): true, wenn der Solver Referenz 2 als erste Seite (Marker I) nehmen
+// muss. Das Gelenk selbst wird nicht veraendert.
+AssemblyExport DistanceType getDistanceType(App::DocumentObject* joint, bool* swapSides = nullptr);
 AssemblyExport JointGroup* getJointGroup(const App::Part* part);
 
 AssemblyExport std::vector<App::DocumentObject*> getAssemblyComponents(const AssemblyObject* assembly);

@@ -148,6 +148,18 @@ PAIR_CASES = {
                               props={"Distance": 6.0}, check=check_line_line),
     "distance_lineplane": dict(type=DISTANCE, elem=("Face6", "Edge9"), plc=(fjcs("Face6"), ejcs("Edge9")),
                                props={"Distance": 4.0}, check=check_line_plane),
+    # Punkt bzw. Kante als ERSTE Referenz: getDistanceType() tauscht dann per swapJCS() die Seiten
+    # im Gelenkobjekt selbst (Plan Phase 2) - bei verschachtelten Gelenken das Original im
+    # Unterdokument. Gebaut ohne Solve (SolveInJointCreation/SolveOnRecompute aus), sonst tauscht
+    # schon das eigene Dokument. reverse: Referenz 1 = Punkt/Kante an der beweglichen BoxB,
+    # Referenz 2 = Flaeche an der geerdeten BoxA (Flaeche am beweglichen Teil weit vom Ursprung
+    # konvergiert in OndselSolver nicht, auch Vanilla - eigenes Thema, nicht der Tausch).
+    "distance_pointfirst": dict(type=DISTANCE, elem=("Vertex2", "Face6"), plc=(vjcs("Vertex2"), fjcs("Face6")),
+                                props={"Distance": 8.0}, check=lambda j1, j2, p: check_point_plane(j2, j1, p),
+                                no_solve_on_create=True, reverse=True),
+    "distance_edgefirst": dict(type=DISTANCE, elem=("Edge9", "Face6"), plc=(ejcs("Edge9"), fjcs("Face6")),
+                               props={"Distance": 4.0}, check=lambda j1, j2, p: check_line_plane(j2, j1, p),
+                               no_solve_on_create=True, reverse=True),
 }
 
 
@@ -231,9 +243,13 @@ def build_content(case, doc, asm, directory):
         b = _box(doc, asm, "BoxB", directory)
         objs["BoxB"] = b
         doc.recompute()
-        _joint(asm, spec["type"], a, b, spec["plc"][0], spec["plc"][1], spec["elem"], spec["props"])
+        first, second = (b, a) if spec.get("reverse") else (a, b)
+        _joint(asm, spec["type"], first, second, spec["plc"][0], spec["plc"][1], spec["elem"], spec["props"])
         # Start: JCS deckungsgleich, dann gestoert - der Solver muss die Bedingung herstellen.
-        b.Placement = a.Placement.multiply(spec["plc"][0]).multiply(spec["plc"][1].inverse()).multiply(B_PERTURB)
+        if spec.get("reverse"):
+            b.Placement = a.Placement.multiply(spec["plc"][1]).multiply(spec["plc"][0].inverse()).multiply(B_PERTURB)
+        else:
+            b.Placement = a.Placement.multiply(spec["plc"][0]).multiply(spec["plc"][1].inverse()).multiply(B_PERTURB)
     else:
         spec = MECH_CASES[case]
         for label, jtype, plc_a, plc_part in spec["carriers"]:
@@ -283,8 +299,28 @@ def _place_anchored(link, mirror_label, anchor, plc1, perturb):
     link.Placement = want.multiply(mirror.Placement.inverse())
 
 
+SOLVE_PREFS = ("SolveInJointCreation", "SolveOnRecompute")
+
+
 def build_fixture(case, context, directory):
     """Baut FALL x KONTEXT in 'directory' (top.FCStd + ggf. sub/mid + Koerperdateien)."""
+    spec = PAIR_CASES.get(case, {})
+    if not spec.get("no_solve_on_create"):
+        return _build_fixture(case, context, directory)
+    # Ohne Solve bauen (beide Nutzereinstellungen aus): das Gelenk wird ungetauscht gespeichert,
+    # der erste Solve - ggf. erst im verschachtelten Kontext - tauscht.
+    prefs = App.ParamGet("User parameter:BaseApp/Preferences/Mod/Assembly")
+    saved = {k: prefs.GetBool(k, True) for k in SOLVE_PREFS}
+    for k in SOLVE_PREFS:
+        prefs.SetBool(k, False)
+    try:
+        return _build_fixture(case, context, directory)
+    finally:
+        for k, v in saved.items():
+            prefs.SetBool(k, v)
+
+
+def _build_fixture(case, context, directory):
     os.makedirs(directory, exist_ok=True)
     App.ParamGet("User parameter:BaseApp/Preferences/Document").SetBool("DuplicateLabels", True)
     top_path = os.path.join(directory, "top.FCStd")
@@ -413,9 +449,48 @@ def check_outer(top_asm, context, worlds):
     return ok, msgs
 
 
+JOINT_PROPS = ("Reference1", "Reference2", "Placement1", "Placement2")
+_joint_snapshot = {}
+
+
+def _joint_state(obj):
+    out = []
+    for prop in JOINT_PROPS:
+        value = getattr(obj, prop)
+        if prop.startswith("Reference"):
+            out.append((value[0].Name if value and value[0] else None, tuple(value[1]) if value else ()))
+        else:
+            out.append(App.Placement(value))
+    return out
+
+
+def remember_joint_originals(top_doc):
+    """Gelenk-Eigenschaften (Referenzen, JCS) in allen Unterdokumenten sichern."""
+    _joint_snapshot.clear()
+    for doc in App.listDocuments().values():
+        if doc is top_doc:
+            continue
+        for obj in doc.Objects:
+            if all(p in obj.PropertiesList for p in JOINT_PROPS):
+                _joint_snapshot[(doc.Name, obj.Name)] = _joint_state(obj)
+
+
+def joint_originals_unchanged():
+    changed = []
+    for (docname, objname), before in _joint_snapshot.items():
+        obj = App.getDocument(docname).getObject(objname)
+        for prop, a, b in zip(JOINT_PROPS, before, _joint_state(obj)):
+            same = a.isSame(b, 1e-12) if isinstance(a, App.Placement) else a == b
+            if not same:
+                changed.append(f"{docname}#{objname}.{prop}")
+    return not changed, changed
+
+
 def check_pair(case, container, worlds):
     spec = PAIR_CASES[case]
     a, b = _find(container, "BoxA"), _find(container, "BoxB")
+    if spec.get("reverse"):
+        a, b = b, a
     j1 = worlds[a][0].multiply(spec["plc"][0])
     j2 = worlds[b][0].multiply(spec["plc"][1])
     return spec["check"](j1, j2, spec["props"])
