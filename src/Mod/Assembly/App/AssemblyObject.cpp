@@ -1123,8 +1123,14 @@ void AssemblyObject::preDrag(std::vector<App::DocumentObject*> dragParts)
     if (hasUnconnectedDragPart) {
         prepareMbdForIslandDrag(dragParts);
     }
-    else {
-        solve();
+    else if (solve() != 0) {
+        // FCPROJECT-PATCH (2026-10-27): gescheiterter Solve (z.B. "Coaxial GearJoint requires a
+        // carrier marker", oder kein geerdetes Teil) hinterlaesst ein halb aufgebautes Modell -
+        // doDragStep() stuerzte darauf in OndselSolver ab (SIGSEGV in
+        // DirectionCosineIeqcJec::calcPostDynCorrectorIteration). Wie im Insel-Zweig verwerfen;
+        // doDragStep()/postDrag() tun dann nichts.
+        objectPartMap.clear();
+        mbdAssembly.reset();
     }
     bundleFixed = false;
 

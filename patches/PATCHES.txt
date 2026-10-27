@@ -130,6 +130,7 @@
 # 2026-10-17 (40): Nachtrag - OndselSolver Schwellen-Pivotisierung (kein falsches "singulaer" mehr).
 # 2026-10-27 (41): Nachtrag - geerdete Koerper (z.B. Origin) nach dem Solve nie ueberschreiben (groundedBodies).
 # 2026-10-27 (42): Nachtrag - Traegersuche koaxialer Zahnraeder instanzbewusst (resolvePartForMbD mit nestingPrefix).
+# 2026-10-27 (43): Nachtrag - preDrag verwirft das Modell nach gescheitertem Solve (Absturz beim Ziehen).
 
 2026.10.03-freecad-assembly-full-resync.patch
 

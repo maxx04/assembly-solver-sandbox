@@ -28,6 +28,7 @@ Stand 2026-10-28. Nutzerentscheidung 2026-10-27: Weg B probieren („obwohl ich 
 | 9 | Link/Placement bei PartDesign-Feature (`getPlacementOf`) | C++ (src/App) | klein | aus FCProject, neu prüfen | `patches/2026.09.04-…getplacementof…` |
 | 10 | OndselSolver-Dateileser: Zeilen in `assert()` gelesen (Release liest um eine Zeile versetzt), `readMarkers()` liest Rest der Datei | C++ | sehr klein | nachgestellt (Release-Build) | nur auf Zweig `tangent-joint` umgesetzt |
 | 11 | Part_LinkArrays „Startchaos“ beim Laden | ? | ? | laut Notiz auch Vanilla | Notiz todo-early-solve-during-restore-warnings |
+| 13 | Absturz beim Ziehen nach gescheitertem Solve: `preDrag()` ignoriert den Rueckgabewert von `solve()`, `doDragStep()` rechnet auf halb aufgebautem Modell (SIGSEGV in OndselSolver) | C++, wenige Zeilen | sehr klein | Code identisch in 1ec79da434; Absturz in Vanilla per GUI noch nachzustellen (Vanilla hat preDrag nicht in Python) | Test `test_drag_after_failed_solve` |
 | 12 | Verschachtelte Baugruppen allgemein (Adressieren statt Kopieren, Erdung als Kontext, starre Gruppen über Grenze …) | großer Umbau | sehr groß | Vanilla falsch (Tests) | ARCHITECTURE.md – erst nach Vertrauensaufbau, vorher mit Maintainern besprechen |
 
 ## Vorgeschlagene Reihenfolge

@@ -165,5 +165,8 @@ Traeger-Marker ueber `handleOneSideOfJoint(..., prefix)`, Markername per `jointI
 (sonst zwei gleichnamige Marker). `resolvePartForMbD()` dafuer public.
 Matrix 52/52, volle Testreihe gruen (aus dem Build-Baum).
 
-Offen: Nach dem gescheiterten Solve brach der Testlauf beim anschliessenden Ziehen ohne Ausgabe
-ab (vermutlich Absturz in preDrag nach Solve-Fehler) - eigener Punkt, nachstellen.
+Absturz nach gescheitertem Solve geklaert: `preDrag()` ignorierte den Rueckgabewert von
+`solve()`, `doDragStep()` rechnete auf dem halb aufgebauten Modell (SIGSEGV in
+`DirectionCosineIeqcJec::calcPostDynCorrectorIteration`). Fix: Modell verwerfen wie im
+Insel-Zweig. Regressionstest `test_drag_after_failed_solve` (koaxiale Zahnraeder ohne
+gemeinsamen Traeger), Testreihe 37/37. Upstream-Kandidat #13.
