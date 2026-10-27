@@ -157,9 +157,12 @@ private:
 struct RotationJointSide
 {
     App::DocumentObject* joint = nullptr;
+    std::string nestingPrefix;
     const char* carrierRefName = nullptr;
     const char* carrierPlcName = nullptr;
 };
+
+std::string jointInstanceName(App::DocumentObject* joint, const std::string& nestingPrefix);
 
 Base::Placement getJointSideGlobalPlacement(
     App::DocumentObject* joint,
@@ -209,15 +212,21 @@ bool isRotationCarrierJoint(JointType type)
     return type == JointType::Revolute || type == JointType::Cylindrical;
 }
 
+// FCPROJECT-PATCH (2026-10-27, jointtype-matrix gears_coaxial__duplicate): Zahnrad- und
+// Traegerseite ueber resolvePartForMbD() mit dem jeweiligen nestingPrefix vergleichen statt ueber
+// die adressierungsblinde getMovingPartFromRef(). Sonst fand die Suche bei einer doppelt
+// eingebauten Unterbaugruppe jedes Drehgelenk einmal je Instanz, hielt das fuer mehrdeutig und
+// setzte keinen Traeger ("Coaxial GearJoint requires a carrier marker").
 bool findRotationCarrierForGearSide(
     AssemblyObject* assembly,
     App::DocumentObject* gearJoint,
+    const std::string& gearPrefix,
     const char* gearRefName,
     const char* gearPlcName,
     RotationJointSide& carrierSide
 )
 {
-    auto* gearPart = getMovingPartFromRef(gearJoint, gearRefName);
+    auto* gearPart = assembly->resolvePartForMbD(gearJoint, gearRefName, gearPrefix);
     if (!gearPart) {
         return false;
     }
@@ -239,7 +248,7 @@ bool findRotationCarrierForGearSide(
                                const char* movingPlcName,
                                const char* carrierRefName,
                                const char* carrierPlcName) {
-            if (getMovingPartFromRef(joint, movingRefName) != gearPart) {
+            if (assembly->resolvePartForMbD(joint, movingRefName, jr.nestingPrefix) != gearPart) {
                 return false;
             }
 
@@ -254,6 +263,7 @@ bool findRotationCarrierForGearSide(
             }
             foundCarrier = true;
             carrierSide.joint = joint;
+            carrierSide.nestingPrefix = jr.nestingPrefix;
             carrierSide.carrierRefName = carrierRefName;
             carrierSide.carrierPlcName = carrierPlcName;
             return true;
@@ -269,7 +279,8 @@ bool findRotationCarrierForGearSide(
 void setGearJointCarrierMarkerIfAvailable(
     AssemblyObject* assembly,
     App::DocumentObject* joint,
-    const std::shared_ptr<ASMTJoint>& mbdJoint
+    const std::shared_ptr<ASMTJoint>& mbdJoint,
+    const std::string& nestingPrefix
 )
 {
     auto gearJoint = std::dynamic_pointer_cast<ASMTGearJoint>(mbdJoint);
@@ -280,26 +291,30 @@ void setGearJointCarrierMarkerIfAvailable(
     RotationJointSide side1;
     RotationJointSide side2;
     const bool hasCarrier1
-        = findRotationCarrierForGearSide(assembly, joint, "Reference1", "Placement1", side1);
+        = findRotationCarrierForGearSide(assembly, joint, nestingPrefix, "Reference1", "Placement1", side1);
     const bool hasCarrier2
-        = findRotationCarrierForGearSide(assembly, joint, "Reference2", "Placement2", side2);
+        = findRotationCarrierForGearSide(assembly, joint, nestingPrefix, "Reference2", "Placement2", side2);
     if (!hasCarrier1 || !hasCarrier2) {
         return;
     }
 
-    auto* carrierPart1 = getMovingPartFromRef(side1.joint, side1.carrierRefName);
-    auto* carrierPart2 = getMovingPartFromRef(side2.joint, side2.carrierRefName);
+    auto* carrierPart1
+        = assembly->resolvePartForMbD(side1.joint, side1.carrierRefName, side1.nestingPrefix);
+    auto* carrierPart2
+        = assembly->resolvePartForMbD(side2.joint, side2.carrierRefName, side2.nestingPrefix);
     if (!carrierPart1 || !carrierPart2
-        || assembly->getMbDPart(carrierPart1) != assembly->getMbDPart(carrierPart2)) {
+        || assembly->getMbDPart(carrierPart1, /*alreadyResolved=*/true)
+            != assembly->getMbDPart(carrierPart2, /*alreadyResolved=*/true)) {
         return;
     }
 
-    const std::string carrierMarkerName = joint->getFullName() + "-Carrier";
+    const std::string carrierMarkerName = jointInstanceName(joint, nestingPrefix) + "-Carrier";
     std::string fullMarkerNameK = assembly->handleOneSideOfJoint(
         side1.joint,
         side1.carrierRefName,
         side1.carrierPlcName,
-        carrierMarkerName
+        carrierMarkerName,
+        side1.nestingPrefix
     );
     if (!fullMarkerNameK.empty()) {
         gearJoint->setMarkerK(fullMarkerNameK);
@@ -4005,7 +4020,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(
     }
     if ((jointType == JointType::Gears || jointType == JointType::Belt)
         && gearJointNeedsCarrierMarker(joint)) {
-        setGearJointCarrierMarkerIfAvailable(this, joint, mbdJoint);
+        setGearJointCarrierMarkerIfAvailable(this, joint, mbdJoint, nestingPrefix);
     }
 
     std::string fullMarkerNameI, fullMarkerNameJ;

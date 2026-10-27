@@ -153,3 +153,17 @@ obwohl `findRotationCarrierForGearSide()` adressierungsblind ist - der Traeger-M
 nur bei koaxialen Gelenk-Achsen (`gearJointNeedsCarrierMarker()`), die Matrix hat keinen
 solchen Fall. Naechster Testfall: koaxiale Zahnraeder/Riemen (Traeger-Pfad) verschachtelt.
 Offen ausserdem: Vanilla-faehige Mechanismus-Pruefung ohne preDrag (BoxD verdrehen + solve()).
+
+### Nachtrag 2026-10-27 abends: koaxiale Zahnraeder (Traeger-Pfad)
+
+Neuer Fall `gears_coaxial` (Upstream "Coaxial gear joint" #31155, Traeger-Marker noetig).
+flat/nested/double liefen sofort, **duplicate scheiterte**: "Coaxial GearJoint requires a carrier
+marker" - `findRotationCarrierForGearSide()` verglich ueber `getMovingPartFromRef()` (Original),
+fand jedes Drehgelenk einmal je Instanz und hielt das fuer mehrdeutig.
+Fix: Zahnrad- und Traegerseite ueber `resolvePartForMbD()` mit dem jeweiligen `nestingPrefix`,
+Traeger-Marker ueber `handleOneSideOfJoint(..., prefix)`, Markername per `jointInstanceName()`
+(sonst zwei gleichnamige Marker). `resolvePartForMbD()` dafuer public.
+Matrix 52/52, volle Testreihe gruen (aus dem Build-Baum).
+
+Offen: Nach dem gescheiterten Solve brach der Testlauf beim anschliessenden Ziehen ohne Ausgabe
+ab (vermutlich Absturz in preDrag nach Solve-Fehler) - eigener Punkt, nachstellen.

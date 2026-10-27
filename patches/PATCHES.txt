@@ -129,6 +129,7 @@
 # 2026-10-17 (39): Nachtrag - Sandbox-Kennung (Version dev-sandbox, Markierung beim Speichern).
 # 2026-10-17 (40): Nachtrag - OndselSolver Schwellen-Pivotisierung (kein falsches "singulaer" mehr).
 # 2026-10-27 (41): Nachtrag - geerdete Koerper (z.B. Origin) nach dem Solve nie ueberschreiben (groundedBodies).
+# 2026-10-27 (42): Nachtrag - Traegersuche koaxialer Zahnraeder instanzbewusst (resolvePartForMbD mit nestingPrefix).
 
 2026.10.03-freecad-assembly-full-resync.patch
 

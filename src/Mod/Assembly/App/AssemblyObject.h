@@ -178,6 +178,13 @@ public:
     // Bug-C-Ersetzung sofort per getSourceForMirror() rueckgaengig machen (siehe
     // docs/ARCHITECTURE.md §4.1 "Bug C").
     std::shared_ptr<MbD::ASMTPart> getMbDPart(App::DocumentObject* obj, bool alreadyResolved = false);
+    // Adressierungsbewusste Teil-Aufloesung einer Joint-Referenz (Herleitung am Ende des
+    // private-Abschnitts). Oeffentlich fuer die Traegersuche koaxialer Zahnraeder.
+    App::DocumentObject* resolvePartForMbD(
+        App::DocumentObject* joint,
+        const char* propRefName,
+        const std::string& nestingPrefix
+    );
     // To help the solver, during dragging, we are bundling parts connected by a fixed joint.
     // So several assembly components are bundled in a single ASMTPart.
     // So we need to store the plc of each bundled object relative to the bundle origin (first obj
@@ -618,11 +625,7 @@ private:
     // verschiedene AssemblyLink-Instanzen desselben verlinkten Dokuments erreicht, nur EIN
     // nestingPrefix gleichzeitig halten (der zweite Eintrag ueberschrieb den ersten
     // kommentarlos) - eine der beiden Instanzen wurde dadurch mit dem FALSCHEN Prefix aufgeloest.
-    App::DocumentObject* resolvePartForMbD(
-        App::DocumentObject* joint,
-        const char* propRefName,
-        const std::string& nestingPrefix
-    );
+    // (Deklaration resolvePartForMbD(): public, bei getMbDPart().)
 
     // FCPROJECT-PATCH (Befund 3, Teilschritt 2e "adressieren statt kopieren", solver-root-cause-
     // fix, siehe patches/assembly-architecture-overview.md): resolvePartForMbD() loest Joint-

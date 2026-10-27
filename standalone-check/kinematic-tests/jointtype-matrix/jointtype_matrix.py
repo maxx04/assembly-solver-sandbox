@@ -170,6 +170,12 @@ MECH_CASES = {
         carriers=[("BoxB", REVOLUTE, P(0, 0, 10), BOTTOM), ("BoxD", REVOLUTE, P(15, 0, 10), BOTTOM)],
         coupling=(GEARS, "BoxB", "BoxD", BOTTOM, BOTTOM, {"Distance": 10.0, "Distance2": 5.0}),
         expect=("rotation", 5.0 / 10.0), drive_axis_on_A=P(15, 0, 10)),
+    # Koaxiale Zahnraeder (Upstream "Coaxial gear joint" #31155): beide Gelenk-JCS auf einer Achse,
+    # der Solver braucht den Traeger-Marker (findRotationCarrierForGearSide()).
+    "gears_coaxial": dict(
+        carriers=[("BoxB", REVOLUTE, P(0, 0, 10), BOTTOM), ("BoxD", REVOLUTE, P(0, 0, 10), BOTTOM)],
+        coupling=(GEARS, "BoxB", "BoxD", BOTTOM, BOTTOM, {"Distance": 10.0, "Distance2": 5.0}),
+        expect=("rotation", 5.0 / 10.0), drive_axis_on_A=P(0, 0, 10)),
     "belt": dict(
         carriers=[("BoxB", REVOLUTE, P(0, 0, 10), BOTTOM), ("BoxD", REVOLUTE, P(40, 0, 10), BOTTOM)],
         coupling=(BELT, "BoxB", "BoxD", BOTTOM, BOTTOM, {"Distance": 10.0, "Distance2": 5.0}),
