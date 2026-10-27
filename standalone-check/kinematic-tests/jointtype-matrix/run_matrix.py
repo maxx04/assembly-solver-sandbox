@@ -9,6 +9,7 @@ gegen Vanilla, danach entscheidet sich, welche Faelle in die Standard-Matrix wan
 Aufruf:
     ./common/run-test.sh <freecad-install-dir|AppImage> jointtype-matrix/run_matrix.py
 Auswahl: JTM_ONLY="parallel__flat,gears__nested" (Komma-Liste von FALL__KONTEXT).
+Mechanismen: JTM_MODE=sim treibt per Simulation statt per Ziehen an (Vanilla immer Simulation).
 Gibt am Ende "RESULT: PASS" (alle bestanden) oder "RESULT: FAIL ..." aus.
 """
 import os
@@ -37,9 +38,14 @@ def run_case(case, context, workdir):
     shutil.copytree(src, dst)
     msgs = []
     top = App.openDocument(os.path.join(dst, "top.FCStd"))
+    # Mechanismen: Ziehen (preDrag, nur Sandbox) oder Simulation (auch Vanilla). JTM_MODE=sim
+    # erzwingt die Simulation; ohne preDrag in Python (Vanilla) wird immer simuliert.
     ntu.remember_originals(top)
     jtm.remember_joint_originals(top)
     top_asm = [o for o in top.Objects if o.TypeId == "Assembly::AssemblyObject"][0]
+    mode = os.environ.get("JTM_MODE", "drag")
+    if not hasattr(top_asm, "preDrag"):
+        mode = "sim"
     top.recompute()
     rc = top_asm.solve()
     top.recompute()
@@ -53,7 +59,10 @@ def run_case(case, context, workdir):
         if case in jtm.PAIR_CASES:
             good, text = jtm.check_pair(case, container, worlds)
         else:
-            good, text = jtm.drive_mechanism(case, top_asm, container)
+            if mode == "sim":
+                good, text = jtm.simulate_mechanism(case, top_asm, container)
+            else:
+                good, text = jtm.drive_mechanism(case, top_asm, container)
             worlds = jtm.world_index(top_asm)
         ok &= good
         msgs.append(f"{name}: {text} -> {'OK' if good else 'FEHLER'}")

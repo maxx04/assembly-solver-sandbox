@@ -206,3 +206,19 @@ scheitert (Sandbox alt und Vanilla). Fix ein Zeichen, Test `test_distance_plane_
 `distance_edgefirst__duplicate` war dagegen ein Fixturmangel: bei deckungsgleichen JCS steht die
 Kante senkrecht auf der Ebene (singulaer fuer "parallel"), Start jetzt mit Kante in der Ebene
 (`LINE_IN_PLANE`), auch fuer `distance_lineplane`. Matrix 60/60, Testreihe 38/38.
+
+### Phase 1 abgeschlossen (2026-10-27): Vergleich mit Vanilla, alle 15 Faelle
+
+Mechanismen jetzt auch per Simulation (`simulate_mechanism()`: Motion "Angular" am Drehgelenk
+von BoxD, Messung erstes/letztes Bild) - Vanilla nimmt diesen Weg automatisch (kein preDrag in
+Python), Sandbox per `JTM_MODE=sim` (20/20).
+
+| | flat | nested | double | duplicate |
+|---|---|---|---|---|
+| Sandbox (installiert, Ziehen) | 15/15 | 15/15 | 15/15 | 15/15 |
+| Vanilla Weekly 2026.10.21 | 15/15 | 0/15 | 0/15 | 1/15 (planeplane) |
+
+Flach liefern beide dieselben Uebersetzungen und Vorzeichen (Gears/koaxial -0.5, Belt +0.5,
+RackPinion 5 mm/rad, Screw 2 mm/U). Vanilla verschachtelt: Verankerung falsch, Simulation bewegt
+BoxD nicht, double veraendert Originale. Den OndselSolver-Hesse-Fehler deckt die Matrix nicht ab
+(Ebene stets am geerdeten Teil) - dafuer test_distance_plane_on_moving_part (Vanilla FAIL).

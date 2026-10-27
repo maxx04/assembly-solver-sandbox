@@ -512,31 +512,19 @@ def _angle_about(rot_start, rot_now, axis):
     return math.atan2(math.sin(ang), math.cos(ang))
 
 
-def drive_mechanism(case, top_asm, container):
-    """BoxD um seine Drehachse ziehen, Verhaeltnis zu BoxB pruefen."""
+def _measure_mechanism(case, container, worlds_before, worlds_after):
+    """Drehung BoxD um ihre Achse vs. Drehung/Weg BoxB zwischen zwei Weltlagen-Staenden."""
     spec = MECH_CASES[case]
-    worlds = world_index(top_asm)
     a, b, d = (_find(container, l) for l in ("BoxA", "BoxB", "BoxD"))
-    axis_plc = worlds[a][0].multiply(spec["drive_axis_on_A"])
-    axis = zdir(axis_plc)
-    d_start, d_parent = worlds[d]
-    b_start = worlds[b][0]
-    top_asm.preDrag([d])
-    for step in range(1, DRIVE_STEPS + 1):
-        turn = App.Placement(App.Vector(), App.Rotation(axis, DRIVE_STEP_DEG * step), axis_plc.Base)
-        d.Placement = d_parent.inverse().multiply(turn.multiply(d_start))
-        top_asm.doDragStep()
-    top_asm.postDrag()
-    worlds = world_index(top_asm)
-    theta_d = _angle_about(d_start.Rotation, worlds[d][0].Rotation, axis)
+    axis = zdir(worlds_before[a][0].multiply(spec["drive_axis_on_A"]))
+    theta_d = _angle_about(worlds_before[d][0].Rotation, worlds_after[d][0].Rotation, axis)
     kind, ratio = spec["expect"]
+    carrier_axis = zdir(worlds_after[a][0].multiply(spec["carriers"][0][2]))
     if kind == "rotation":
-        b_axis = zdir(worlds[a][0].multiply(spec["carriers"][0][2]))
-        moved = _angle_about(b_start.Rotation, worlds[b][0].Rotation, b_axis)
+        moved = _angle_about(worlds_before[b][0].Rotation, worlds_after[b][0].Rotation, carrier_axis)
         what = "Drehung BoxB"
     else:
-        s_axis = zdir(worlds[a][0].multiply(spec["carriers"][0][2]))
-        moved = (worlds[b][0].Base - b_start.Base).dot(s_axis)
+        moved = (worlds_after[b][0].Base - worlds_before[b][0].Base).dot(carrier_axis)
         what = "Weg BoxB"
     if abs(theta_d) < math.radians(1):
         return False, f"BoxD hat sich nicht gedreht ({math.degrees(theta_d):.3f} Grad)"
@@ -545,3 +533,80 @@ def drive_mechanism(case, top_asm, container):
     ok = abs(got - ratio) <= TOL_RATIO * max(1.0, ratio)
     return ok, (f"BoxD {math.degrees(theta_d):.3f} Grad, {what} {moved:.6f} -> |Verhaeltnis| {got:.6f} "
                 f"(soll {ratio:.6f}), Vorzeichen {sign}")
+
+
+def drive_mechanism(case, top_asm, container):
+    """BoxD um seine Drehachse ziehen (preDrag/doDragStep, nur Sandbox), Verhaeltnis pruefen."""
+    spec = MECH_CASES[case]
+    before = world_index(top_asm)
+    a, d = _find(container, "BoxA"), _find(container, "BoxD")
+    axis_plc = before[a][0].multiply(spec["drive_axis_on_A"])
+    axis = zdir(axis_plc)
+    d_start, d_parent = before[d]
+    top_asm.preDrag([d])
+    for step in range(1, DRIVE_STEPS + 1):
+        turn = App.Placement(App.Vector(), App.Rotation(axis, DRIVE_STEP_DEG * step), axis_plc.Base)
+        d.Placement = d_parent.inverse().multiply(turn.multiply(d_start))
+        top_asm.doDragStep()
+    top_asm.postDrag()
+    return _measure_mechanism(case, container, before, world_index(top_asm))
+
+
+SIM_RATE = 0.4  # rad pro Sekunde fuer die Motion am Drehgelenk von BoxD
+
+
+def _drive_joint_instance(top_asm, container):
+    """Drehgelenk BoxA-BoxD im Dokument des Inhalts (+ nestingPrefix der Instanz, falls die
+    Sandbox Gelenk-Instanzen kennt; Vanilla kennt nur das Gelenk selbst)."""
+    import UtilsAssembly
+
+    source = container
+    while source is not top_asm and source.TypeId == "Assembly::AssemblyLink":
+        source = source.LinkedObject  # Spiegel -> Link im Mid-Dokument -> Unterbaugruppe
+    content_doc = source.Document
+    joint = None
+    for obj in content_doc.Objects:
+        ref2 = getattr(obj, "Reference2", None)
+        if getattr(obj, "JointType", None) == "Revolute" and ref2 and ref2[0] and ref2[0].Label == "BoxD":
+            joint = obj
+    if joint is None:
+        return None, None
+    if container is top_asm or not hasattr(UtilsAssembly, "getJointInstancesOfType"):
+        return joint, ""
+    # Das Praefix nennt die Link-Namen der Quelldokumente (z.B. "Assembly001.Assembly001."), nicht
+    # die der Spiegel im obersten Dokument. Eine Instanz: eindeutig; mehrere (duplicate): die
+    # Links haengen direkt in top_asm, dort stimmt der Name.
+    prefixes = [p for inst, p in UtilsAssembly.getJointInstancesOfType(top_asm, ["Revolute"]) if inst == joint]
+    if len(prefixes) == 1:
+        return joint, prefixes[0]
+    for prefix in prefixes:
+        if prefix.endswith(container.Name + "."):
+            return joint, prefix
+    return joint, None
+
+
+def simulate_mechanism(case, top_asm, container):
+    """BoxD per Simulation (Motion "Angular" am Drehgelenk) antreiben, Verhaeltnis zu BoxB pruefen
+    zwischen erstem und letztem Bild. Laeuft auch in Vanilla (dort fehlt preDrag in Python)."""
+    import CommandCreateSimulation as CCS
+    import UtilsAssembly
+
+    joint, prefix = _drive_joint_instance(top_asm, container)
+    if joint is None or prefix is None:
+        return False, "Antriebsgelenk (Instanz) nicht gefunden"
+    sim = UtilsAssembly.getSimulationGroup(top_asm).newObject("App::FeaturePython", "Simulation")
+    CCS.Simulation(sim)
+    motion = top_asm.newObject("App::FeaturePython", "Motion")
+    CCS.Motion(motion, "Angular", (joint, [prefix]) if prefix else joint, f"initialValue + {SIM_RATE}*time")
+    sim.Group = [motion]
+    rc = top_asm.generateSimulation(sim)
+    frames = top_asm.numberOfFrames() if rc == 0 else 0
+    if rc != 0 or frames < 2:
+        return False, f"generateSimulation rc={rc}, Bilder={frames}"
+    top_asm.updateForFrame(0)
+    before = world_index(top_asm)
+    top_asm.updateForFrame(frames - 1)
+    after = world_index(top_asm)
+    top_asm.updateForFrame(0)
+    ok, text = _measure_mechanism(case, container, before, after)
+    return ok, "Simulation: " + text
