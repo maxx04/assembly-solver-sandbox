@@ -9772,10 +9772,10 @@ index 3c89d4a40ec..299dcf8ef52 100644
      # Taskbox keyboard event handler
      def eventFilter(self, watched, event):
 diff --git a/src/Mod/Assembly/CommandCreateView.py b/src/Mod/Assembly/CommandCreateView.py
-index 8bd27cbf692..21bbcd27a70 100644
+index 9ad65b6ca9e..17aaa7e8576 100644
 --- a/src/Mod/Assembly/CommandCreateView.py
 +++ b/src/Mod/Assembly/CommandCreateView.py
-@@ -1351,8 +1351,8 @@ class TaskAssemblyCreateView(QtCore.QObject):
+@@ -1352,8 +1352,8 @@ class TaskAssemblyCreateView(QtCore.QObject):
          ref = UtilsAssembly.addVertexToReference(ref, vertex_name)
  
          plc = UtilsAssembly.findPlacement(ref)

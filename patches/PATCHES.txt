@@ -6,7 +6,7 @@
 #     gegen ein ECHTES Vanilla-Checkout des Ziel-Commits, nicht mehr gegen HEAD - siehe dortige
 #     Kommentare)
 #
-# VANILLA_BASE: 4218d22c3a
+# VANILLA_BASE: 1ec79da434
 # ^ Nutzerauftrag 2026-09-27 ("wer prueft, dass alle Commits im Patch landen?"): der Commit,
 # gegen den die Patches oben den Diff bilden (git diff VANILLA_BASE HEAD -- src/Mod/Assembly
 # src/3rdParty/OndselSolver). check-patches.sh liest diese Zeile automatisch und prueft nach dem
@@ -148,20 +148,19 @@
 # Seit 2026-10-17 abends: Schwellen-Pivotisierung in GESpMatParPvMarkoFast::doPivoting().
 2026.10.11-ondselsolver-redundancy-groups.patch
 
-# NICHT in obiger Liste, weil nicht auf DIESE Sandbox anwendbar (betrifft src/App/*, hier
-# per Sparse-Checkout gar nicht ausgecheckt - nur src/Mod/Assembly + src/3rdParty/
-# OndselSolver sind es). Gehoert inhaltlich trotzdem zum selben Fix-Komplex, wird separat
-# gegen freecad-source direkt geprueft/angewendet:
-#   2026.09.04-freecad-app-getplacementof-partdesign-feature.patch
-#
-# NICHT in obiger Liste, ebenfalls nicht auf DIESE Sandbox anwendbar (betrifft src/Gui/
-# FileDialog.*, allgemeiner Gui-Code ausserhalb des Assembly-Sparse-Checkouts). Reine
-# Referenzkopie aus dem separaten FCProject-Repo (patches/freecad-filedialog-search-filter.patch
-# dort) - fuegt ein Live-Suchfeld im Qt-eigenen (nicht-nativen) Datei-Oeffnen/Speichern-Dialog
-# hinzu, das die Dateiliste per setNameFilter() waehrend des Tippens filtert. Falls gewuenscht,
-# direkt gegen freecad-source pruefen/anwenden, nicht ueber update-sandbox.sh/check-patches.sh:
-#   2026.09.13-freecad-filedialog-search-filter.patch
-#
+# Build-Baum-Patches aus dem Dev-Build (/home/maxx/freecad/freecad-source), seit 2026-10-27 aktiv
+# (Nutzerauftrag: "das und alles notwendige vom Dev uebernehmen" - die Sandbox ersetzt den
+# Dev-Build; dessen Assembly-Stand war veraltet, mit Kopier-Pipeline). Vorher nur Referenzkopien.
+# Inhalt byte-gleich mit den lokalen Aenderungen im Dev-Build verglichen. Nicht uebernommen: die
+# Dev-Aenderung an CMakeLists.txt (schaltet add_subdirectory(tests) ab - die Sandbox baut
+# AssemblyTests).
+# - getPlacementOf: App::DocumentObject/App::Link - Placement eines PartDesign-Features
+#   innerhalb eines Bodys/Links richtig aufloesen (src/App/*).
+build: 2026.09.04-freecad-app-getplacementof-partdesign-feature.patch
+# - Dateidialog: Live-Suchfeld im Qt-eigenen (nicht-nativen) Oeffnen/Speichern-Dialog, filtert die
+#   Dateiliste per setNameFilter() waehrend des Tippens (src/Gui/FileDialog.*).
+build: 2026.09.13-freecad-filedialog-search-filter.patch
+
 # Build-Baum-Patch (betrifft src/Gui/* und src/Mod/Start/Gui/*, ausserhalb des
 # Assembly-Sparse-Checkouts). Nutzerfund 2026-09-27 beim
 # Vorbereiten eines Vollsyncs des Build-Baums (/home/maxx/freecad-sandbox/freecad-source) auf

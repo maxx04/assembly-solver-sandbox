@@ -1,0 +1,23 @@
+import FreeCAD as App, os
+path = os.path.join(App.getUserAppDataDir(), "rg_repro.FCStd")
+if os.path.exists(path): os.remove(path)
+doc = App.newDocument("rg_repro")
+asm = doc.addObject("Assembly::AssemblyObject", "Assembly")
+a = doc.addObject("Part::Box", "BoxA"); b = doc.addObject("Part::Box", "BoxB")
+b.Placement.Base = App.Vector(20, 0, 0)
+asm.addObject(a); asm.addObject(b)
+import UtilsAssembly, JointObject
+jg = UtilsAssembly.getJointGroup(asm)
+rg = jg.newObject("App::FeaturePython", "RigidGroupJoint")
+print("STEP anlegen")
+JointObject.RigidGroupJoint(rg, [a, b])
+if App.GuiUp:
+    JointObject.ViewProviderRigidGroupJoint(rg.ViewObject)
+doc.recompute()
+print("STEP gespeicherte Lagen:", len(rg.RigidPlacements))
+doc.saveAs(path); App.closeDocument(doc.Name)
+print("STEP neu laden")
+doc2 = App.openDocument(path)
+rg2 = doc2.getObject("RigidGroupJoint")
+print("STEP nach Laden Lagen:", len(rg2.RigidPlacements))
+print("RESULT: PASS")

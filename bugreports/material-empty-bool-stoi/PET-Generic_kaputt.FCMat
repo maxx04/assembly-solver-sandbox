@@ -1,0 +1,38 @@
+﻿---
+# File created by FreeCAD 27.1.0 Revision: 49308 (Git)
+General:
+  UUID: "3ca74cf2-e188-4438-af08-aa9d6b5b955d"
+  Name: "PET-Generic"
+  Author: "user"
+  License: "CC-BY-3.0"
+  SourceURL: "http://www.matweb.com/search/DataSheet.aspx?MatGUID=a696bdcdff6f41dd98f8eec3599eaa20"
+Models:
+  Thermal:
+    UUID: "9959d007-a970-4ea7-bae4-3eb1b8b883c7"
+    SpecificHeat: "1140 J/kg/K"
+    ThermalConductivity: "0,181 W/m/K"
+    ThermalExpansionCoefficient: "72 µm/m/K"
+  Costs:
+    UUID: "881df808-8726-4c2e-be38-688bb6cce466"
+    ProductURL: "https://en.wikipedia.org/wiki/Polyethylene_terephthalate"
+  Linear Elastic:
+    UUID: "7b561d1d-fb9b-44f6-9da9-56a4f74d7536"
+    CompressiveStrength: "38 MPa"
+    Density: "1380 kg/m^3"
+    PoissonRatio: "0.36"
+    ShearModulus: "38,5 MPa"
+    UltimateTensileStrength: "38,8 MPa"
+    YieldStrength: "62,8 MPa"
+    YoungsModulus: "3150 MPa"
+AppearanceModels:
+  Basic Rendering:
+    UUID: "f006c7e4-35b7-43d5-bbf9-c5d572309e6e"
+    AmbientColor: "(0.333333, 0.333333, 0.333333, 1)"
+    DiffuseColor: "(0.368627,0.360784,0.392157,1)"
+    EmissiveColor: "(0,0,0,1)"
+    Shininess: "0.9"
+    SpecularColor: "(0.368627,0.360784,0.392157,1)"
+    Transparency: "0"
+  Render Workbench:
+    UUID: "344008be-a837-43af-90bc-f795f277b309"
+    UseObjectColor: ""
