@@ -173,6 +173,20 @@ void ViewProviderAssemblyLink::setupContextMenu(QMenu* menu, QObject* receiver, 
             "Rigid = %s",
             assemblyLink->Rigid.getValue() ? "False" : "True"
         );
+        // FCPROJECT-PATCH (2026-10-28, Nutzerwunsch): nach dem Umschalten gleich loesen - die
+        // aktive (bearbeitete) Baugruppe, sonst die direkt einbauende. Im selben Rueckgaengig-
+        // Schritt.
+        auto* parent = assemblyLink->getParentAssembly();
+        Gui::Command::doCommand(Gui::Command::Doc, "import UtilsAssembly\n_asm = UtilsAssembly.activeAssembly()");
+        if (parent) {
+            Gui::Command::doCommand(
+                Gui::Command::Doc,
+                "_asm = _asm or App.getDocument(\"%s\").getObject(\"%s\")",
+                parent->getDocument()->getName(),
+                parent->getNameInDocument()
+            );
+        }
+        Gui::Command::doCommand(Gui::Command::Doc, "if _asm:\n    _asm.solve()");
 
         getDocument()->commitCommand();
         Gui::Selection().clearSelection();

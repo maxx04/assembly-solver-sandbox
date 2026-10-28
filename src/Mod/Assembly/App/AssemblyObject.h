@@ -234,7 +234,7 @@ public:
     );
     std::shared_ptr<MbD::ASMTJoint> makeMbdJointDistance(App::DocumentObject* joint, bool& swapSides);
     // jcsTurn: zusaetzliche Drehung des JCS im Marker (Variante eines Fixed-Gelenks, siehe
-    // fixedJointVariant()).
+    // jointVariant()).
     std::string handleOneSideOfJoint(
         App::DocumentObject* joint,
         const char* propRefName,
@@ -262,9 +262,9 @@ public:
         const char* refTo,
         const char* plcTo
     );
-    // Variante eines Fixed-Gelenks fuer den Solver (FixedJoint verlangt seit 2026-10-28 exakte
-    // Deckung, #32477): Drehung, um die der Marker J gedreht wird.
-    Base::Rotation fixedJointVariant(App::DocumentObject* joint, const std::string& nestingPrefix);
+    // Variante eines Fixed-/Slider-/Dreh-/Zylindergelenks fuer den Solver (diese verlangen seit
+    // 2026-10-28 eindeutige Lagen, #32477): Drehung, um die der Marker J gedreht wird.
+    Base::Rotation jointVariant(App::DocumentObject* joint, JointType jointType, const std::string& nestingPrefix);
     void getRackPinionMarkers(
         App::DocumentObject* joint,
         std::string& markerNameI,

@@ -4046,8 +4046,10 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(
         const char* plcI = swapSides ? "Placement2" : "Placement1";
         const char* refJ = swapSides ? "Reference1" : "Reference2";
         const char* plcJ = swapSides ? "Placement1" : "Placement2";
+        const bool hasVariant = jointType == JointType::Fixed || jointType == JointType::Slider
+            || jointType == JointType::Revolute || jointType == JointType::Cylindrical;
         const Base::Rotation turnJ
-            = jointType == JointType::Fixed ? fixedJointVariant(joint, nestingPrefix) : Base::Rotation();
+            = hasVariant ? jointVariant(joint, jointType, nestingPrefix) : Base::Rotation();
         fullMarkerNameI = handleOneSideOfJoint(joint, refI, plcI, std::string(), nestingPrefix);
         fullMarkerNameJ = handleOneSideOfJoint(joint, refJ, plcJ, std::string(), nestingPrefix, turnJ);
     }
@@ -4391,8 +4393,8 @@ Base::Placement AssemblyObject::fixedJointRelationInOwnDocument(
 }
 
 // FCPROJECT-PATCH (2026-10-28, BG22: zweite BackslashNut umgeklappt; ARCHITECTURE.md §2.1d):
-// OndselSolvers FixedJoint verlangt jetzt die exakte Deckung beider JCS (eindeutig, keine
-// 180-Grad-Wurzeln mehr). FreeCAD kennt aber zwei gewollte Lagen - deckungsgleich oder
+// OndselSolvers Fixed- und Slider-Gelenk verlangen jetzt die exakte Deckung beider JCS, Dreh- und
+// Zylindergelenk gleichgerichtete Z-Achsen (eindeutig, keine 180-Grad-Wurzeln mehr). FreeCAD kennt aber zwei gewollte Lagen - deckungsgleich oder
 // "umgekehrt" (180 Grad um X, Knopf "Ausrichtung wechseln") - und speichert die Wahl nur in der
 // Lage der Teile. Darum bestimmt diese Funktion die Variante beim Modellaufbau und dreht den
 // Marker J entsprechend:
@@ -4402,7 +4404,11 @@ Base::Placement AssemblyObject::fixedJointRelationInOwnDocument(
 //    eigenen Dokument;
 //  - sonst weit daneben: deckungsgleich oder umgekehrt nach der Z-Richtung, wie preSolve().
 // Danach kann Newton die Variante nicht mehr wechseln.
-Base::Rotation AssemblyObject::fixedJointVariant(App::DocumentObject* joint, const std::string& nestingPrefix)
+Base::Rotation AssemblyObject::jointVariant(
+    App::DocumentObject* joint,
+    JointType jointType,
+    const std::string& nestingPrefix
+)
 {
     auto* part1 = resolvePartForMbD(joint, "Reference1", nestingPrefix);
     auto* part2 = resolvePartForMbD(joint, "Reference2", nestingPrefix);
@@ -4417,19 +4423,50 @@ Base::Rotation AssemblyObject::fixedJointVariant(App::DocumentObject* joint, con
     };
     const Base::Placement relation = jcsWorld(part1, "Reference1", "Placement1").inverse()
         * jcsWorld(part2, "Reference2", "Placement2");
+    const Base::Rotation flipped(Base::Vector3d(1, 0, 0), M_PI);
     constexpr double nearSolution = 1e-3;  // mm bzw. rad
-    double error = 1.0;
-    const Base::Placement current = snapFixedJointRelation(relation, &error);
+
+    // Revolute/Cylindrical: nur das Vorzeichen der Z-Achse ist festzulegen (Drehung um Z frei).
+    if (jointType == JointType::Revolute || jointType == JointType::Cylindrical) {
+        auto zOf = [](const Base::Placement& rel) {
+            return rel.getRotation().multVec(Base::Vector3d(0, 0, 1));
+        };
+        Base::Vector3d z = zOf(relation);
+        const bool parallel = Base::Vector3d(z.x, z.y, 0).Length() < nearSolution;
+        if (!parallel && !nestingPrefix.empty()) {
+            const Base::Vector3d own = zOf(
+                fixedJointRelationInOwnDocument(joint, "Reference1", "Placement1", "Reference2", "Placement2")
+            );
+            if (Base::Vector3d(own.x, own.y, 0).Length() < nearSolution) {
+                z = own;
+            }
+        }
+        return z.z >= 0.0 ? Base::Rotation() : flipped;
+    }
+
+    // Fixed/Slider: eine der vier Loesungen der alten Gleichungen. Beim Slider zaehlt nur die
+    // Drehung (entlang Z frei).
+    const bool rotationOnly = jointType == JointType::Slider;
+    auto errorOf = [&](const Base::Placement& rel, Base::Placement& snapped) {
+        double error = 1.0;
+        snapped = snapFixedJointRelation(
+            rotationOnly ? Base::Placement(Base::Vector3d(), rel.getRotation()) : rel,
+            &error
+        );
+        return error;
+    };
+    Base::Placement current;
+    const double error = errorOf(relation, current);
     if (error > nearSolution && !nestingPrefix.empty()) {
-        double ownError = 1.0;
-        const Base::Placement own = snapFixedJointRelation(
+        Base::Placement own;
+        const double ownError = errorOf(
             fixedJointRelationInOwnDocument(joint, "Reference1", "Placement1", "Reference2", "Placement2"),
-            &ownError
+            own
         );
         if (ownError < nearSolution) {
             Base::Console().log(
-                "Assembly: fixed joint '{}' starts {:.3f} away from a solution - orientation "
-                "taken from its own document.\n",
+                "Assembly: joint '{}' starts {:.3f} away from a solution - orientation taken from "
+                "its own document.\n",
                 getJointContextName(joint),
                 error
             );
@@ -4441,7 +4478,7 @@ Base::Rotation AssemblyObject::fixedJointVariant(App::DocumentObject* joint, con
         // matchJCS() nur zwischen den beiden gewollten Varianten waehlen, nach der Z-Richtung
         // (UtilsAssembly.arePlacementSameDir()). 180 Grad um Y oder Z nie.
         const Base::Vector3d z = relation.getRotation().multVec(Base::Vector3d(0, 0, 1));
-        return z.z > 0.0 ? Base::Rotation() : Base::Rotation(Base::Vector3d(1, 0, 0), M_PI);
+        return z.z > 0.0 ? Base::Rotation() : flipped;
     }
     return current.getRotation();
 }

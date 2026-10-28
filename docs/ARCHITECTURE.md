@@ -249,19 +249,29 @@ wählen kann. Bündeln nimmt ihm diese Freiheit. Verworfen; Patch zum Nachlesen:
 **Praxis:** Steht ein verschachteltes Fixed-Teil umgeklappt, hilft in der einbauenden Baugruppe
 Starr an / Starr aus (die Spiegel übernehmen die Original-Lage, der Solver ordnet den Rest).
 
-### 2.1d Eindeutiges Fixed-Gelenk im Solver (2026-10-28, freigegeben und installiert)
+### 2.1d Eindeutige Gelenke im Solver: Fixed, Slider, Dreh, Zylinder (2026-10-28)
 
 Statt Bündeln (§2.1c) wird die Mehrdeutigkeit dort beseitigt, wo sie entsteht:
 
-- **OndselSolver** `FixedJoint`: `zI·xJ = 0` + Winkel von J um die Z-Achse von I = 0 + Winkel um
-  die X-Achse = 0 (atan2, stetig; `AngleZConstraintIqcJqc` bzw. neu `AngleXConstraintIqcJqc`).
-  Einzige Lösung: deckungsgleiche JCS. Newton kann nicht mehr auf eine 180-Grad-Wurzel springen.
-- **AssemblyObject:** FreeCADs zwei gewollte Lagen (deckungsgleich / „umgekehrt“ = 180 Grad um X)
-  werden beim Modellaufbau in den Marker J eingerechnet (`fixedJointVariant()`): nahe einer
-  Lösung die aktuelle (auch alte stille Umklappungen bleiben), verschachtelt und weit daneben die
-  aus dem eigenen Dokument, sonst nach Z-Richtung wie `preSolve()`.
-- Ergebnis an BG22-Kopien: Mutter richtig, Starr -> Flexibel ohne Widerspruch.
-- Plan und Prüfstand: `plans/2026-10-28-eindeutige-fixed-gelenke.md`.
+- **OndselSolver** (Submodul-Patch), Baustein `AxisAngleIeqcJeqc`/`AxisAngleConstraintIqcJqc`:
+  Winkel atan2(sin, cos) aus zwei frei wählbaren Richtungskosinussen, abgeleitet von
+  `AngleZIeqcJeqc` (gleiche Ableitungen, stetig).
+  - `FixedJoint`, `TranslationalJoint` (Slider): `zI·xJ = 0` + Winkel um Z = 0 + Winkel um X = 0
+    statt drei Richtungskosinusse (vier Lösungen, #32477). Einzige Lösung: deckungsgleich.
+  - `RevoluteJoint`, `CylindricalJoint`: Kippwinkel von zJ um X und um Y von I = 0 statt
+    `zI·xJ = zI·yJ = 0` (erlaubte auch zJ = -zI). Drehung um Z bleibt frei.
+  - Treibt eine Motion das Gelenk (Bezugssystem I zeitabhängig, `EndFrameqct`), bleiben die
+    alten Bedingungen: für die Winkel gibt es keine zeitabhängige Variante, die Simulation startet
+    aus der gelösten Lage.
+- **AssemblyObject:** FreeCADs gewollte Varianten (deckungsgleich / „umgekehrt“ = 180 Grad um X)
+  werden beim Modellaufbau in den Marker J eingerechnet (`jointVariant()`): Fixed/Slider nahe
+  einer der vier früheren Lösungen die aktuelle (Slider: nur die Drehung), Dreh/Zylinder das
+  aktuelle Vorzeichen der Z-Achse; verschachtelt und weit daneben aus dem eigenen Dokument;
+  sonst nach Z-Richtung wie `preSolve()`. Gelenkgrenzen und Motion-Winkel messen an der X-Achse
+  von J, die die 180-Grad-Drehung um X nicht ändert.
+- Prüfung: Testreihe 39/39, Matrix Ziehen und Simulation, MotionProfiles-Simulation, BG22
+  (Mutter, Starr/Flexibel ohne Widerspruch), Ziehen-Rundumtest. Plan:
+  `plans/2026-10-28-eindeutige-fixed-gelenke.md`.
 
 ### 2.2 Interaktives Ziehen - warum nur die äußerste Baugruppe löst
 

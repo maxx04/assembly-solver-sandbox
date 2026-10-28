@@ -65,10 +65,19 @@ OndselSolver ran.
 - Ausstehend: GUI-Abnahme durch den Nutzer (BG37/BG22, Starr an/aus, Ziehen, Simulation).
 - Nächster Schritt: Dreh-/Zylinder-/Schiebegelenk.
 
+## Nachtrag: Slider, Dreh-, Zylindergelenk (2026-10-28)
+
+Gleiches Muster umgesetzt (ARCHITECTURE.md §2.1d): Slider wie Fixed, Dreh/Zylinder mit zwei
+Kippwinkeln der Z-Achse; Winkelbaustein verallgemeinert (`AxisAngle*`). Motion-getriebene Gelenke
+(Simulation, `EndFrameqct`) behalten die alten Bedingungen - der erste Versuch ohne diese
+Ausnahme stürzte in `runKINEMATIC` ab (test_simulation_nested). Variantenwahl `jointVariant()`.
+Prüfung: Testreihe 39/39, Matrix Ziehen + Simulation, MotionProfiles 6/6, BG22 Mutter/Starr-
+Flexibel ohne Widerspruch und Grenzverletzung.
+
+Außerdem: nach „Turn rigid/flexible“ löst die GUI sofort (aktive bzw. einbauende Baugruppe).
+
 ## Offen
 
-- **Dreh-/Zylinder-/Schiebegelenk:** gleiche Schwäche beim Achsvorzeichen (Z_J = ±Z_I). Gleiches
-  Muster: Winkel-Bedingung statt reiner Orthogonalität, Variante aus der Lage. Eigener Schritt.
 - **#32477-Erwartung:** das Skript erwartet bei entgegengesetzten JCS-Z-Achsen „deckungsgleich“;
   FreeCADs `preSolve()` wählt dort „umgekehrt“. Vor einem Upstream-Beitrag mit den Maintainern
   klären, welche Semantik gilt; der Solver-Teil (eindeutige Bedingung) ist davon unabhängig.
