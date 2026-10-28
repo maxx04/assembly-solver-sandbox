@@ -4046,8 +4046,10 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(
         const char* plcI = swapSides ? "Placement2" : "Placement1";
         const char* refJ = swapSides ? "Reference1" : "Reference2";
         const char* plcJ = swapSides ? "Placement1" : "Placement2";
+        const Base::Rotation turnJ
+            = jointType == JointType::Fixed ? fixedJointVariant(joint, nestingPrefix) : Base::Rotation();
         fullMarkerNameI = handleOneSideOfJoint(joint, refI, plcI, std::string(), nestingPrefix);
-        fullMarkerNameJ = handleOneSideOfJoint(joint, refJ, plcJ, std::string(), nestingPrefix);
+        fullMarkerNameJ = handleOneSideOfJoint(joint, refJ, plcJ, std::string(), nestingPrefix, turnJ);
     }
     if (fullMarkerNameI == "" || fullMarkerNameJ == "") {
         return {};
@@ -4290,40 +4292,19 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(
     return {mbdJoint};
 }
 
-std::string AssemblyObject::handleOneSideOfJoint(
+Base::Placement AssemblyObject::jcsInPartFrame(
     App::DocumentObject* joint,
     const char* propRefName,
     const char* propPlcName,
-    const std::string& markerName,
-    const std::string& nestingPrefix
+    App::DocumentObject* part
 )
 {
-    // FCPROJECT-PATCH (Teilschritt 2 "adressieren statt kopieren", solver-root-cause-fix): auf
-    // resolvePartForMbD() umgestellt - DAS ist die Stelle, an der ein Joint tatsaechlich einen
-    // MbD-Marker an einen konkreten starren Koerper haengt (siehe AssemblyObject.h fuer die
-    // Herleitung). 'part' wird unten nur fuer getMbDData(part) (welcher MbD-Koerper) und fuer
-    // getGlobalPlacement(part, ref) (targetObj-Parameter) verwendet - beide bleiben fuer jeden
-    // nicht verschachtelten Joint (nestingPrefix "") unveraendert, weil resolvePartForMbD() dort
-    // exakt dasselbe Objekt liefert wie die alte getMovingPartFromRef().
-    App::DocumentObject* part = resolvePartForMbD(joint, propRefName, nestingPrefix);
-    App::DocumentObject* obj = getObjFromJointRef(joint, propRefName);
-
-    if (!part || !obj) {
-        Base::Console()
-            .warning("The property {} of Joint {} is bad.\n", propRefName, joint->getFullName());
-        return "";
-    }
-
-    // alreadyResolved=true: 'part' kommt direkt aus resolvePartForMbD() (s.o.), ist also bereits
-    // vollstaendig aufgeloest (siehe Bug-C-Kommentar an getMbDData()'s Deklaration).
-    MbDPartData data = getMbDData(part, /*alreadyResolved=*/true);
-    std::shared_ptr<ASMTPart> mbdPart = data.part;
     Base::Placement plc = getPlacementFromProp(joint, propPlcName);
     // Now we have plc which is the JCS placement, but its relative to the Object, not to the
     // containing Part.
     auto* ref = dynamic_cast<App::PropertyXLinkSub*>(joint->getPropertyByName(propRefName));
     if (!ref) {
-        return "";
+        return plc;
     }
 
     // This plc adjustment should be necessary only if obj != part. But for some objects like
@@ -4362,6 +4343,144 @@ std::string AssemblyObject::handleOneSideOfJoint(
     }
     Base::Placement part_global_plc = getGlobalPlacement(placementTarget, ref);
     plc = part_global_plc.inverse() * plc;
+    return plc;
+}
+
+Base::Placement AssemblyObject::snapFixedJointRelation(const Base::Placement& relation, double* error)
+{
+    // Die vier Loesungen der drei Fixed-Gleichungen (#32477): deckungsgleich, 180 Grad um X
+    // (FreeCADs "Umkehren", Z-Achsen gegeneinander), 180 Grad um Y oder Z.
+    const Base::Rotation candidates[] = {
+        Base::Rotation(),
+        Base::Rotation(Base::Vector3d(1, 0, 0), M_PI),
+        Base::Rotation(Base::Vector3d(0, 1, 0), M_PI),
+        Base::Rotation(Base::Vector3d(0, 0, 1), M_PI),
+    };
+    Base::Rotation best;
+    double bestAngle = 10.0;
+    for (const auto& candidate : candidates) {
+        Base::Vector3d axis;
+        double angle = 0.0;
+        (candidate.inverse() * relation.getRotation()).getRawValue(axis, angle);
+        angle = std::min(angle, 2.0 * M_PI - angle);
+        if (angle < bestAngle) {
+            bestAngle = angle;
+            best = candidate;
+        }
+    }
+    if (error) {
+        *error = std::max(bestAngle, relation.getPosition().Length());
+    }
+    return Base::Placement(Base::Vector3d(), best);
+}
+
+Base::Placement AssemblyObject::fixedJointRelationInOwnDocument(
+    App::DocumentObject* joint,
+    const char* refFrom,
+    const char* plcFrom,
+    const char* refTo,
+    const char* plcTo
+)
+{
+    auto jcsGlobal = [&](const char* refName, const char* plcName) {
+        auto* ref = dynamic_cast<App::PropertyXLinkSub*>(joint->getPropertyByName(refName));
+        Base::Placement plc = getPlacementFromProp(joint, plcName);
+        return ref ? getJcsReferenceGlobalPlacement(ref) * plc : plc;
+    };
+    return jcsGlobal(refFrom, plcFrom).inverse() * jcsGlobal(refTo, plcTo);
+}
+
+// FCPROJECT-PATCH (2026-10-28, BG22: zweite BackslashNut umgeklappt; ARCHITECTURE.md §2.1d):
+// OndselSolvers FixedJoint verlangt jetzt die exakte Deckung beider JCS (eindeutig, keine
+// 180-Grad-Wurzeln mehr). FreeCAD kennt aber zwei gewollte Lagen - deckungsgleich oder
+// "umgekehrt" (180 Grad um X, Knopf "Ausrichtung wechseln") - und speichert die Wahl nur in der
+// Lage der Teile. Darum bestimmt diese Funktion die Variante beim Modellaufbau und dreht den
+// Marker J entsprechend:
+//  - aus der aktuellen Lage der Instanzen (naechste der vier frueheren Loesungen): was heute
+//    steht, bleibt stehen - auch fruehere stille Umklappungen in einbauenden Baugruppen;
+//  - steht ein verschachteltes Gelenk weit daneben (neuer oder veralteter Spiegel), aus seinem
+//    eigenen Dokument;
+//  - sonst weit daneben: deckungsgleich oder umgekehrt nach der Z-Richtung, wie preSolve().
+// Danach kann Newton die Variante nicht mehr wechseln.
+Base::Rotation AssemblyObject::fixedJointVariant(App::DocumentObject* joint, const std::string& nestingPrefix)
+{
+    auto* part1 = resolvePartForMbD(joint, "Reference1", nestingPrefix);
+    auto* part2 = resolvePartForMbD(joint, "Reference2", nestingPrefix);
+    if (!part1 || !part2) {
+        return Base::Rotation();
+    }
+    std::optional<IdentityGraph> ownGraph;
+    IdentityGraph& graph = scopedGraph ? *scopedGraph : ownGraph.emplace(this);
+    auto jcsWorld = [&](App::DocumentObject* part, const char* refName, const char* plcName) {
+        return graph.containerChainPlacement(part) * getPlacementFromProp(part, "Placement")
+            * jcsInPartFrame(joint, refName, plcName, part);
+    };
+    const Base::Placement relation = jcsWorld(part1, "Reference1", "Placement1").inverse()
+        * jcsWorld(part2, "Reference2", "Placement2");
+    constexpr double nearSolution = 1e-3;  // mm bzw. rad
+    double error = 1.0;
+    const Base::Placement current = snapFixedJointRelation(relation, &error);
+    if (error > nearSolution && !nestingPrefix.empty()) {
+        double ownError = 1.0;
+        const Base::Placement own = snapFixedJointRelation(
+            fixedJointRelationInOwnDocument(joint, "Reference1", "Placement1", "Reference2", "Placement2"),
+            &ownError
+        );
+        if (ownError < nearSolution) {
+            Base::Console().log(
+                "Assembly: fixed joint '{}' starts {:.3f} away from a solution - orientation "
+                "taken from its own document.\n",
+                getJointContextName(joint),
+                error
+            );
+            return own.getRotation();
+        }
+    }
+    if (error > nearSolution) {
+        // Weit von jeder Loesung (frisch gesetztes Teil, Skript): wie FreeCADs preSolve()/
+        // matchJCS() nur zwischen den beiden gewollten Varianten waehlen, nach der Z-Richtung
+        // (UtilsAssembly.arePlacementSameDir()). 180 Grad um Y oder Z nie.
+        const Base::Vector3d z = relation.getRotation().multVec(Base::Vector3d(0, 0, 1));
+        return z.z > 0.0 ? Base::Rotation() : Base::Rotation(Base::Vector3d(1, 0, 0), M_PI);
+    }
+    return current.getRotation();
+}
+
+std::string AssemblyObject::handleOneSideOfJoint(
+    App::DocumentObject* joint,
+    const char* propRefName,
+    const char* propPlcName,
+    const std::string& markerName,
+    const std::string& nestingPrefix,
+    const Base::Rotation& jcsTurn
+)
+{
+    // FCPROJECT-PATCH (Teilschritt 2 "adressieren statt kopieren", solver-root-cause-fix): auf
+    // resolvePartForMbD() umgestellt - DAS ist die Stelle, an der ein Joint tatsaechlich einen
+    // MbD-Marker an einen konkreten starren Koerper haengt (siehe AssemblyObject.h fuer die
+    // Herleitung). 'part' wird unten nur fuer getMbDData(part) (welcher MbD-Koerper) und fuer
+    // getGlobalPlacement(part, ref) (targetObj-Parameter) verwendet - beide bleiben fuer jeden
+    // nicht verschachtelten Joint (nestingPrefix "") unveraendert, weil resolvePartForMbD() dort
+    // exakt dasselbe Objekt liefert wie die alte getMovingPartFromRef().
+    App::DocumentObject* part = resolvePartForMbD(joint, propRefName, nestingPrefix);
+    App::DocumentObject* obj = getObjFromJointRef(joint, propRefName);
+
+    if (!part || !obj) {
+        Base::Console()
+            .warning("The property {} of Joint {} is bad.\n", propRefName, joint->getFullName());
+        return "";
+    }
+
+    // alreadyResolved=true: 'part' kommt direkt aus resolvePartForMbD() (s.o.), ist also bereits
+    // vollstaendig aufgeloest (siehe Bug-C-Kommentar an getMbDData()'s Deklaration).
+    MbDPartData data = getMbDData(part, /*alreadyResolved=*/true);
+    std::shared_ptr<ASMTPart> mbdPart = data.part;
+    auto* ref = dynamic_cast<App::PropertyXLinkSub*>(joint->getPropertyByName(propRefName));
+    if (!ref) {
+        return "";
+    }
+    Base::Placement plc = jcsInPartFrame(joint, propRefName, propPlcName, part)
+        * Base::Placement(Base::Vector3d(), jcsTurn);
 
     // check if we need to add an offset in case of bundled parts.
     if (!data.offsetPlc.isIdentity()) {

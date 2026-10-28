@@ -249,6 +249,20 @@ wählen kann. Bündeln nimmt ihm diese Freiheit. Verworfen; Patch zum Nachlesen:
 **Praxis:** Steht ein verschachteltes Fixed-Teil umgeklappt, hilft in der einbauenden Baugruppe
 Starr an / Starr aus (die Spiegel übernehmen die Original-Lage, der Solver ordnet den Rest).
 
+### 2.1d Eindeutiges Fixed-Gelenk im Solver (2026-10-28, freigegeben und installiert)
+
+Statt Bündeln (§2.1c) wird die Mehrdeutigkeit dort beseitigt, wo sie entsteht:
+
+- **OndselSolver** `FixedJoint`: `zI·xJ = 0` + Winkel von J um die Z-Achse von I = 0 + Winkel um
+  die X-Achse = 0 (atan2, stetig; `AngleZConstraintIqcJqc` bzw. neu `AngleXConstraintIqcJqc`).
+  Einzige Lösung: deckungsgleiche JCS. Newton kann nicht mehr auf eine 180-Grad-Wurzel springen.
+- **AssemblyObject:** FreeCADs zwei gewollte Lagen (deckungsgleich / „umgekehrt“ = 180 Grad um X)
+  werden beim Modellaufbau in den Marker J eingerechnet (`fixedJointVariant()`): nahe einer
+  Lösung die aktuelle (auch alte stille Umklappungen bleiben), verschachtelt und weit daneben die
+  aus dem eigenen Dokument, sonst nach Z-Richtung wie `preSolve()`.
+- Ergebnis an BG22-Kopien: Mutter richtig, Starr -> Flexibel ohne Widerspruch.
+- Plan und Prüfstand: `plans/2026-10-28-eindeutige-fixed-gelenke.md`.
+
 ### 2.2 Interaktives Ziehen - warum nur die äußerste Baugruppe löst
 
 ```mermaid

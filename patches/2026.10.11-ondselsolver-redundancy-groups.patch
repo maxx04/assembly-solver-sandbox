@@ -47,6 +47,125 @@ index e9cbc6e..527dace 100644
  		bool debug = false;
          std::shared_ptr<ExternalSystem> externalSystem;
  
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/AngleXConstraintIqcJqc.cpp b/src/3rdParty/OndselSolver/OndselSolver/AngleXConstraintIqcJqc.cpp
+new file mode 100644
+index 0000000..7ea929a
+--- /dev/null
++++ b/src/3rdParty/OndselSolver/OndselSolver/AngleXConstraintIqcJqc.cpp
+@@ -0,0 +1,26 @@
++/***************************************************************************
++ *   Copyright (c) 2023 Ondsel, Inc.                                       *
++ *                                                                         *
++ *   This file is part of OndselSolver.                                    *
++ *                                                                         *
++ *   See LICENSE file for details about copyright.                         *
++ ***************************************************************************/
++
++#include "AngleXConstraintIqcJqc.h"
++#include "AngleXIeqcJeqc.h"
++
++using namespace MbD;
++
++MbD::AngleXConstraintIqcJqc::AngleXConstraintIqcJqc(EndFrmsptr frmi, EndFrmsptr frmj) : AngleZConstraintIqcJqc(frmi, frmj)
++{
++}
++
++void MbD::AngleXConstraintIqcJqc::initthezIeJe()
++{
++	thezIeJe = std::make_shared<AngleXIeqcJeqc>(frmI, frmJ);
++}
++
++std::string MbD::AngleXConstraintIqcJqc::constraintSpec()
++{
++	return "AngleXConstraintIJ";
++}
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/AngleXConstraintIqcJqc.h b/src/3rdParty/OndselSolver/OndselSolver/AngleXConstraintIqcJqc.h
+new file mode 100644
+index 0000000..aa70565
+--- /dev/null
++++ b/src/3rdParty/OndselSolver/OndselSolver/AngleXConstraintIqcJqc.h
+@@ -0,0 +1,23 @@
++/***************************************************************************
++ *   Copyright (c) 2023 Ondsel, Inc.                                       *
++ *                                                                         *
++ *   This file is part of OndselSolver.                                    *
++ *                                                                         *
++ *   See LICENSE file for details about copyright.                         *
++ ***************************************************************************/
++
++#pragma once
++
++#include "AngleZConstraintIqcJqc.h"
++
++namespace MbD {
++    // Constraint on the angle of frame J about the X axis of frame I (see AngleXIeqcJeqc).
++    class AngleXConstraintIqcJqc : public AngleZConstraintIqcJqc
++    {
++    public:
++        AngleXConstraintIqcJqc(EndFrmsptr frmi, EndFrmsptr frmj);
++
++        void initthezIeJe() override;
++        std::string constraintSpec() override;
++    };
++}
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/AngleXIeqcJeqc.cpp b/src/3rdParty/OndselSolver/OndselSolver/AngleXIeqcJeqc.cpp
+new file mode 100644
+index 0000000..31c970f
+--- /dev/null
++++ b/src/3rdParty/OndselSolver/OndselSolver/AngleXIeqcJeqc.cpp
+@@ -0,0 +1,23 @@
++/***************************************************************************
++ *   Copyright (c) 2023 Ondsel, Inc.                                       *
++ *                                                                         *
++ *   This file is part of OndselSolver.                                    *
++ *                                                                         *
++ *   See LICENSE file for details about copyright.                         *
++ ***************************************************************************/
++
++#include "AngleXIeqcJeqc.h"
++#include "CREATE.h"
++#include "DirectionCosineIeqcJeqc.h"
++
++using namespace MbD;
++
++MbD::AngleXIeqcJeqc::AngleXIeqcJeqc(EndFrmsptr frmi, EndFrmsptr frmj) : AngleZIeqcJeqc(frmi, frmj)
++{
++}
++
++void MbD::AngleXIeqcJeqc::init_aAijIeJe()
++{
++	aA00IeJe = CREATE<DirectionCosineIeqcJeqc>::With(frmI, frmJ, 1, 1);
++	aA10IeJe = CREATE<DirectionCosineIeqcJeqc>::With(frmI, frmJ, 2, 1);
++}
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/AngleXIeqcJeqc.h b/src/3rdParty/OndselSolver/OndselSolver/AngleXIeqcJeqc.h
+new file mode 100644
+index 0000000..404be87
+--- /dev/null
++++ b/src/3rdParty/OndselSolver/OndselSolver/AngleXIeqcJeqc.h
+@@ -0,0 +1,23 @@
++/***************************************************************************
++ *   Copyright (c) 2023 Ondsel, Inc.                                       *
++ *                                                                         *
++ *   This file is part of OndselSolver.                                    *
++ *                                                                         *
++ *   See LICENSE file for details about copyright.                         *
++ ***************************************************************************/
++
++#pragma once
++
++#include "AngleZIeqcJeqc.h"
++
++namespace MbD {
++    // Angle of frame J about the X axis of frame I: atan2(zI.yJ, yI.yJ).
++    // Same derivatives as AngleZIeqcJeqc, only the direction cosines differ.
++    class AngleXIeqcJeqc : public AngleZIeqcJeqc
++    {
++    public:
++        AngleXIeqcJeqc(EndFrmsptr frmi, EndFrmsptr frmj);
++
++        void init_aAijIeJe() override;
++    };
++}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/AnyPosICNewtonRaphson.cpp b/src/3rdParty/OndselSolver/OndselSolver/AnyPosICNewtonRaphson.cpp
 index fb9b2e1..8cb7bf8 100644
 --- a/src/3rdParty/OndselSolver/OndselSolver/AnyPosICNewtonRaphson.cpp
@@ -105,6 +224,28 @@ index 1bd8b2b..336f8c8 100644
          size_t nqsu = SIZE_MAX;
          FColDsptr qsuOld;
          DiagMatDsptr qsuWeights;
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/CMakeLists.txt b/src/3rdParty/OndselSolver/OndselSolver/CMakeLists.txt
+index 9fc1e82..baaa04f 100644
+--- a/src/3rdParty/OndselSolver/OndselSolver/CMakeLists.txt
++++ b/src/3rdParty/OndselSolver/OndselSolver/CMakeLists.txt
+@@ -19,6 +19,8 @@ set(ONDSELSOLVER_SRC
+         AngleZConstraintIJ.cpp
+         AngleZConstraintIqcJc.cpp
+         AngleZConstraintIqcJqc.cpp
++        AngleXConstraintIqcJqc.cpp
++        AngleXIeqcJeqc.cpp
+         AngleZIecJec.cpp
+         AngleZIeqcJec.cpp
+         AngleZIeqcJeqc.cpp
+@@ -334,6 +336,8 @@ set(ONDSELSOLVER_HEADERS
+         AngleZConstraintIJ.h
+         AngleZConstraintIqcJc.h
+         AngleZConstraintIqcJqc.h
++        AngleXConstraintIqcJqc.h
++        AngleXIeqcJeqc.h
+         AngleZIecJec.h
+         AngleZIeqcJec.h
+         AngleZIeqcJeqc.h
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/DispCompIecJecKeqc.cpp b/src/3rdParty/OndselSolver/OndselSolver/DispCompIecJecKeqc.cpp
 index a365064..b2848c0 100644
 --- a/src/3rdParty/OndselSolver/OndselSolver/DispCompIecJecKeqc.cpp
@@ -118,6 +259,39 @@ index a365064..b2848c0 100644
  			ppriIeJeKepEKipEK->at(j) = ppriIeJeKepEKipEKj;
  			ppriIeJeKepEKpEK->at(j)->at(i) = ppriIeJeKepEKipEKj;
  		}
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/FixedJoint.cpp b/src/3rdParty/OndselSolver/OndselSolver/FixedJoint.cpp
+index 2884e80..5df6ea7 100644
+--- a/src/3rdParty/OndselSolver/OndselSolver/FixedJoint.cpp
++++ b/src/3rdParty/OndselSolver/OndselSolver/FixedJoint.cpp
+@@ -9,6 +9,8 @@
+ #include "FixedJoint.h"
+ #include "System.h"
+ #include "CREATE.h"
++#include "AngleXConstraintIqcJqc.h"
++#include "AngleZConstraintIqcJqc.h"
+ 
+ using namespace MbD;
+ 
+@@ -25,9 +27,17 @@ void MbD::FixedJoint::initializeGlobally()
+ 	if (constraints->empty())
+ 	{
+ 		createAtPointConstraints();
+-		addConstraint(CREATE<DirectionCosineConstraintIqcJqc>::ConstraintWith(frmI, frmJ, 1, 0));
++		// Unique relative rotation (FreeCAD issue #32477): the three direction cosines
++		// yI.xJ = zI.xJ = zI.yJ = 0 are also met by 180 degree turns about x, y or z, and Newton
++		// lands on whichever root is closest to the start. zI.xJ = 0 plus the angles of J about
++		// the z and x axes of I (atan2, continuous) allow only the identity.
+ 		addConstraint(CREATE<DirectionCosineConstraintIqcJqc>::ConstraintWith(frmI, frmJ, 2, 0));
+-		addConstraint(CREATE<DirectionCosineConstraintIqcJqc>::ConstraintWith(frmI, frmJ, 2, 1));
++		auto angleZ = CREATE<AngleZConstraintIqcJqc>::With(frmI, frmJ);
++		angleZ->setConstant(0.0);
++		addConstraint(angleZ);
++		auto angleX = CREATE<AngleXConstraintIqcJqc>::With(frmI, frmJ);
++		angleX->setConstant(0.0);
++		addConstraint(angleX);
+ 		this->root()->hasChanged = true;
+ 	}
+ 	else {
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/GESpMatParPvMarkoFast.cpp b/src/3rdParty/OndselSolver/OndselSolver/GESpMatParPvMarkoFast.cpp
 index fb72e15..cbf3ab4 100644
 --- a/src/3rdParty/OndselSolver/OndselSolver/GESpMatParPvMarkoFast.cpp

@@ -133,6 +133,7 @@
 # 2026-10-27 (43): Nachtrag - preDrag verwirft das Modell nach gescheitertem Solve (Absturz beim Ziehen).
 # 2026-10-27 (44): Nachtrag - Solve schreibt kein Gelenk mehr um (swapSides statt swapJCS, Grenzen lokal sortiert).
 # 2026-10-28 (45): Nachtrag - Slider-Suche fuer Screw/RackPinion folgt Fixed-Gruppen (getFixedGroupOf).
+# 2026-10-28 (46): Nachtrag - Fixed-Gelenk eindeutig: Variante im Marker J (fixedJointVariant); OndselSolver-Teil im Submodul-Patch.
 
 2026.10.03-freecad-assembly-full-resync.patch
 
@@ -153,6 +154,8 @@
 # Seit 2026-10-17 abends: Schwellen-Pivotisierung in GESpMatParPvMarkoFast::doPivoting().
 # Seit 2026-10-27: DispCompIecJecKeqc - Nebendiagonale der zweiten Ableitung nach E(K) mit at(j)
 # statt at(i) (Abstand mit Ebene am beweglichen Teil divergierte, auch Vanilla).
+# Seit 2026-10-28: FixedJoint eindeutig - zI.xJ = 0 plus Winkel um Z und X (AngleZ-/neu
+# AngleXConstraintIqcJqc, AngleXIeqcJeqc) statt drei Richtungskosinusse (#32477).
 2026.10.11-ondselsolver-redundancy-groups.patch
 
 # Build-Baum-Patches aus dem Dev-Build (/home/maxx/freecad/freecad-source), seit 2026-10-27 aktiv

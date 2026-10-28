@@ -233,13 +233,38 @@ public:
         const std::string& nestingPrefix = ""
     );
     std::shared_ptr<MbD::ASMTJoint> makeMbdJointDistance(App::DocumentObject* joint, bool& swapSides);
+    // jcsTurn: zusaetzliche Drehung des JCS im Marker (Variante eines Fixed-Gelenks, siehe
+    // fixedJointVariant()).
     std::string handleOneSideOfJoint(
         App::DocumentObject* joint,
         const char* propRefName,
         const char* propPlcName,
         const std::string& markerName = std::string(),
-        const std::string& nestingPrefix = std::string()
+        const std::string& nestingPrefix = std::string(),
+        const Base::Rotation& jcsTurn = Base::Rotation()
     );
+    // JCS eines Gelenk-Endes ('propRefName'/'propPlcName') im lokalen Rahmen von 'part'.
+    Base::Placement jcsInPartFrame(
+        App::DocumentObject* joint,
+        const char* propRefName,
+        const char* propPlcName,
+        App::DocumentObject* part
+    );
+    // Fixed-Gelenk: Lage JCS 'To' relativ zu JCS 'From' auf die naechste der vier Loesungen der
+    // alten Fixed-Gleichungen einrasten (deckungsgleich, 180 Grad um X, Y, Z; Position 0);
+    // 'error' = Abstand zur Loesung (rad bzw. mm).
+    static Base::Placement snapFixedJointRelation(const Base::Placement& relation, double* error = nullptr);
+    // Dieselbe Lage, gemessen im eigenen Dokument des Gelenks (Original, nicht Instanz).
+    Base::Placement fixedJointRelationInOwnDocument(
+        App::DocumentObject* joint,
+        const char* refFrom,
+        const char* plcFrom,
+        const char* refTo,
+        const char* plcTo
+    );
+    // Variante eines Fixed-Gelenks fuer den Solver (FixedJoint verlangt seit 2026-10-28 exakte
+    // Deckung, #32477): Drehung, um die der Marker J gedreht wird.
+    Base::Rotation fixedJointVariant(App::DocumentObject* joint, const std::string& nestingPrefix);
     void getRackPinionMarkers(
         App::DocumentObject* joint,
         std::string& markerNameI,
