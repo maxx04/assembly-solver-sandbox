@@ -134,6 +134,7 @@
 # 2026-10-27 (44): Nachtrag - Solve schreibt kein Gelenk mehr um (swapSides statt swapJCS, Grenzen lokal sortiert).
 # 2026-10-28 (45): Nachtrag - Slider-Suche fuer Screw/RackPinion folgt Fixed-Gruppen (getFixedGroupOf).
 # 2026-10-28 (46): Nachtrag - Fixed-Gelenk eindeutig: Variante im Marker J (fixedJointVariant); OndselSolver-Teil im Submodul-Patch.
+# 2026-10-28 (47): Nachtrag - Starr schalten gleicht verschachtelte Container mit ab (updateNestedLinkContents).
 
 2026.10.03-freecad-assembly-full-resync.patch
 

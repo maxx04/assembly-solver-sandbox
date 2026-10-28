@@ -331,6 +331,18 @@ aber nicht die Haupt-Fehlerquelle. Die Haupt-Fehlerquelle: jede Verschachtelungs
 nicht erfasst, da ohne `Reference1/2`) - der Aufruf ist aber aktuell **auskommentiert**
 (`AssemblyLink.cpp:344`), siehe §6.
 
+### 2.3a Starr schalten über zwei Ebenen (2026-10-28)
+
+Live an BG22: BG37 (enthält BG43 > BG67) auf starr geschaltet - der Schrittmotor sprang 273 mm,
+beim Zurückschalten flogen DC-Motor und Z-Schlitten weg (Gelenkgrenze 98 mm statt -36..4).
+`AssemblyLink::onChanged(Rigid)` rief `updateContents()` nur für den umgeschalteten Container
+auf. Die verschachtelten Container darunter haben dann einen starren Vorfahren und übernehmen
+ihre Kinder aus dem Gegenstück (`synchronizeComponents()`, `hasRigidAncestorLink()`) - aber nur,
+wenn sie selbst laufen; sonst behalten ihre Teile die alten lokalen Lagen und wandern mit der
+neuen Container-Lage (`movePlc`) mit. Fix: `updateNestedLinkContents()` gleicht nach dem eigenen
+Abgleich alle verschachtelten Container von oben nach unten ab. Der alte Stand verhielt sich
+identisch (also kein Folgefehler von §2.1d). Test: `test_double_nested_rigid_switch`.
+
 ### 2.4 GUI-Trigger-Kette (Command-Layer, außerhalb von `solve()` selbst)
 
 - **Solve-Knopf** (`CommandSolveAssembly.py:60`): ruft `assembly.touch()` **vor**

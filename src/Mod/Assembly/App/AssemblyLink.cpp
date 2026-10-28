@@ -137,6 +137,16 @@ bool hasRigidAncestorLink(const App::DocumentObject* link)
 // die Nachbarn im BG22-Spiegel ihre Lage haben. Ermittelt ueber den Eltern-Spiegel: Gegenstueck
 // des Eltern-Spiegels, darin der Spiegel derselben Quelle. Ohne Eltern-Spiegel (direkt in einer
 // Baugruppe eingebaut) ist es das verlinkte Objekt selbst.
+void updateNestedLinkContents(AssemblyLink* link)
+{
+    for (auto* obj : link->Group.getValues()) {
+        if (auto* sub = freecad_cast<AssemblyLink*>(obj)) {
+            sub->updateContents();
+            updateNestedLinkContents(sub);
+        }
+    }
+}
+
 App::DocumentObject* counterpartOf(AssemblyLink* link)
 {
     for (auto* parent : link->getInList()) {
@@ -330,6 +340,15 @@ void AssemblyLink::onChanged(const App::Property* prop)
         }
 
         updateContents();
+        if (Rigid.getValue()) {
+            // FCPROJECT-PATCH (2026-10-28, live an BG22: BG37 auf starr geschaltet, Schrittmotor in
+            // BG43 > BG67 sprang 273 mm): updateContents() gleicht nur die direkten Kinder ab. Die
+            // verschachtelten Container darunter haben jetzt einen starren Vorfahren und uebernehmen
+            // ihre Kinder aus dem Gegenstueck (synchronizeComponents(), hasRigidAncestorLink()) -
+            // aber nur, wenn sie selbst laufen. Sonst behielten ihre Teile die alten lokalen Lagen
+            // und wanderten mit der neuen Container-Lage mit. Von oben nach unten abgleichen.
+            updateNestedLinkContents(this);
+        }
 
         auto* propPlc = dynamic_cast<App::PropertyPlacement*>(getPropertyByName("Placement"));
         if (!propPlc) {

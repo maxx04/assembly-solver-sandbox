@@ -2511,7 +2511,7 @@ index 00000000000..c44380d9475
 +
 +}  // namespace Assembly
 diff --git a/src/Mod/Assembly/App/AssemblyLink.cpp b/src/Mod/Assembly/App/AssemblyLink.cpp
-index c4b69bde0a2..7386c0ca87b 100644
+index c4b69bde0a2..b482491da9b 100644
 --- a/src/Mod/Assembly/App/AssemblyLink.cpp
 +++ b/src/Mod/Assembly/App/AssemblyLink.cpp
 @@ -21,6 +21,7 @@
@@ -2531,7 +2531,7 @@ index c4b69bde0a2..7386c0ca87b 100644
  AssemblyLink::AssemblyLink()
  {
      ADD_PROPERTY_TYPE(
-@@ -109,6 +112,139 @@ App::DocumentObjectExecReturn* AssemblyLink::execute()
+@@ -109,6 +112,149 @@ App::DocumentObjectExecReturn* AssemblyLink::execute()
      return App::Part::execute();
  }
  
@@ -2560,6 +2560,16 @@ index c4b69bde0a2..7386c0ca87b 100644
 +// die Nachbarn im BG22-Spiegel ihre Lage haben. Ermittelt ueber den Eltern-Spiegel: Gegenstueck
 +// des Eltern-Spiegels, darin der Spiegel derselben Quelle. Ohne Eltern-Spiegel (direkt in einer
 +// Baugruppe eingebaut) ist es das verlinkte Objekt selbst.
++void updateNestedLinkContents(AssemblyLink* link)
++{
++    for (auto* obj : link->Group.getValues()) {
++        if (auto* sub = freecad_cast<AssemblyLink*>(obj)) {
++            sub->updateContents();
++            updateNestedLinkContents(sub);
++        }
++    }
++}
++
 +App::DocumentObject* counterpartOf(AssemblyLink* link)
 +{
 +    for (auto* parent : link->getInList()) {
@@ -2671,7 +2681,7 @@ index c4b69bde0a2..7386c0ca87b 100644
  void AssemblyLink::onChanged(const App::Property* prop)
  {
      if (App::GetApplication().isRestoring()) {
-@@ -125,6 +261,17 @@ void AssemblyLink::onChanged(const App::Property* prop)
+@@ -125,6 +271,17 @@ void AssemblyLink::onChanged(const App::Property* prop)
      }
  
      if (prop == &Rigid) {
@@ -2689,7 +2699,23 @@ index c4b69bde0a2..7386c0ca87b 100644
          Base::Placement movePlc;
  
          // A flexible sub-assembly cannot be grounded.
-@@ -198,42 +345,34 @@ void AssemblyLink::onChanged(const App::Property* prop)
+@@ -183,6 +340,15 @@ void AssemblyLink::onChanged(const App::Property* prop)
+         }
+ 
+         updateContents();
++        if (Rigid.getValue()) {
++            // FCPROJECT-PATCH (2026-10-28, live an BG22: BG37 auf starr geschaltet, Schrittmotor in
++            // BG43 > BG67 sprang 273 mm): updateContents() gleicht nur die direkten Kinder ab. Die
++            // verschachtelten Container darunter haben jetzt einen starren Vorfahren und uebernehmen
++            // ihre Kinder aus dem Gegenstueck (synchronizeComponents(), hasRigidAncestorLink()) -
++            // aber nur, wenn sie selbst laufen. Sonst behielten ihre Teile die alten lokalen Lagen
++            // und wanderten mit der neuen Container-Lage mit. Von oben nach unten abgleichen.
++            updateNestedLinkContents(this);
++        }
+ 
+         auto* propPlc = dynamic_cast<App::PropertyPlacement*>(getPropertyByName("Placement"));
+         if (!propPlc) {
+@@ -198,42 +364,34 @@ void AssemblyLink::onChanged(const App::Property* prop)
  
                  // We need to apply the placement of the assembly link to the children or they will
                  // move.
@@ -2759,7 +2785,7 @@ index c4b69bde0a2..7386c0ca87b 100644
              }
          }
          else {
-@@ -263,7 +402,8 @@ void AssemblyLink::updateParentJoints()
+@@ -263,7 +421,8 @@ void AssemblyLink::updateParentJoints()
  
      bool rigid = Rigid.getValue();
      // Iterate joints in the immediate parent assembly only (recursive=false)
@@ -2769,7 +2795,7 @@ index c4b69bde0a2..7386c0ca87b 100644
          for (const char* refName : {"Reference1", "Reference2"}) {
              auto* prop = dynamic_cast<App::PropertyXLinkSub*>(joint->getPropertyByName(refName));
              if (!prop) {
-@@ -329,14 +469,31 @@ void AssemblyLink::updateParentJoints()
+@@ -329,14 +488,31 @@ void AssemblyLink::updateParentJoints()
  
  void AssemblyLink::updateContents()
  {
@@ -2807,7 +2833,7 @@ index c4b69bde0a2..7386c0ca87b 100644
      purgeTouched();
  }
  
-@@ -349,7 +506,25 @@ void AssemblyLink::synchronizeComponents()
+@@ -349,7 +525,25 @@ void AssemblyLink::synchronizeComponents()
          return;
      }
  
@@ -2833,7 +2859,7 @@ index c4b69bde0a2..7386c0ca87b 100644
      objSubPrefixMap.clear();
  
      std::vector<App::DocumentObject*> assemblyGroup = assembly->Group.getValues();
-@@ -389,6 +564,9 @@ void AssemblyLink::synchronizeComponents()
+@@ -389,6 +583,9 @@ void AssemblyLink::synchronizeComponents()
      );
  
      // We check if a component needs to be added to the AssemblyLink
@@ -2843,7 +2869,7 @@ index c4b69bde0a2..7386c0ca87b 100644
      for (auto* obj : topLevelComponents) {
          if (isSuppressedLinkElement(obj)) {
              continue;
-@@ -438,6 +616,7 @@ void AssemblyLink::synchronizeComponents()
+@@ -438,6 +635,7 @@ void AssemblyLink::synchronizeComponents()
                                  continue;
                              }
                              objLinkMap[srcElements[i]] = newElements[i];
@@ -2851,7 +2877,7 @@ index c4b69bde0a2..7386c0ca87b 100644
                          }
                          break;
                      }
-@@ -498,12 +677,13 @@ void AssemblyLink::synchronizeComponents()
+@@ -498,12 +696,13 @@ void AssemblyLink::synchronizeComponents()
                      }
  
                      syncSuppressedState(srcObj, newObj);
@@ -2866,7 +2892,7 @@ index c4b69bde0a2..7386c0ca87b 100644
                  }
  
                  link = newLink;
-@@ -516,9 +696,44 @@ void AssemblyLink::synchronizeComponents()
+@@ -516,9 +715,44 @@ void AssemblyLink::synchronizeComponents()
                  addObject(newLink);
                  link = newLink;
              }
@@ -2911,7 +2937,7 @@ index c4b69bde0a2..7386c0ca87b 100644
  
          if (auto* srcLinkArray = freecad_cast<PartApp::LinkArray*>(obj)) {
              if (srcLinkArray->ShowElement.getValue()) {
-@@ -533,10 +748,126 @@ void AssemblyLink::synchronizeComponents()
+@@ -533,10 +767,126 @@ void AssemblyLink::synchronizeComponents()
          }
      }
  
@@ -3040,7 +3066,7 @@ index c4b69bde0a2..7386c0ca87b 100644
          }
      }
  
-@@ -560,22 +891,14 @@ void AssemblyLink::synchronizeComponents()
+@@ -560,22 +910,14 @@ void AssemblyLink::synchronizeComponents()
      }
  }
  
@@ -3068,7 +3094,7 @@ index c4b69bde0a2..7386c0ca87b 100644
  [[maybe_unused]] std::string removeUpToName(const std::string& sub, const std::string& name)
  {
      size_t pos = sub.find(name);
-@@ -606,158 +929,6 @@ void copyPropertyIfDifferent(
+@@ -606,158 +948,6 @@ void copyPropertyIfDifferent(
  }
  };  // namespace
  
