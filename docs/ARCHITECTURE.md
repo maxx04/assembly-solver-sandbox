@@ -211,6 +211,44 @@ geerdeten Teils direkt überschrieben.
 beim `InList`-Durchlauf) ohnehin nur `None` oder ein echtes `AssemblyObject` zurückliefert - die
 zusätzliche, aber fragile String-Prüfung war überflüssig und die eigentliche Fehlerquelle.
 
+### 2.1c Fixed-Gelenke immer bündeln - Versuch verworfen (2026-10-28)
+
+Anlass: BG37 bekam eine zweite `BackslashNut` (Fixed `Joint017` am Träger). In BG37 stand sie
+richtig, in BG22 war sie um 180 Grad umgeklappt und so gespeichert.
+
+**Ursache der Mehrdeutigkeit.** Ein Fixed-Gelenk geht als drei Achsen-Orthogonalitäten an
+OndselSolver (`FixedJoint::initializeGlobally()`, Bugreport FreeCAD #32477). Die Gleichungen haben
+vier Lösungen: deckungsgleich oder 180 Grad um X, Y bzw. Z. FreeCAD selbst kennt nur zwei
+beabsichtigte Lagen: deckungsgleich oder 180 Grad um X (Z-Achsen gegeneinander,
+„Umkehren“-Knopf = `flipOnePart()`; `preSolve()` wählt beim Anlegen die nähere). Welche gilt,
+steht nirgends im Gelenk, sondern nur in der Lage der Teile. Die Kreis-/Zylinder-Referenzen
+selbst sind eindeutig (Startpunkt, Umlaufsinn); die Mehrdeutigkeit liegt allein in den
+Solver-Gleichungen.
+
+**Versuch:** Fixed-verbundene Teile immer als einen Solver-Körper bündeln (`bundleFixed` dauerhaft
+an, nicht nur in `preDrag()`), damit nichts mehr umklappen kann. Varianten und Ergebnis:
+
+1. *Lage aus der Gelenkdefinition (deckungsgleich):* falsch - in BG37 sind die Muttern-Gelenke
+   mit 180 Grad um X erfüllt, das ist die gewollte Lage.
+2. *Lage aus dem Dokument des Gelenks (Original):* BG22-Solve scheitert (`iterNo > iterMax`).
+   Mehrere verschachtelte Fixed-Teile stehen in BG22 auf einer anderen Wurzel als in ihrem
+   Original (Träger/Linearlager in BG37, Motorbuchse/Gewindestifte in BG43/BG47,
+   Scheiben/Nutensteine/5x8-Schrauben in BG73), und Gelenke von BG22 bauen darauf auf.
+3. *Aktuelle Lage, eingerastet auf die nächste Lösung:* normaler Solve, Matrix, Testreihe und
+   Ziehen-Rundumtest grün - aber **Starr -> Flexibel** in BG22 bricht: die Spiegel übernehmen
+   kurz die Original-Lagen (teils 268 mm daneben, teils auf der „falschen“ Wurzel), gebündelt
+   sind sie festgenagelt, 16 widersprüchliche Gelenke. Auch mit Rückfall (nur bündeln, wenn die
+   Lage schon nahe einer Lösung ist) blieben 7. Der bisherige Stand: 0 - Newton klappt die Teile
+   dort passend um.
+
+**Erkenntnis:** BG22 ist darauf angewiesen, dass der Solver die Wurzel eines Fixed-Gelenks frei
+wählen kann. Bündeln nimmt ihm diese Freiheit. Verworfen; Patch zum Nachlesen:
+`plans/experimente/2026-10-28-fixed-immer-buendeln.patch` (enthält auch `jcsInPartFrame()`,
+`snapFixedJointRelation()` und den Hinweis „steht anders als im eigenen Dokument“).
+
+**Praxis:** Steht ein verschachteltes Fixed-Teil umgeklappt, hilft in der einbauenden Baugruppe
+Starr an / Starr aus (die Spiegel übernehmen die Original-Lage, der Solver ordnet den Rest).
+
 ### 2.2 Interaktives Ziehen - warum nur die äußerste Baugruppe löst
 
 ```mermaid

@@ -1,0 +1,346 @@
+diff --git a/src/Mod/Assembly/App/AssemblyObject.cpp b/src/Mod/Assembly/App/AssemblyObject.cpp
+index 12d3cb4d34..dd366c08db 100644
+--- a/src/Mod/Assembly/App/AssemblyObject.cpp
++++ b/src/Mod/Assembly/App/AssemblyObject.cpp
+@@ -330,7 +330,6 @@ PROPERTY_SOURCE(Assembly::AssemblyObject, App::Part)
+ 
+ AssemblyObject::AssemblyObject()
+     : mbdAssembly(std::make_shared<ASMTAssembly>())
+-    , bundleFixed(false)
+     , lastDoF(0)
+     , lastHasConflict(false)
+     , lastHasRedundancies(false)
+@@ -1098,7 +1097,6 @@ bool AssemblyObject::requiresRigidSolveForMove(const std::vector<App::DocumentOb
+ 
+ void AssemblyObject::preDrag(std::vector<App::DocumentObject*> dragParts)
+ {
+-    bundleFixed = true;
+     // FCPROJECT-PATCH (2026-10-20, Zieh-Start-Latenz): Erreichbarkeit EINMAL fuer alle gezogenen
+     // Teile statt isPartConnected() je Teil - jede Abfrage baute Erdung, Gelenkliste und
+     // Traversierung neu auf. Seit der Motor (BG112) in BG22 als starre Gruppe mitlaeuft, zieht
+@@ -1132,7 +1130,6 @@ void AssemblyObject::preDrag(std::vector<App::DocumentObject*> dragParts)
+         objectPartMap.clear();
+         mbdAssembly.reset();
+     }
+-    bundleFixed = false;
+ 
+     draggedParts.clear();
+     std::vector<App::DocumentObject*> bundledDragParts;
+@@ -3780,9 +3777,8 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointOfType(
+     swapSides = false;
+     switch (type) {
+         case JointType::Fixed:
+-            if (bundleFixed) {
+-                return nullptr;
+-            }
++            // Gebuendelte Fixed-Gelenke (beide Seiten ein Solver-Koerper) verwirft makeMbdJoint();
++            // nicht gebuendelte (Lage noch weit von einer Loesung, siehe getMbDData()) loest Newton.
+             return CREATE<ASMTFixedJoint>::With();
+ 
+         case JointType::Revolute:
+@@ -4032,6 +4028,14 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(
+     if (!mbdJoint || !isMbDJointValid(joint, nestingPrefix)) {
+         return {};
+     }
++    if (jointType == JointType::Fixed) {
++        auto* part1 = resolvePartForMbD(joint, "Reference1", nestingPrefix);
++        auto* part2 = resolvePartForMbD(joint, "Reference2", nestingPrefix);
++        if (part1 && part2
++            && getMbDPart(part1, /*alreadyResolved=*/true) == getMbDPart(part2, /*alreadyResolved=*/true)) {
++            return {};  // ein Koerper - nichts zu loesen (ARCHITECTURE.md §2.1c)
++        }
++    }
+     if ((jointType == JointType::Gears || jointType == JointType::Belt)
+         && gearJointNeedsCarrierMarker(joint)) {
+         setGearJointCarrierMarkerIfAvailable(this, joint, mbdJoint, nestingPrefix);
+@@ -4290,40 +4294,19 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(
+     return {mbdJoint};
+ }
+ 
+-std::string AssemblyObject::handleOneSideOfJoint(
++Base::Placement AssemblyObject::jcsInPartFrame(
+     App::DocumentObject* joint,
+     const char* propRefName,
+     const char* propPlcName,
+-    const std::string& markerName,
+-    const std::string& nestingPrefix
++    App::DocumentObject* part
+ )
+ {
+-    // FCPROJECT-PATCH (Teilschritt 2 "adressieren statt kopieren", solver-root-cause-fix): auf
+-    // resolvePartForMbD() umgestellt - DAS ist die Stelle, an der ein Joint tatsaechlich einen
+-    // MbD-Marker an einen konkreten starren Koerper haengt (siehe AssemblyObject.h fuer die
+-    // Herleitung). 'part' wird unten nur fuer getMbDData(part) (welcher MbD-Koerper) und fuer
+-    // getGlobalPlacement(part, ref) (targetObj-Parameter) verwendet - beide bleiben fuer jeden
+-    // nicht verschachtelten Joint (nestingPrefix "") unveraendert, weil resolvePartForMbD() dort
+-    // exakt dasselbe Objekt liefert wie die alte getMovingPartFromRef().
+-    App::DocumentObject* part = resolvePartForMbD(joint, propRefName, nestingPrefix);
+-    App::DocumentObject* obj = getObjFromJointRef(joint, propRefName);
+-
+-    if (!part || !obj) {
+-        Base::Console()
+-            .warning("The property {} of Joint {} is bad.\n", propRefName, joint->getFullName());
+-        return "";
+-    }
+-
+-    // alreadyResolved=true: 'part' kommt direkt aus resolvePartForMbD() (s.o.), ist also bereits
+-    // vollstaendig aufgeloest (siehe Bug-C-Kommentar an getMbDData()'s Deklaration).
+-    MbDPartData data = getMbDData(part, /*alreadyResolved=*/true);
+-    std::shared_ptr<ASMTPart> mbdPart = data.part;
+     Base::Placement plc = getPlacementFromProp(joint, propPlcName);
+     // Now we have plc which is the JCS placement, but its relative to the Object, not to the
+     // containing Part.
+     auto* ref = dynamic_cast<App::PropertyXLinkSub*>(joint->getPropertyByName(propRefName));
+     if (!ref) {
+-        return "";
++        return plc;
+     }
+ 
+     // This plc adjustment should be necessary only if obj != part. But for some objects like
+@@ -4362,6 +4345,42 @@ std::string AssemblyObject::handleOneSideOfJoint(
+     }
+     Base::Placement part_global_plc = getGlobalPlacement(placementTarget, ref);
+     plc = part_global_plc.inverse() * plc;
++    return plc;
++}
++
++std::string AssemblyObject::handleOneSideOfJoint(
++    App::DocumentObject* joint,
++    const char* propRefName,
++    const char* propPlcName,
++    const std::string& markerName,
++    const std::string& nestingPrefix
++)
++{
++    // FCPROJECT-PATCH (Teilschritt 2 "adressieren statt kopieren", solver-root-cause-fix): auf
++    // resolvePartForMbD() umgestellt - DAS ist die Stelle, an der ein Joint tatsaechlich einen
++    // MbD-Marker an einen konkreten starren Koerper haengt (siehe AssemblyObject.h fuer die
++    // Herleitung). 'part' wird unten nur fuer getMbDData(part) (welcher MbD-Koerper) und fuer
++    // getGlobalPlacement(part, ref) (targetObj-Parameter) verwendet - beide bleiben fuer jeden
++    // nicht verschachtelten Joint (nestingPrefix "") unveraendert, weil resolvePartForMbD() dort
++    // exakt dasselbe Objekt liefert wie die alte getMovingPartFromRef().
++    App::DocumentObject* part = resolvePartForMbD(joint, propRefName, nestingPrefix);
++    App::DocumentObject* obj = getObjFromJointRef(joint, propRefName);
++
++    if (!part || !obj) {
++        Base::Console()
++            .warning("The property {} of Joint {} is bad.\n", propRefName, joint->getFullName());
++        return "";
++    }
++
++    // alreadyResolved=true: 'part' kommt direkt aus resolvePartForMbD() (s.o.), ist also bereits
++    // vollstaendig aufgeloest (siehe Bug-C-Kommentar an getMbDData()'s Deklaration).
++    MbDPartData data = getMbDData(part, /*alreadyResolved=*/true);
++    std::shared_ptr<ASMTPart> mbdPart = data.part;
++    auto* ref = dynamic_cast<App::PropertyXLinkSub*>(joint->getPropertyByName(propRefName));
++    if (!ref) {
++        return "";
++    }
++    Base::Placement plc = jcsInPartFrame(joint, propRefName, propPlcName, part);
+ 
+     // check if we need to add an offset in case of bundled parts.
+     if (!data.offsetPlc.isIdentity()) {
+@@ -4912,6 +4931,50 @@ bool AssemblyObject::isMbDJointValid(App::DocumentObject* joint, const std::stri
+     return true;
+ }
+ 
++Base::Placement AssemblyObject::snapFixedJointRelation(const Base::Placement& relation, double* error)
++{
++    // Die vier Loesungen der drei Fixed-Gleichungen (#32477): deckungsgleich, 180 Grad um X
++    // (FreeCADs "Umkehren", Z-Achsen gegeneinander), 180 Grad um Y oder Z.
++    const Base::Rotation candidates[] = {
++        Base::Rotation(),
++        Base::Rotation(Base::Vector3d(1, 0, 0), M_PI),
++        Base::Rotation(Base::Vector3d(0, 1, 0), M_PI),
++        Base::Rotation(Base::Vector3d(0, 0, 1), M_PI),
++    };
++    Base::Rotation best;
++    double bestAngle = 10.0;
++    for (const auto& candidate : candidates) {
++        Base::Vector3d axis;
++        double angle = 0.0;
++        (candidate.inverse() * relation.getRotation()).getRawValue(axis, angle);
++        angle = std::min(angle, 2.0 * M_PI - angle);
++        if (angle < bestAngle) {
++            bestAngle = angle;
++            best = candidate;
++        }
++    }
++    if (error) {
++        *error = std::max(bestAngle, relation.getPosition().Length());
++    }
++    return Base::Placement(Base::Vector3d(), best);
++}
++
++Base::Placement AssemblyObject::fixedJointRelationInOwnDocument(
++    App::DocumentObject* joint,
++    const char* refFrom,
++    const char* plcFrom,
++    const char* refTo,
++    const char* plcTo
++)
++{
++    auto jcsGlobal = [&](const char* refName, const char* plcName) {
++        auto* ref = dynamic_cast<App::PropertyXLinkSub*>(joint->getPropertyByName(refName));
++        Base::Placement plc = getPlacementFromProp(joint, plcName);
++        return ref ? getJcsReferenceGlobalPlacement(ref) * plc : plc;
++    };
++    return jcsGlobal(refFrom, plcFrom).inverse() * jcsGlobal(refTo, plcTo);
++}
++
+ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part, bool alreadyResolved)
+ {
+     // FCPROJECT-PATCH (Befund 3, Teilschritt 2e): zentraler Kanonisierungs-Punkt - jeder Aufrufer
+@@ -5044,6 +5107,8 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
+         // Symptom: ein Fixed-Bundle (hier: BoxD<->BoxA) "gewinnt" den lokalen Spiegel-Pointer,
+         // der ECHTE Slider-Joint bekommt einen komplett separaten, unabhaengigen MbD-Koerper -
+         // BoxB folgt BoxDs Bewegung dadurch nicht.
++        constexpr double fixedBundleTolerance = 1e-6;
++        constexpr double fixedBundleSnapTolerance = 1e-3;
+         auto addConnectedFixedParts = [&](App::DocumentObject* currentPart, auto& self) -> void {
+             std::vector<JointRef> joints = getJointsOfPart(currentPart);
+             for (auto& jr : joints) {
+@@ -5060,9 +5125,76 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
+                         continue;
+                     }
+                     App::DocumentObject* partToAdd = currentPart == part1 ? part2 : part1;
++                    const bool currentIsFirst = currentPart == part1;
++                    const char* refCur = currentIsFirst ? "Reference1" : "Reference2";
++                    const char* plcCur = currentIsFirst ? "Placement1" : "Placement2";
++                    const char* refAdd = currentIsFirst ? "Reference2" : "Reference1";
++                    const char* plcAdd = currentIsFirst ? "Placement2" : "Placement1";
++                    // FCPROJECT-PATCH (2026-10-28, BG22: zweite BackslashNut um 180 Grad
++                    // geklappt): Lage im Buendel = aktuelle Lage, eingerastet auf die naechste
++                    // gueltige Loesung des Fixed-Gelenks (#32477). Gebuendelt kann das Teil beim
++                    // Loesen/Ziehen/Simulieren nicht mehr auf eine andere Wurzel klappen.
++                    // Die Lage aus dem Dokument des Gelenks wird bewusst NICHT aufgezwungen:
++                    // Gelenke der einbauenden Baugruppe koennen auf der aktuellen Wurzel aufbauen
++                    // (live an BG22: Motorbuchse, Gewindestifte) - nur ein Hinweis, siehe unten.
++                    const Base::Placement offCur = objectPartMap.at(currentPart).offsetPlc;
++                    const Base::Placement jcsCur = jcsInPartFrame(joint, refCur, plcCur, currentPart);
++                    const Base::Placement jcsAdd = jcsInPartFrame(joint, refAdd, plcAdd, partToAdd);
++                    std::optional<IdentityGraph> ownGraphForAdd;
++                    IdentityGraph& graphForAdd = scopedGraph ? *scopedGraph : ownGraphForAdd.emplace(this);
++                    const Base::Placement addChain = graphForAdd.containerChainPlacement(partToAdd);
++                    const Base::Placement offAddNow
++                        = plc.inverse() * addChain * getPlacementFromProp(partToAdd, "Placement");
++                    const Base::Placement relationNow = jcsCur.inverse() * offCur.inverse() * offAddNow * jcsAdd;
++                    double snapError = 0.0;
++                    const Base::Placement snapped = snapFixedJointRelation(relationNow, &snapError);
++                    if (snapError > fixedBundleSnapTolerance) {
++                        // Lage (noch) weit von jeder Loesung - z.B. Spiegel kurz nach Starr->Flexibel
++                        // 268 mm daneben (BG22). Einrasten wuerde dann irgendeine Wurzel waehlen;
++                        // stattdessen nicht buendeln, das Fixed-Gelenk loest Newton zusammen mit
++                        // allen anderen Gelenken. Beim naechsten Solve passt die Lage und wird
++                        // gebuendelt.
++                        Base::Console().log(
++                            "Assembly: '{}' not bundled via fixed joint '{}' this time - it is {:.4f} "
++                            "(mm/rad) away from a solution, the solver places it.\n",
++                            getJointContextName(partToAdd), getJointContextName(joint), snapError);
++                        continue;
++                    }
++                    const Base::Placement offFromJoint = offCur * jcsCur * snapped * jcsAdd.inverse();
++                    if (!jr.nestingPrefix.empty()) {
++                        double ownError = 1.0;
++                        const Base::Placement own = snapFixedJointRelation(
++                            fixedJointRelationInOwnDocument(joint, refCur, plcCur, refAdd, plcAdd),
++                            &ownError
++                        );
++                        if (ownError < 1e-4 && !own.getRotation().isSame(snapped.getRotation(), 1e-6)
++                            && reportedFixedRootMismatch
++                                   .insert(jointInstanceName(joint, jr.nestingPrefix) + "|"
++                                           + partToAdd->getFullName())
++                                   .second) {
++                            Base::Console().log(
++                                "Assembly: '{}' sits 180 degrees turned compared to its own "
++                                "document (fixed joint '{}'). To take over the original: switch the "
++                                "sub-assembly to rigid and back to flexible.\n",
++                                getJointContextName(partToAdd),
++                                getJointContextName(joint)
++                            );
++                        }
++                    }
+ 
+-                    if (objectPartMap.find(partToAdd) != objectPartMap.end()) {
+-                        // already added
++                    if (auto existing = objectPartMap.find(partToAdd); existing != objectPartMap.end()) {
++                        // already added - pruefen, ob dieses Fixed-Gelenk zum Buendel passt
++                        // (zweite Fixed-Kette zu denselben Teilen, z.B. widerspruechlich).
++                        if (existing->second.part == mbdPart
++                            && !existing->second.offsetPlc.isSame(offFromJoint, fixedBundleTolerance)) {
++                            Base::Console().warning(
++                                "Assembly: Fixed joint '{}' contradicts the rigid bundle of '{}' "
++                                "(another fixed chain places '{}' differently) - it is ignored.\n",
++                                getJointContextName(joint),
++                                getJointContextName(currentPart),
++                                getJointContextName(partToAdd)
++                            );
++                        }
+                         continue;
+                     }
+ 
+@@ -5101,8 +5233,7 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
+                     Base::Placement plci = partToAddContainerChainPlc.isIdentity()
+                         ? plciLocal
+                         : partToAddContainerChainPlc * plciLocal;
+-                    MbDPartData partData
+-                        = {mbdPart, plc.inverse() * plci, partToAddContainerChainPlc};
++                    MbDPartData partData = {mbdPart, offFromJoint, partToAddContainerChainPlc};
+                     objectPartMap[partToAdd] = partData;  // Store the association
+                     Base::Console().log(
+                         "FCPROJECT-DEBUG getMbDData: BUNDLE-FIXED key '{}' -> mbdPart '{}' (via joint '{}')\n",
+@@ -5125,7 +5256,9 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
+                             Base::Placement memberChain = graph.containerChainPlacement(member);
+                             Base::Placement memberWorld
+                                 = memberChain * getPlacementFromProp(member, "Placement");
+-                            objectPartMap[member] = {mbdPart, plc.inverse() * memberWorld, memberChain};
++                            // Starre Gruppe: Lage zum (ggf. korrigierten) partToAdd wie aktuell.
++                            objectPartMap[member]
++                                = {mbdPart, offFromJoint * plci.inverse() * memberWorld, memberChain};
+                             added.push_back(member);
+                         }
+                     }
+diff --git a/src/Mod/Assembly/App/AssemblyObject.h b/src/Mod/Assembly/App/AssemblyObject.h
+index 120a161684..105a0a09ec 100644
+--- a/src/Mod/Assembly/App/AssemblyObject.h
++++ b/src/Mod/Assembly/App/AssemblyObject.h
+@@ -233,6 +233,24 @@ public:
+         const std::string& nestingPrefix = ""
+     );
+     std::shared_ptr<MbD::ASMTJoint> makeMbdJointDistance(App::DocumentObject* joint, bool& swapSides);
++    // Fixed-Gelenk: Lage JCS 'To' relativ zu JCS 'From' auf die naechste der vier gueltigen
++    // Loesungen einrasten (Position 0); 'error' = Abstand zur Loesung (rad bzw. mm).
++    static Base::Placement snapFixedJointRelation(const Base::Placement& relation, double* error = nullptr);
++    // Dieselbe Lage, gemessen im eigenen Dokument des Gelenks (Original, nicht Instanz).
++    Base::Placement fixedJointRelationInOwnDocument(
++        App::DocumentObject* joint,
++        const char* refFrom,
++        const char* plcFrom,
++        const char* refTo,
++        const char* plcTo
++    );
++    // JCS eines Gelenk-Endes ('propRefName'/'propPlcName') im lokalen Rahmen von 'part'.
++    Base::Placement jcsInPartFrame(
++        App::DocumentObject* joint,
++        const char* propRefName,
++        const char* propPlcName,
++        App::DocumentObject* part
++    );
+     std::string handleOneSideOfJoint(
+         App::DocumentObject* joint,
+         const char* propRefName,
+@@ -724,7 +742,13 @@ private:
+ 
+     std::vector<std::pair<App::DocumentObject*, Base::Placement>> previousPositions;
+ 
+-    bool bundleFixed;
++    // FCPROJECT-PATCH (2026-10-28, Nutzerentscheidung): Fixed-verbundene Teile sind EIN starrer
++    // Koerper - immer gebuendelt (Solve, Simulation, Ziehen, ASMT-Export), nicht nur beim Ziehen.
++    // Fixed-Gelenke erzeugen dadurch keine Solver-Gleichungen mehr (keine 180-Grad-Mehrdeutigkeit
++    // #32477); die Lage im Buendel kommt aus der Gelenkdefinition (siehe getMbDData()).
++    bool bundleFixed {true};
++    // Fixed-Gelenke, deren Teil anders steht als im eigenen Dokument - je Sitzung einmal gemeldet.
++    std::set<std::string> reportedFixedRootMismatch;
+ 
+     // Siehe setActiveEditContext()-Deklaration weiter oben.
+     bool activeEditContext {false};
