@@ -78,6 +78,14 @@ Außerdem: nach „Turn rigid/flexible“ löst die GUI sofort (aktive bzw. einb
 
 ## Offen
 
+- **TODO Planar/Parallel (Nutzer 2026-10-28):** `PlanarJoint` (u.a. Abstand Ebene–Ebene) und
+  `ParallelAxesJoint` erlauben weiter zJ = ±zI. Erst klären, ob „entgegengesetzt“ dort gewollt ist,
+  dann ggf. Kippwinkel wie beim Drehgelenk + Variante in `jointVariant()`.
+- **TODO zeitabhängiger Winkelbaustein** (`…IqctJqc`), damit Motion-getriebene Gelenke nicht auf
+  die alten Bedingungen zurückfallen.
+- Upstream: Faktenblatt `bugreports/joint-orientation-unique-constraints/FAKTEN.md` (Nutzer spricht
+  Maintainer an).
+
 - **#32477-Erwartung:** das Skript erwartet bei entgegengesetzten JCS-Z-Achsen „deckungsgleich“;
   FreeCADs `preSolve()` wählt dort „umgekehrt“. Vor einem Upstream-Beitrag mit den Maintainern
   klären, welche Semantik gilt; der Solver-Teil (eindeutige Bedingung) ist davon unabhängig.
