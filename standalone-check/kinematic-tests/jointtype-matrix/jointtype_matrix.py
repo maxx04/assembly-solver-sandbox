@@ -208,6 +208,13 @@ MECH_CASES = {
         carriers=[("BoxB", SLIDER, P(0, 0, 10), BOTTOM), ("BoxD", REVOLUTE, P(0, 0, 10), BOTTOM)],
         coupling=(SCREW, "BoxB", "BoxD", BOTTOM, BOTTOM, {"Distance": 2.0}),
         expect=("translation", 2.0 / (2 * math.pi)), drive_axis_on_A=P(0, 0, 10)),
+    # Wie BG37: die Mutter BoxB hat keinen eigenen Slider, sie haengt per Fixed am Schlitten BoxC,
+    # erst der gleitet. Die Slider-Suche des Schrauben-Gelenks muss der starren Gruppe folgen.
+    "screw_fixed_chain": dict(
+        carriers=[("BoxC", SLIDER, P(0, 0, 10), BOTTOM), ("BoxD", REVOLUTE, P(0, 0, 10), BOTTOM)],
+        fixed=[("BoxB", "BoxC", P(5, 5, 10), BOTTOM)],
+        coupling=(SCREW, "BoxB", "BoxD", BOTTOM, BOTTOM, {"Distance": 2.0}),
+        expect=("translation", 2.0 / (2 * math.pi)), drive_axis_on_A=P(0, 0, 10)),
 }
 
 DRIVE_STEPS = 4
@@ -265,6 +272,12 @@ def build_content(case, doc, asm, directory):
             doc.recompute()
             _joint(asm, jtype, a, part, plc_a, plc_part, ("Face6", "Face5"))
             part.Placement = a.Placement.multiply(plc_a).multiply(plc_part.inverse())
+        for label, other, plc_other, plc_part in spec.get("fixed", []):
+            part = _box(doc, asm, label, directory)
+            objs[label] = part
+            doc.recompute()
+            _joint(asm, FIXED, objs[other], part, plc_other, plc_part, ("Face6", "Face5"))
+            part.Placement = objs[other].Placement.multiply(plc_other).multiply(plc_part.inverse())
         ctype, l1, l2, plc1, plc2, props = spec["coupling"]
         _joint(asm, ctype, objs[l1], objs[l2], plc1, plc2, ("Face5", "Face5"), props)
     doc.recompute()

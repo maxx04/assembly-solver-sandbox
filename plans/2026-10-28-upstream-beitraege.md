@@ -30,6 +30,7 @@ Stand 2026-10-28. Nutzerentscheidung 2026-10-27: Weg B probieren („obwohl ich 
 | 11 | Part_LinkArrays „Startchaos“ beim Laden | ? | ? | laut Notiz auch Vanilla | Notiz todo-early-solve-during-restore-warnings |
 | 13 | Absturz beim Ziehen nach gescheitertem Solve: `preDrag()` ignoriert den Rueckgabewert von `solve()`, `doDragStep()` rechnet auf halb aufgebautem Modell (SIGSEGV in OndselSolver) | C++, wenige Zeilen | sehr klein | Code identisch in 1ec79da434; Absturz in Vanilla per GUI noch nachzustellen (Vanilla hat preDrag nicht in Python) | Test `test_drag_after_failed_solve` |
 | 14 | OndselSolver `DispCompIecJecKeqc::calcPostDynCorrectorIteration()`: Nebendiagonale der Hesse-Matrix nach E(K) mit `at(i)` statt `at(j)` - Abstand Punkt-Ebene (u.a. TranslationConstraint) mit Ebene am beweglichen Teil divergiert ("iterNo > iterMax") | C++, ein Zeichen | sehr klein | ja, Weekly 2026.10.21 scheitert identisch | Test `test_distance_plane_on_moving_part` |
+| 15 | Schrauben-/Zahnstangen-Gelenk wird ohne Meldung verworfen, wenn der Slider nicht direkt am Teil haengt, sondern an einem per Fixed damit verbundenen (`slidingPartIndex()`) | C++ | klein | ja, Weekly 2026.10.21: Mutter bewegt sich nicht (Matrix `screw_fixed_chain` flat) | Fall `screw_fixed_chain`, BG37 |
 | 12 | Verschachtelte Baugruppen allgemein (Adressieren statt Kopieren, Erdung als Kontext, starre Gruppen über Grenze …) | großer Umbau | sehr groß | Vanilla falsch (Tests) | ARCHITECTURE.md – erst nach Vertrauensaufbau, vorher mit Maintainern besprechen |
 
 ## Vorgeschlagene Reihenfolge

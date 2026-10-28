@@ -226,8 +226,12 @@ public:
     );
     // swapSides: true, wenn der Solver Referenz 2 als Marker I nehmen muss (Distance-Unterart,
     // Screw: Slider zuerst). Das Gelenkobjekt wird nicht umgeschrieben (Plan Phase 2).
-    std::shared_ptr<MbD::ASMTJoint>
-    makeMbdJointOfType(App::DocumentObject* joint, JointType jointType, bool& swapSides);
+    std::shared_ptr<MbD::ASMTJoint> makeMbdJointOfType(
+        App::DocumentObject* joint,
+        JointType jointType,
+        bool& swapSides,
+        const std::string& nestingPrefix = ""
+    );
     std::shared_ptr<MbD::ASMTJoint> makeMbdJointDistance(App::DocumentObject* joint, bool& swapSides);
     std::string handleOneSideOfJoint(
         App::DocumentObject* joint,
@@ -242,7 +246,10 @@ public:
         std::string& markerNameJ,
         const std::string& nestingPrefix = std::string()
     );
-    int slidingPartIndex(App::DocumentObject* joint);
+    // 1/2: welche Seite von 'joint' gleitet (Slider an dem Teil oder an einem per Fixed starr damit
+    // verbundenen Teil, Achse parallel), 0: keine.
+    int slidingPartIndex(App::DocumentObject* joint, const std::string& nestingPrefix = "");
+    std::unordered_set<App::DocumentObject*> getFixedGroupOf(App::DocumentObject* part);
 
     // FCPROJECT-PATCH (Mehrfachinstanz-Fix): Parametertyp von
     // vector<DocumentObject*> auf vector<JointRef> umgestellt - jointNestingPrefixMap (siehe

@@ -222,3 +222,14 @@ Flach liefern beide dieselben Uebersetzungen und Vorzeichen (Gears/koaxial -0.5,
 RackPinion 5 mm/rad, Screw 2 mm/U). Vanilla verschachtelt: Verankerung falsch, Simulation bewegt
 BoxD nicht, double veraendert Originale. Den OndselSolver-Hesse-Fehler deckt die Matrix nicht ab
 (Ebene stets am geerdeten Teil) - dafuer test_distance_plane_on_moving_part (Vanilla FAIL).
+
+### 2026-10-28: Schrauben-Gelenk in BG37 ohne Wirkung (Nutzerfund)
+
+BG37: Schraube `Joint016` Gewindestange100 <-> BackslashNut; die Mutter ist per Fixed am
+Spindelhalter, dieser per Fixed am Linearlager, erst das Linearlager hat den Slider.
+`slidingPartIndex()` suchte den Slider nur direkt am Teil -> 0 -> Gelenk ohne Meldung verworfen
+(Simulation: Mutter steht). Fix: `getFixedGroupOf()` (starre Gruppe ueber Fixed), Slider an
+irgendeinem Teil der Gruppe zaehlt; Teile ueber `resolvePartForMbD()` mit Praefix. Gilt auch fuer
+RackPinion. BG37-Kopie: Mutter wandert 3.0000 mm bei 6 Umdrehungen x 0.5 mm. Neuer Matrixfall
+`screw_fixed_chain` (alt und Vanilla FAIL, neu PASS). Matrix 64/64, Testreihe 38/38.
+Upstream-Kandidat #15.

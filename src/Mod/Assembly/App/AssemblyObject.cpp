@@ -3770,8 +3770,12 @@ void Assembly::AssemblyObject::create_mbdSimulationParameters(App::DocumentObjec
     mbdSim->seterrorTol(valueOf(sim, "fGlobalErrorTolerance"));
 }
 
-std::shared_ptr<ASMTJoint>
-AssemblyObject::makeMbdJointOfType(App::DocumentObject* joint, JointType type, bool& swapSides)
+std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointOfType(
+    App::DocumentObject* joint,
+    JointType type,
+    bool& swapSides,
+    const std::string& nestingPrefix
+)
 {
     swapSides = false;
     switch (type) {
@@ -3819,7 +3823,7 @@ AssemblyObject::makeMbdJointOfType(App::DocumentObject* joint, JointType type, b
         }
 
         case JointType::Screw: {
-            int slidingIndex = slidingPartIndex(joint);
+            int slidingIndex = slidingPartIndex(joint, nestingPrefix);
             if (slidingIndex == 0) {  // invalid this joint needs a slider
                 return nullptr;
             }
@@ -4024,7 +4028,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(
     JointType jointType = getJointType(joint);
 
     bool swapSides = false;
-    std::shared_ptr<ASMTJoint> mbdJoint = makeMbdJointOfType(joint, jointType, swapSides);
+    std::shared_ptr<ASMTJoint> mbdJoint = makeMbdJointOfType(joint, jointType, swapSides, nestingPrefix);
     if (!mbdJoint || !isMbDJointValid(joint, nestingPrefix)) {
         return {};
     }
@@ -4384,7 +4388,7 @@ void AssemblyObject::getRackPinionMarkers(
     // The user will have selected the sliding marker so we need to transform it.
     // And we need to detect which marker is the rack.
 
-    int slidingIndex = slidingPartIndex(joint);
+    int slidingIndex = slidingPartIndex(joint, nestingPrefix);
     if (slidingIndex == 0) {
         return;
     }
@@ -4476,10 +4480,44 @@ void AssemblyObject::getRackPinionMarkers(
     markerNameI = "/OndselAssembly/" + mbdPart->name + "/" + markerName;
 }
 
-int AssemblyObject::slidingPartIndex(App::DocumentObject* joint)
+// FCPROJECT-PATCH (2026-10-28, BG37 Schrauben-Gelenk Gewindestange <-> BackslashNut): der Slider
+// muss nicht direkt am Teil des Schrauben-/Zahnstangen-Gelenks haengen, sondern darf an einem
+// starr (Fixed) damit verbundenen Teil sitzen - in BG37 ist die Mutter per Fixed am
+// Spindelhalter, dieser per Fixed am Linearlager, und erst das Linearlager gleitet. Vorher fand
+// die Suche keinen Slider, das Schrauben-Gelenk wurde ohne Meldung verworfen. Teile ueber
+// resolvePartForMbD() mit dem jeweiligen nestingPrefix verglichen (statt getMovingPartFromRef()).
+std::unordered_set<App::DocumentObject*> AssemblyObject::getFixedGroupOf(App::DocumentObject* part)
 {
-    App::DocumentObject* part1 = getMovingPartFromRef(joint, "Reference1");
-    App::DocumentObject* part2 = getMovingPartFromRef(joint, "Reference2");
+    std::unordered_set<App::DocumentObject*> group;
+    if (!part) {
+        return group;
+    }
+    std::vector<App::DocumentObject*> todo {part};
+    group.insert(part);
+    while (!todo.empty()) {
+        App::DocumentObject* current = todo.back();
+        todo.pop_back();
+        for (const auto& jr : getJointsOfPart(current)) {
+            if (getJointType(jr.joint) != JointType::Fixed) {
+                continue;
+            }
+            auto* p1 = resolvePartForMbD(jr.joint, "Reference1", jr.nestingPrefix);
+            auto* p2 = resolvePartForMbD(jr.joint, "Reference2", jr.nestingPrefix);
+            auto* other = p1 == current ? p2 : (p2 == current ? p1 : nullptr);
+            if (other && group.insert(other).second) {
+                todo.push_back(other);
+            }
+        }
+    }
+    return group;
+}
+
+int AssemblyObject::slidingPartIndex(App::DocumentObject* joint, const std::string& nestingPrefix)
+{
+    App::DocumentObject* part1 = resolvePartForMbD(joint, "Reference1", nestingPrefix);
+    App::DocumentObject* part2 = resolvePartForMbD(joint, "Reference2", nestingPrefix);
+    const auto group1 = getFixedGroupOf(part1);
+    const auto group2 = getFixedGroupOf(part2);
 
     // Compare the JCS in global coordinates: the slider and this joint may reference
     // different sub-objects of the same part.
@@ -4489,33 +4527,35 @@ int AssemblyObject::slidingPartIndex(App::DocumentObject* joint)
     int slidingFound = 0;
     for (auto& jr : getJoints()) {
         auto* jt = jr.joint;
-        if (getJointType(jt) == JointType::Slider) {
-            App::DocumentObject* jpart1 = getMovingPartFromRef(jt, "Reference1");
-            App::DocumentObject* jpart2 = getMovingPartFromRef(jt, "Reference2");
-            int found = 0;
-            Base::Placement plcjt, plci;
-            if (jpart1 == part1 || jpart1 == part2) {
-                found = (jpart1 == part1) ? 1 : 2;
-                plci = (jpart1 == part1) ? plc1 : plc2;
-                plcjt = getJointSideGlobalPlacement(jt, "Reference1", "Placement1");
-            }
-            else if (jpart2 == part1 || jpart2 == part2) {
-                found = (jpart2 == part1) ? 1 : 2;
-                plci = (jpart2 == part1) ? plc1 : plc2;
-                plcjt = getJointSideGlobalPlacement(jt, "Reference2", "Placement2");
-            }
+        if (getJointType(jt) != JointType::Slider) {
+            continue;
+        }
+        App::DocumentObject* jpart1 = resolvePartForMbD(jt, "Reference1", jr.nestingPrefix);
+        App::DocumentObject* jpart2 = resolvePartForMbD(jt, "Reference2", jr.nestingPrefix);
+        // Ein Slider zwischen den beiden Gruppen (oder innerhalb einer) fuehrt keine Seite.
+        const bool in1 = group1.contains(jpart1) || group1.contains(jpart2);
+        const bool in2 = group2.contains(jpart1) || group2.contains(jpart2);
+        if (in1 == in2) {
+            continue;
+        }
+        const int found = in1 ? 1 : 2;
+        const auto& group = in1 ? group1 : group2;
+        const bool jtFirst = group.contains(jpart1);
+        Base::Placement plcjt = getJointSideGlobalPlacement(
+            jt,
+            jtFirst ? "Reference1" : "Reference2",
+            jtFirst ? "Placement1" : "Placement2"
+        );
+        Base::Placement plci = in1 ? plc1 : plc2;
 
-            if (found != 0) {
-                // Check that the Z axes of plcjt and plci are parallel. Do not compare
-                // pitch/roll: a yaw offset on the slider JCS (e.g. to align the rack) rotates
-                // about its local Z axis, which keeps the axis but changes pitch and roll
-                // whenever that axis is not the global Z.
-                Base::Vector3d axisjt = plcjt.getRotation().multVec(Base::Vector3d(0, 0, 1));
-                Base::Vector3d axisi = plci.getRotation().multVec(Base::Vector3d(0, 0, 1));
-                if (axisjt.Cross(axisi).Length() < Precision::Confusion()) {
-                    slidingFound = found;
-                }
-            }
+        // Check that the Z axes of plcjt and plci are parallel. Do not compare
+        // pitch/roll: a yaw offset on the slider JCS (e.g. to align the rack) rotates
+        // about its local Z axis, which keeps the axis but changes pitch and roll
+        // whenever that axis is not the global Z.
+        Base::Vector3d axisjt = plcjt.getRotation().multVec(Base::Vector3d(0, 0, 1));
+        Base::Vector3d axisi = plci.getRotation().multVec(Base::Vector3d(0, 0, 1));
+        if (axisjt.Cross(axisi).Length() < Precision::Confusion()) {
+            slidingFound = found;
         }
     }
     return slidingFound;

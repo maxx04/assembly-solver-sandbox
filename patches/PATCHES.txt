@@ -132,6 +132,7 @@
 # 2026-10-27 (42): Nachtrag - Traegersuche koaxialer Zahnraeder instanzbewusst (resolvePartForMbD mit nestingPrefix).
 # 2026-10-27 (43): Nachtrag - preDrag verwirft das Modell nach gescheitertem Solve (Absturz beim Ziehen).
 # 2026-10-27 (44): Nachtrag - Solve schreibt kein Gelenk mehr um (swapSides statt swapJCS, Grenzen lokal sortiert).
+# 2026-10-28 (45): Nachtrag - Slider-Suche fuer Screw/RackPinion folgt Fixed-Gruppen (getFixedGroupOf).
 
 2026.10.03-freecad-assembly-full-resync.patch
 
