@@ -590,10 +590,27 @@ nach. Lassen sie sich nicht erfüllen, setzt `ASMTAssembly::runDragStep()` selbs
 von `runPreDrag()` zurück (`restorePosRot()`), der Solve scheitert dadurch nie.
 - Teile landen am Anschlag, nicht an ihrer früheren Stelle im Langloch (dafür fehlt dem Solver
   die Information; wer eine bestimmte Lage will, braucht ein eigenes Gelenk).
-- Simulation (`generateSimulation()` → `runKINEMATIC()`) bleibt unverändert ohne Grenzen.
-  **TODO:** dort ebenfalls Grenzen beachten (eine Motion kann ein Teil über seinen Anschlag
-  fahren). Vorher klären, was am Anschlag passieren soll: Simulation anhalten, Bewegung
-  begrenzen oder je Bild warnen.
+- Simulation (`generateSimulation()` → `runKINEMATIC()`): seit 2026-10-29 **anhalten am
+  Anschlag** (Vorschlag, mit dem Nutzer noch abzustimmen). Upstream lässt Grenzen in der
+  Simulation ganz weg („might clash“); eine Motion fuhr Teile durch ihren Anschlag.
+  - FreeCAD gibt die Grenzen auch in der Simulation an den Solver, dort mit **eigenen Markern**
+    `<Gelenk>-Limit`. Eine Motion ersetzt am Marker I des Gelenks das Bezugssystem durch ein
+    zeitabhängiges (`EndFrameqct`, `MarkerFrame::initializeLocally()`); die Grenze behielte
+    sonst das alte, nie mehr aktualisierte System (Absturz in `DispCompIecJecKeqc`) und würde
+    ohnehin gegen die mitbewegte statt gegen die feste Lage messen.
+  - In `runKINEMATIC` bleiben die Grenzen inaktiv (keine Gleichungen, Kinematik unverändert).
+    `SystemSolver::output()` prüft vor jedem Bild alle Grenzen und wirft beim ersten verletzten
+    `SimulationStoppingError`; `ASMTAssembly::runKINEMATIC()` merkt sich die Meldung
+    (`simulationStopMessage`), die Bilder davor bleiben. FreeCAD warnt mit Gelenk, Grenze und
+    Zeit des letzten Bildes innerhalb.
+  - Nicht umgesetzt: ein *passives* Gelenk am Anschlag festhalten und weiterrechnen (wie beim
+    Ziehen). In einer zwangläufigen Simulation (0 Freiheitsgrade) heißt jeder Anschlag ohnehin,
+    dass die vorgegebene Bewegung nicht weitergehen kann.
+  - Test: `test_simulation_limit_flat` (Slider, Drehgelenk, Gegenprobe; Weekly-Vanilla FAIL).
+  - Fortschritt: `ASMTAssembly::frameCallback` wird nach jedem gespeicherten Bild gerufen
+    (`ExternalSystem::outputFor(DYNAMIC)`); `generateSimulation()` hängt einen
+    `Base::SequencerLauncher` daran (Statusleisten-Balken, Oberfläche bleibt lebendig, Esc wirft
+    `SimulationStoppingError("Cancelled")` → Bilder bis dahin bleiben).
 - Kosten: ein Drag-Schritt pro Solve, nur bei Baugruppen mit Grenzen; „No limits reached“ endet
   sofort.
 - Test: `test_slider_limit_flat` (Teil 60 mm über die Grenze geschoben: gepatcht 2,1 mm,

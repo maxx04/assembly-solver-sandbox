@@ -1,5 +1,5 @@
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/ASMTAssembly.cpp b/src/3rdParty/OndselSolver/OndselSolver/ASMTAssembly.cpp
-index 27e9054..10133dd 100644
+index 27e9054..dba0fe4 100644
 --- a/src/3rdParty/OndselSolver/OndselSolver/ASMTAssembly.cpp
 +++ b/src/3rdParty/OndselSolver/OndselSolver/ASMTAssembly.cpp
 @@ -1341,6 +1341,9 @@ void MbD::ASMTAssembly::runPreDrag()
@@ -22,11 +22,24 @@ index 27e9054..10133dd 100644
      mbdSystem->runPreDrag(mbdSystem);
  }
  
+@@ -1443,10 +1449,12 @@ void MbD::ASMTAssembly::runKINEMATIC()
+ {
+     mbdSystem = std::make_shared<System>();
+     mbdSystem->externalSystem->asmtAssembly = this;
++    simulationStopMessage.clear();
+     try {
+         mbdSystem->runKINEMATIC(mbdSystem);
+     }
+     catch (const SimulationStoppingError& ex) {
++        simulationStopMessage = ex.what();
+     }
+ }
+ 
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/ASMTAssembly.h b/src/3rdParty/OndselSolver/OndselSolver/ASMTAssembly.h
-index e9cbc6e..527dace 100644
+index e9cbc6e..f882fad 100644
 --- a/src/3rdParty/OndselSolver/OndselSolver/ASMTAssembly.h
 +++ b/src/3rdParty/OndselSolver/OndselSolver/ASMTAssembly.h
-@@ -7,7 +7,9 @@
+@@ -7,12 +7,16 @@
   ***************************************************************************/
  
  #pragma once
@@ -37,7 +50,25 @@ index e9cbc6e..527dace 100644
  
  #include "ASMTSpatialContainer.h"
  //Required for initialization
-@@ -153,6 +155,9 @@ namespace MbD {
+ #include "ASMTConstantGravity.h"
+ #include "ASMTSimulationParameters.h"
++#include <functional>
++
+ #include "ASMTAnimationParameters.h"
+ #include "ASMTTime.h"
+ #include "Units.h"
+@@ -102,6 +106,10 @@ namespace MbD {
+ 		void runPostDrag();
+ 		void restorePosRot();
+ 		void runKINEMATIC();
++		std::string simulationStopMessage;  // why runKINEMATIC stopped early, empty if it ran through
++		// Called after each simulation frame is stored (progress display). May throw
++		// SimulationStoppingError to cancel: the frames stored so far are kept.
++		std::function<void()> frameCallback;
+ 		void initprincipalMassMarker();
+ 		std::shared_ptr<ASMTSpatialContainer> spatialContainerAt(std::shared_ptr<ASMTAssembly> self, std::string& longname) const;
+ 		std::shared_ptr<ASMTPart> partAt(const std::string& longname) const;
+@@ -153,6 +161,9 @@ namespace MbD {
  		std::shared_ptr<ASMTTime> asmtTime = ASMTTime::With();
  		std::shared_ptr<Units> mbdUnits = std::make_shared<Units>();
  		std::shared_ptr<System> mbdSystem;
@@ -335,6 +366,20 @@ index a365064..b2848c0 100644
  			ppriIeJeKepEKipEK->at(j) = ppriIeJeKepEKipEKj;
  			ppriIeJeKepEKpEK->at(j)->at(i) = ppriIeJeKepEKipEKj;
  		}
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/ExternalSystem.cpp b/src/3rdParty/OndselSolver/OndselSolver/ExternalSystem.cpp
+index ea9e34a..9ad7bae 100644
+--- a/src/3rdParty/OndselSolver/OndselSolver/ExternalSystem.cpp
++++ b/src/3rdParty/OndselSolver/OndselSolver/ExternalSystem.cpp
+@@ -61,6 +61,9 @@ void MbD::ExternalSystem::outputFor(AnalysisType type)
+ 		asmtAssembly->updateFromMbD();
+ 		asmtAssembly->compareResults(type);
+ 		asmtAssembly->outputResults(type);
++		if (type == DYNAMIC && asmtAssembly->frameCallback) {
++			asmtAssembly->frameCallback();
++		}
+         //asmtAssembly->externalSystem->outputFor(type);
+     }
+     else if (freecadAssemblyObject) {
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/FixedJoint.cpp b/src/3rdParty/OndselSolver/OndselSolver/FixedJoint.cpp
 index 2884e80..d889ec5 100644
 --- a/src/3rdParty/OndselSolver/OndselSolver/FixedJoint.cpp
@@ -981,6 +1026,34 @@ index 2f775b7..2b085b4 100644
  
  		std::shared_ptr<Time> time;
  	};
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/SystemSolver.cpp b/src/3rdParty/OndselSolver/OndselSolver/SystemSolver.cpp
+index a6b740c..4d896c3 100644
+--- a/src/3rdParty/OndselSolver/OndselSolver/SystemSolver.cpp
++++ b/src/3rdParty/OndselSolver/OndselSolver/SystemSolver.cpp
+@@ -30,6 +30,8 @@
+ #include "AccICKineNewtonRaphson.h"
+ #include "PosICDragNewtonRaphson.h"
+ #include "PosICDragLimitNewtonRaphson.h"
++#include "LimitIJ.h"
++#include "SimulationStoppingError.h"
+ 
+ using namespace MbD;
+ 
+@@ -372,6 +374,14 @@ void SystemSolver::tstartPastsAddFirst(double tstartPast)
+ 
+ void SystemSolver::output()
+ {
++	// Kinematic analysis ignored limits: a motion could drive a joint through its stop. Stop at the
++	// first output state that violates a limit; the states output before it are kept.
++	for (auto& limit : *system->limits) {
++		limit->prePosIC();
++		if (!limit->satisfied()) {
++			throw SimulationStoppingError("Limit " + limit->name + " reached");
++		}
++	}
+ 	system->outputFor(DYNAMIC);
+ }
+ 
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/TranslationalJoint.cpp b/src/3rdParty/OndselSolver/OndselSolver/TranslationalJoint.cpp
 index f4af4cc..3293060 100644
 --- a/src/3rdParty/OndselSolver/OndselSolver/TranslationalJoint.cpp

@@ -47,6 +47,7 @@
 #include <Base/Rotation.h>
 #include <Base/Tools.h>
 #include <Base/Interpreter.h>
+#include <Base/Sequencer.h>
 
 #include <Mod/Part/App/TopoShape.h>
 #include <Mod/Part/App/AttachExtension.h>
@@ -54,6 +55,7 @@
 #include <OndselSolver/CREATE.h>
 #include <OndselSolver/ASMTSimulationParameters.h>
 #include <OndselSolver/ASMTAssembly.h>
+#include <OndselSolver/SimulationStoppingError.h>
 #include <OndselSolver/ASMTMarker.h>
 #include <OndselSolver/ASMTPart.h>
 #include <OndselSolver/ASMTJoint.h>
@@ -1036,13 +1038,64 @@ int AssemblyObject::generateSimulation(App::DocumentObject* sim)
 
     create_mbdSimulationParameters(sim);
 
-    try {
-        mbdAssembly->runKINEMATIC();
+    // FCPROJECT-PATCH (2026-10-29): Fortschritt je Bild ueber den FreeCAD-Sequencer (Balken in der
+    // Statusleiste, Oberflaeche bleibt bedienbar, Esc bricht ab - die Bilder bis dahin bleiben).
+    // Vorher stand die Oberflaeche bis zum Ende von runKINEMATIC() still.
+    auto simValue = [sim](const char* propName) {
+        auto* prop = dynamic_cast<App::PropertyFloat*>(sim->getPropertyByName(propName));
+        return prop ? prop->getValue() : 0.0;
+    };
+    const double hout = simValue("cTimeStepOutput");
+    const size_t expectedFrames = hout > 0.0
+        ? size_t(std::llround((simValue("bTimeEnd") - simValue("aTimeStart")) / hout)) + 1
+        : 1;
+    {
+        Base::SequencerLauncher progress("Simulation", expectedFrames);
+        mbdAssembly->frameCallback = [&progress]() {
+            try {
+                progress.next(true);
+            }
+            catch (const Base::AbortException&) {
+                throw MbD::SimulationStoppingError("Cancelled");
+            }
+        };
+        try {
+            mbdAssembly->runKINEMATIC();
+        }
+        catch (...) {
+            mbdAssembly->frameCallback = nullptr;
+            Base::Console().error("Generation of simulation failed\n");
+            motions.clear();
+            return -1;
+        }
+        mbdAssembly->frameCallback = nullptr;
     }
-    catch (...) {
-        Base::Console().error("Generation of simulation failed\n");
-        motions.clear();
-        return -1;
+
+    // FCPROJECT-PATCH (2026-10-29): die Simulation haelt am ersten Bild an, das eine Gelenkgrenze
+    // verletzt (OndselSolver SystemSolver::output()); die Bilder davor bleiben. Sagen, warum sie
+    // kuerzer ist als eingestellt.
+    const std::string& stop = mbdAssembly->simulationStopMessage;
+    if (stop.rfind("Limit ", 0) == 0) {
+        std::string name = stop.substr(6, stop.size() - 6 - std::string(" reached").size());
+        name = name.substr(name.find_last_of('/') + 1);
+        auto valueOf = [sim](const char* propName) {
+            auto* prop = dynamic_cast<App::PropertyFloat*>(sim->getPropertyByName(propName));
+            return prop ? prop->getValue() : 0.0;
+        };
+        size_t frames = mbdAssembly->numberOfFrames();
+        double lastTime = valueOf("aTimeStart")
+            + (frames >= 2 ? double(frames - 2) : 0.0) * valueOf("cTimeStepOutput");
+        Base::Console().warning(
+            "Simulation stopped: joint limit {} reached after t = {:.4g} s (last frame within the limits)\n",
+            name,
+            lastTime
+        );
+    }
+    else if (stop == "Cancelled") {
+        Base::Console().warning("Simulation cancelled by the user\n");
+    }
+    else if (!stop.empty()) {
+        Base::Console().warning("Simulation stopped early: {}\n", stop);
     }
 
     motions.clear();
@@ -4038,18 +4091,18 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(
     }
 
     std::string fullMarkerNameI, fullMarkerNameJ;
+    const char* refI = swapSides ? "Reference2" : "Reference1";
+    const char* plcI = swapSides ? "Placement2" : "Placement1";
+    const char* refJ = swapSides ? "Reference1" : "Reference2";
+    const char* plcJ = swapSides ? "Placement1" : "Placement2";
+    Base::Rotation turnJ;
     if (jointType == JointType::RackPinion) {
         getRackPinionMarkers(joint, fullMarkerNameI, fullMarkerNameJ, nestingPrefix);
     }
     else {
-        const char* refI = swapSides ? "Reference2" : "Reference1";
-        const char* plcI = swapSides ? "Placement2" : "Placement1";
-        const char* refJ = swapSides ? "Reference1" : "Reference2";
-        const char* plcJ = swapSides ? "Placement1" : "Placement2";
         const bool hasVariant = jointType == JointType::Fixed || jointType == JointType::Slider
             || jointType == JointType::Revolute || jointType == JointType::Cylindrical;
-        const Base::Rotation turnJ
-            = hasVariant ? jointVariant(joint, jointType, nestingPrefix) : Base::Rotation();
+        turnJ = hasVariant ? jointVariant(joint, jointType, nestingPrefix) : Base::Rotation();
         fullMarkerNameI = handleOneSideOfJoint(joint, refI, plcI, std::string(), nestingPrefix);
         fullMarkerNameJ = handleOneSideOfJoint(joint, refJ, plcJ, std::string(), nestingPrefix, turnJ);
     }
@@ -4064,8 +4117,22 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(
     mbdJoint->setMarkerI(fullMarkerNameI);
     mbdJoint->setMarkerJ(fullMarkerNameJ);
 
-    // Add limits if needed. We do not add if this is a simulation or their might clash.
-    if (motions.empty()) {
+    // Add limits if needed.
+    // FCPROJECT-PATCH (2026-10-29): auch in der Simulation. Upstream liess sie dort weg ("might
+    // clash"), aber in runKINEMATIC bleiben Grenzen inaktiv (keine Gleichungen); OndselSolver
+    // prueft sie nur vor jedem Bild (SystemSolver::output()) und haelt die Simulation am
+    // Anschlag an, statt das Gelenk per Motion hindurchzufahren. In der Simulation bekommen die
+    // Grenzen eigene Marker: eine Motion ersetzt das Bezugssystem am Marker I des Gelenks durch
+    // ein zeitabhaengiges (der Grenze bliebe ein nie aktualisiertes -> Absturz), und gemessen
+    // werden soll gegen die feste Lage, nicht gegen die mitbewegte.
+    std::string limitMarkerI = fullMarkerNameI;
+    std::string limitMarkerJ = fullMarkerNameJ;
+    if (!motions.empty() && jointType != JointType::RackPinion) {
+        const std::string limitName = jointInstanceName(joint, nestingPrefix) + "-Limit";
+        limitMarkerI = handleOneSideOfJoint(joint, refI, plcI, limitName, nestingPrefix);
+        limitMarkerJ = handleOneSideOfJoint(joint, refJ, plcJ, limitName, nestingPrefix, turnJ);
+    }
+    {
         if (jointType == JointType::Slider || jointType == JointType::Cylindrical) {
             auto* pLenMin = dynamic_cast<App::PropertyFloat*>(joint->getPropertyByName("LengthMin"));
             auto* pLenMax = dynamic_cast<App::PropertyFloat*>(joint->getPropertyByName("LengthMax"));
@@ -4097,8 +4164,8 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(
                 if (minEnabled) {
                     auto limit = ASMTTranslationLimit::With();
                     limit->setName(jointInstanceName(joint, nestingPrefix) + "-LimitLenMin");
-                    limit->setMarkerI(fullMarkerNameI);
-                    limit->setMarkerJ(fullMarkerNameJ);
+                    limit->setMarkerI(limitMarkerI);
+                    limit->setMarkerJ(limitMarkerJ);
                     limit->settype("=>");
                     limit->setlimit(std::to_string(minLength));
                     limit->settol("1.0e-9");
@@ -4108,8 +4175,8 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(
                 if (maxEnabled) {
                     auto limit2 = ASMTTranslationLimit::With();
                     limit2->setName(jointInstanceName(joint, nestingPrefix) + "-LimitLenMax");
-                    limit2->setMarkerI(fullMarkerNameI);
-                    limit2->setMarkerJ(fullMarkerNameJ);
+                    limit2->setMarkerI(limitMarkerI);
+                    limit2->setMarkerJ(limitMarkerJ);
                     limit2->settype("=<");
                     limit2->setlimit(std::to_string(maxLength));
                     limit2->settol("1.0e-9");
@@ -4147,8 +4214,8 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(
                 if (minEnabled) {
                     auto limit = ASMTRotationLimit::With();
                     limit->setName(jointInstanceName(joint, nestingPrefix) + "-LimitRotMin");
-                    limit->setMarkerI(fullMarkerNameI);
-                    limit->setMarkerJ(fullMarkerNameJ);
+                    limit->setMarkerI(limitMarkerI);
+                    limit->setMarkerJ(limitMarkerJ);
                     limit->settype("=>");
                     limit->setlimit(std::to_string(minAngle) + "*pi/180.0");
                     limit->settol("1.0e-9");
@@ -4158,8 +4225,8 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(
                 if (maxEnabled) {
                     auto limit2 = ASMTRotationLimit::With();
                     limit2->setName(jointInstanceName(joint, nestingPrefix) + "-LimitRotMax");
-                    limit2->setMarkerI(fullMarkerNameI);
-                    limit2->setMarkerJ(fullMarkerNameJ);
+                    limit2->setMarkerI(limitMarkerI);
+                    limit2->setMarkerJ(limitMarkerJ);
                     limit2->settype("=<");
                     limit2->setlimit(std::to_string(maxAngle) + "*pi/180.0");
                     limit2->settol("1.0e-9");
