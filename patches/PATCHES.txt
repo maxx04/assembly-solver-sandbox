@@ -165,6 +165,7 @@
 2026.10.11-ondselsolver-redundancy-groups.patch
 
 # Build-Baum-Patches aus dem Dev-Build (/home/maxx/freecad/freecad-source), seit 2026-10-27 aktiv
+# (Dev-Build am 2026-10-31 auf Nutzerwunsch geloescht - diese Patch-Dateien sind die einzige Quelle.)
 # (Nutzerauftrag: "das und alles notwendige vom Dev uebernehmen" - die Sandbox ersetzt den
 # Dev-Build; dessen Assembly-Stand war veraltet, mit Kopier-Pipeline). Vorher nur Referenzkopien.
 # Inhalt byte-gleich mit den lokalen Aenderungen im Dev-Build verglichen. Nicht uebernommen: die
