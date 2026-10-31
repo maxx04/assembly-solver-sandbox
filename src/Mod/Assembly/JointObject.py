@@ -890,7 +890,7 @@ class Joint:
             elif joint.JointType in JointParallelForbidden:
                 self.preventParallel(joint)
             elif joint.JointType in ("Distance", "Parallel"):
-                self.preSolveOpposite(joint)
+                self.preSolveFlush(joint)
 
             if isAssembly:
                 solveIfAllowed(assembly, True)
@@ -1047,13 +1047,14 @@ class Joint:
 
         return True
 
-    def preSolveOpposite(self, joint, savePlc=True):
+    def preSolveFlush(self, joint, savePlc=True):
         """FCPROJECT-PATCH (2026-10-31, Regel C8 in docs/CONSTRAINTS.md): Planar-Gelenk (Abstand
-        Ebene-Ebene) und Parallel-Gelenk stehen mit entgegengesetzten JCS-z-Achsen. Steht das
-        bewegliche Teil beim Anlegen auf der gleichsinnigen Seite, aber nicht buendig (mehr als 10
-        Grad), wird es um 180 Grad um die x-Achse seiner JCS geklappt - ohne Verschieben. Der
-        Solver haelt danach die naehere Seite fest (AssemblyObject::jointVariant()); buendig
-        gesetzte Gelenke und "Ausrichtung wechseln" bleiben so, wie sie sind."""
+        Ebene-Ebene) und Parallel-Gelenk stehen standardmaessig buendig, mit gleichsinnigen
+        JCS-z-Achsen. Steht das bewegliche Teil beim Anlegen auf der entgegengesetzten Seite, aber
+        nicht sauber gegeneinander (mehr als 10 Grad), wird es um 180 Grad um die x-Achse seiner
+        JCS geklappt - ohne Verschieben. Der Solver haelt danach die naehere Seite fest
+        (AssemblyObject::jointVariant()); sauber gegeneinander gesetzte Gelenke und "Ausrichtung
+        wechseln" bleiben so, wie sie sind."""
         if joint.JointType == "Distance" and not (
             _isPlanarFaceRef(joint.Reference1) and _isPlanarFaceRef(joint.Reference2)
         ):
@@ -1062,7 +1063,7 @@ class Joint:
         jcs2 = UtilsAssembly.getJcsGlobalPlc(joint.Placement2, joint.Reference2)
         zAxis = App.Vector(0, 0, 1)
         dot = jcs1.Rotation.multVec(zAxis).dot(jcs2.Rotation.multVec(zAxis))
-        if dot <= 0.0 or dot >= math.cos(math.radians(10.0)):
+        if dot >= 0.0 or dot <= -math.cos(math.radians(10.0)):
             return False
 
         assembly = self.getAssembly(joint)

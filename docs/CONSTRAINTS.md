@@ -141,16 +141,19 @@ Umsetzung und Upstream-Abweichung: docs/ARCHITECTURE.md §3.2d,
 `plans/2026-10-14-redundanz-mit-toleranz.md`.
 
 
-## C8. Planar- und Parallel-Gelenk: Gelenkrichtungen entgegengesetzt (2026-10-31)
+## C8. Planar- und Parallel-Gelenk: standardmäßig bündig (2026-10-31)
 
 Nutzerentscheidung: Beim Planar-Gelenk (u.a. Abstand Ebene–Ebene) und beim Parallel-Gelenk
-stehen die z-Achsen der beiden Gelenk-Koordinatensysteme **entgegengesetzt**.
+stehen die z-Achsen der beiden Gelenk-Koordinatensysteme standardmäßig **gleichsinnig**
+(„bündig“): zwei Flächen zeigen in dieselbe Richtung und schließen auf gleicher Höhe ab, zwei
+Achsen laufen in dieselbe Richtung. (Zuerst war „entgegengesetzt“ festgelegt; geändert, weil im
+Projekt die bündigen Gelenke der übliche Fall sind.)
 
-- Das ist die gewollte Lage, nicht nur eine von zwei gleichwertigen Lösungen.
+- Steht ein solches Gelenk schon sauber entgegengesetzt (bis 10 Grad, Fläche auf Fläche) oder hat
+  der Nutzer „Ausrichtung wechseln“ benutzt, bleibt diese Lage. Bestehende Modelle klappen nicht
+  um.
 - Der Solver soll nicht je nach Startlage zwischen „gleich“ und „entgegengesetzt“ wählen
   (Rest der 180°-Mehrdeutigkeit, #32477).
-- Steht ein solches Gelenk schon gleichsinnig (bis 10 Grad, „bündig“) oder hat der Nutzer
-  „Ausrichtung wechseln“ benutzt, bleibt diese Lage. Bestehende Modelle klappen nicht um.
-- Umsetzung (2026-10-31): beim Anlegen klappt FreeCAD das bewegliche Teil auf die
-  entgegengesetzte Seite; das Parallel-Gelenk ist im Solver eindeutig, das Planar-Gelenk noch
-  nicht (docs/ARCHITECTURE.md §2.1d).
+- Umsetzung: beim Anlegen klappt FreeCAD das bewegliche Teil auf die gleichsinnige Seite
+  (`JointObject.preSolveFlush()`); das Parallel-Gelenk ist im Solver eindeutig, das
+  Planar-Gelenk noch nicht (docs/ARCHITECTURE.md §2.1d).

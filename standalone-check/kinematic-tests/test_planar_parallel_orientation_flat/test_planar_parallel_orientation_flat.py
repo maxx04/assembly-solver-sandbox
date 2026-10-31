@@ -1,15 +1,16 @@
 """
 Regressionstest Regel C8 (docs/CONSTRAINTS.md): Planar-Gelenk (Abstand Ebene-Ebene) und
-Parallel-Gelenk stehen mit entgegengesetzten JCS-z-Achsen - ausser das Gelenk steht schon (bis
-10 Grad) gleichsinnig (bestehendes buendiges Modell, "Ausrichtung wechseln"), dann bleibt das.
+Parallel-Gelenk stehen standardmaessig buendig (gleichsinnige JCS-z-Achsen) - ausser das Gelenk
+steht schon (bis 10 Grad) sauber entgegengesetzt (Flaeche auf Flaeche, "Ausrichtung wechseln"),
+dann bleibt das.
 
 Vorher (Vanilla): OndselSolver erlaubte zJ = +-zI (zI.xJ = zI.yJ = 0), Newton landete auf der
-Lage, die der Startlage naeher war - 70 Grad Start ergab "gleichsinnig".
+Lage, die der Startlage naeher war - 110 Grad Start ergab "entgegen".
 
 Aufbau je Fall: BoxA (geerdet) -[Gelenk Face6 von A, Face5 von B]- BoxB. B startet so, dass die
 JCS von B gegenueber der von A um THETA um x gekippt ist (0 = gleichsinnig, 180 = entgegen).
-"anlegen": wie in der GUI JointObject.preSolveOpposite() (klappt B auf die Gegenseite, wenn es
-gleichsinnig, aber nicht buendig steht), dann zweimal Solve. "Skript": ohne diesen Schritt - der
+"anlegen": wie in der GUI JointObject.preSolveFlush() (klappt B auf die gleichsinnige Seite, wenn
+es auf der Gegenseite, aber nicht sauber gegeneinander steht), dann zweimal Solve. "Skript": ohne diesen Schritt - der
 Solver haelt dann eindeutig die naehere Seite. Geprueft: Vorzeichen zI.zJ, Gelenk erfuellt.
 
 Aufruf:
@@ -30,16 +31,16 @@ PLC1 = jtu.face_jcs_placement("Face6", extra_z_rotation_deg=20)
 PLC2 = jtu.face_jcs_placement("Face5", extra_z_rotation_deg=35)
 # (Gelenktyp, Name, Startwinkel, wie GUI angelegt, erwartetes Vorzeichen zI.zJ)
 CASES = [
-    (DISTANCE, "Abstand", 180.0, True, -1),
     (DISTANCE, "Abstand", 0.0, True, +1),
-    (DISTANCE, "Abstand", 5.0, True, +1),
-    (DISTANCE, "Abstand", 70.0, True, -1),
-    (DISTANCE, "Abstand", 110.0, True, -1),
-    (DISTANCE, "Abstand", 70.0, False, +1),
-    (PARALLEL, "Parallel", 180.0, True, -1),
+    (DISTANCE, "Abstand", 180.0, True, -1),
+    (DISTANCE, "Abstand", 175.0, True, -1),
+    (DISTANCE, "Abstand", 110.0, True, +1),
+    (DISTANCE, "Abstand", 70.0, True, +1),
+    (DISTANCE, "Abstand", 110.0, False, -1),
     (PARALLEL, "Parallel", 0.0, True, +1),
-    (PARALLEL, "Parallel", 70.0, True, -1),
-    (PARALLEL, "Parallel", 70.0, False, +1),
+    (PARALLEL, "Parallel", 180.0, True, -1),
+    (PARALLEL, "Parallel", 110.0, True, +1),
+    (PARALLEL, "Parallel", 110.0, False, -1),
 ]
 TOL = 1e-6
 
@@ -50,10 +51,10 @@ def run_case(index, jtype, name, theta, created, expected):
     tilt = App.Placement(App.Vector(3, -2, 4), App.Rotation(App.Vector(1, 0, 0), theta))
     boxB.Placement = boxA.Placement.multiply(PLC1).multiply(tilt).multiply(PLC2.inverse())
     joint = jtu.make_joint(asm, jtype, boxA, boxB, PLC1, PLC2, "Face6", "Face5")
-    # wie in der GUI: erst die Auswahl (setJointConnectors -> preSolveOpposite), dann Werte - das
+    # wie in der GUI: erst die Auswahl (setJointConnectors -> preSolveFlush), dann Werte - das
     # Setzen von Distance loest sofort einen Solve aus
-    if created and hasattr(joint.Proxy, "preSolveOpposite"):  # Vanilla: gibt es nicht
-        joint.Proxy.preSolveOpposite(joint)
+    if created and hasattr(joint.Proxy, "preSolveFlush"):  # Vanilla: gibt es nicht
+        joint.Proxy.preSolveFlush(joint)
     if jtype == DISTANCE:
         joint.Distance = 0.0
     doc.recompute()

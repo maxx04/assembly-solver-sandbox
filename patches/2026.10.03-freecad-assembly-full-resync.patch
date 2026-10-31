@@ -3368,7 +3368,7 @@ index 7ca17b4e3be..6e38571c0c2 100644
  
      return ret;
 diff --git a/src/Mod/Assembly/App/AssemblyObject.cpp b/src/Mod/Assembly/App/AssemblyObject.cpp
-index 2f5b06dacf6..51a2033de76 100644
+index 2f5b06dacf6..3eca83a873b 100644
 --- a/src/Mod/Assembly/App/AssemblyObject.cpp
 +++ b/src/Mod/Assembly/App/AssemblyObject.cpp
 @@ -24,6 +24,10 @@
@@ -6490,7 +6490,7 @@ index 2f5b06dacf6..51a2033de76 100644
 +        const bool hasVariant = jointType == JointType::Fixed || jointType == JointType::Slider
 +            || jointType == JointType::Revolute || jointType == JointType::Cylindrical;
 +        // Parallel: der Solver verlangt zJ = +zI (Kippwinkel 0, eindeutig); jointVariant() waehlt
-+        // die Lage (die naehere; Regel C8 beim Anlegen, JointObject.py preSolveOpposite()).
++        // die Lage (die naehere; Regel C8 beim Anlegen, JointObject.py preSolveFlush()).
 +        // Ausnahme: ein Winkelgelenk mit 0 Grad wird ebenfalls als ParallelAxes gebaut, dort heisst
 +        // 0 Grad aber gleiche Richtung. Planar (Abstand Ebene-Ebene) behaelt im Solver die alten
 +        // Richtungskosinusse - mit den Kippwinkeln divergierte es je nach Seitenreihenfolge.
@@ -6842,9 +6842,9 @@ index 2f5b06dacf6..51a2033de76 100644
 +
 +    // Parallel: nur das Vorzeichen der Z-Achse, immer die naehere Seite - die Kippwinkel-
 +    // Bedingungen konvergieren nur, solange die Ziellage weniger als 90 Grad entfernt ist. Regel C8
-+    // (entgegengesetzt, docs/CONSTRAINTS.md) setzt das Anlegen des Gelenks durch (JointObject.py
-+    // preSolveOpposite(): Teil vorher auf die Gegenseite klappen); hier bleibt, was steht -
-+    // bestehende buendige Gelenke und "Ausrichtung wechseln" eingeschlossen.
++    // (buendig, docs/CONSTRAINTS.md) setzt das Anlegen des Gelenks durch (JointObject.py
++    // preSolveFlush(): Teil vorher auf die gleichsinnige Seite klappen); hier bleibt, was steht -
++    // bestehende gegeneinander stehende Gelenke und "Ausrichtung wechseln" eingeschlossen.
 +    if (jointType == JointType::Parallel) {
 +        const double zz = relation.getRotation().multVec(Base::Vector3d(0, 0, 1)).z;
 +        return zz > 0.0 ? Base::Rotation() : flipped;
@@ -11865,7 +11865,7 @@ index e2ac92c0ebe..11d2db7deab 100644
  
          cmdListMenuOnly = [
 diff --git a/src/Mod/Assembly/JointObject.py b/src/Mod/Assembly/JointObject.py
-index e25c44893fd..3ac1bd9e1d8 100644
+index e25c44893fd..9bab0446841 100644
 --- a/src/Mod/Assembly/JointObject.py
 +++ b/src/Mod/Assembly/JointObject.py
 @@ -143,21 +143,51 @@ JointParallelForbidden = [
@@ -11949,7 +11949,7 @@ index e25c44893fd..3ac1bd9e1d8 100644
              elif joint.JointType in JointParallelForbidden:
                  self.preventParallel(joint)
 +            elif joint.JointType in ("Distance", "Parallel"):
-+                self.preSolveOpposite(joint)
++                self.preSolveFlush(joint)
  
              if isAssembly:
                  solveIfAllowed(assembly, True)
@@ -11986,7 +11986,7 @@ index e25c44893fd..3ac1bd9e1d8 100644
          if isAssembly:
              joint.Suppressed = True
              part1Connected = assembly.isPartConnected(part1)
-@@ -974,13 +1023,73 @@ class Joint:
+@@ -974,13 +1023,74 @@ class Joint:
          if not sameDir:
              moving_part_global_jcs = UtilsAssembly.flipPlacement(moving_part_global_jcs)
  
@@ -12015,13 +12015,14 @@ index e25c44893fd..3ac1bd9e1d8 100644
  
          return True
  
-+    def preSolveOpposite(self, joint, savePlc=True):
++    def preSolveFlush(self, joint, savePlc=True):
 +        """FCPROJECT-PATCH (2026-10-31, Regel C8 in docs/CONSTRAINTS.md): Planar-Gelenk (Abstand
-+        Ebene-Ebene) und Parallel-Gelenk stehen mit entgegengesetzten JCS-z-Achsen. Steht das
-+        bewegliche Teil beim Anlegen auf der gleichsinnigen Seite, aber nicht buendig (mehr als 10
-+        Grad), wird es um 180 Grad um die x-Achse seiner JCS geklappt - ohne Verschieben. Der
-+        Solver haelt danach die naehere Seite fest (AssemblyObject::jointVariant()); buendig
-+        gesetzte Gelenke und "Ausrichtung wechseln" bleiben so, wie sie sind."""
++        Ebene-Ebene) und Parallel-Gelenk stehen standardmaessig buendig, mit gleichsinnigen
++        JCS-z-Achsen. Steht das bewegliche Teil beim Anlegen auf der entgegengesetzten Seite, aber
++        nicht sauber gegeneinander (mehr als 10 Grad), wird es um 180 Grad um die x-Achse seiner
++        JCS geklappt - ohne Verschieben. Der Solver haelt danach die naehere Seite fest
++        (AssemblyObject::jointVariant()); sauber gegeneinander gesetzte Gelenke und "Ausrichtung
++        wechseln" bleiben so, wie sie sind."""
 +        if joint.JointType == "Distance" and not (
 +            _isPlanarFaceRef(joint.Reference1) and _isPlanarFaceRef(joint.Reference2)
 +        ):
@@ -12030,7 +12031,7 @@ index e25c44893fd..3ac1bd9e1d8 100644
 +        jcs2 = UtilsAssembly.getJcsGlobalPlc(joint.Placement2, joint.Reference2)
 +        zAxis = App.Vector(0, 0, 1)
 +        dot = jcs1.Rotation.multVec(zAxis).dot(jcs2.Rotation.multVec(zAxis))
-+        if dot <= 0.0 or dot >= math.cos(math.radians(10.0)):
++        if dot >= 0.0 or dot <= -math.cos(math.radians(10.0)):
 +            return False
 +
 +        assembly = self.getAssembly(joint)
@@ -12061,7 +12062,7 @@ index e25c44893fd..3ac1bd9e1d8 100644
      def undoPreSolve(self, joint):
          if hasattr(self, "partsMovedByPresolved") and self.partsMovedByPresolved:
              for part, plc in self.partsMovedByPresolved.items():
-@@ -989,7 +1098,12 @@ class Joint:
+@@ -989,7 +1099,12 @@ class Joint:
              self.partsMovedByPresolved = {}
  
              if joint.ViewObject:
@@ -12075,7 +12076,7 @@ index e25c44893fd..3ac1bd9e1d8 100644
  
      def preventParallel(self, joint):
          # Angle and perpendicular joints in the solver cannot handle the situation where both JCS are Parallel
-@@ -1002,7 +1116,8 @@ class Joint:
+@@ -1002,7 +1117,8 @@ class Joint:
          part1 = UtilsAssembly.getMovingPart(joint.Reference1)
          part2 = UtilsAssembly.getMovingPart(joint.Reference2)
  
@@ -12085,7 +12086,7 @@ index e25c44893fd..3ac1bd9e1d8 100644
          if isAssembly:
              part1ConnectedByJoint = assembly.isJointConnectingPartToGround(joint, "Reference1")
              part2ConnectedByJoint = assembly.isJointConnectingPartToGround(joint, "Reference2")
-@@ -1041,7 +1156,17 @@ class Joint:
+@@ -1041,7 +1157,17 @@ class Joint:
          # See https://github.com/FreeCAD/FreeCAD/issues/29355 for instance.
          # This function swap the references if possible to avoid those issues.
          assembly = self.getAssembly(joint)
@@ -12104,7 +12105,7 @@ index e25c44893fd..3ac1bd9e1d8 100644
              return
  
          part1 = UtilsAssembly.getMovingPart(joint.Reference1)
-@@ -1712,7 +1837,15 @@ class MakeJointSelGate:
+@@ -1712,7 +1838,15 @@ class MakeJointSelGate:
                  if parent.isDerivedFrom("App::LocalCoordinateSystem"):
                      datum = parent
  
@@ -12121,7 +12122,7 @@ index e25c44893fd..3ac1bd9e1d8 100644
                  # accept only datum that are not attached
                  return datum.MapMode == "Deactivated"
  
-@@ -1807,11 +1940,18 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -1807,11 +1941,18 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
              self.createJointObject()
              self.visibilityBackup = False
  
@@ -12145,7 +12146,7 @@ index e25c44893fd..3ac1bd9e1d8 100644
          bind = Gui.ExpressionBinding(self.jForm.angleSpinbox).bind(self.joint, "Angle")
          bind = Gui.ExpressionBinding(self.jForm.distanceSpinbox).bind(self.joint, "Distance")
          bind = Gui.ExpressionBinding(self.jForm.distanceSpinbox2).bind(self.joint, "Distance2")
-@@ -1835,10 +1975,12 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -1835,10 +1976,12 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
          self.jForm.limitCheckbox3.stateChanged.connect(self.adaptUi)
          self.jForm.limitCheckbox4.stateChanged.connect(self.adaptUi)
  
@@ -12162,7 +12163,7 @@ index e25c44893fd..3ac1bd9e1d8 100644
          bind = Gui.ExpressionBinding(self.jForm.limitLenMinSpinbox).bind(self.joint, "LengthMin")
          bind = Gui.ExpressionBinding(self.jForm.limitLenMaxSpinbox).bind(self.joint, "LengthMax")
          bind = Gui.ExpressionBinding(self.jForm.limitRotMinSpinbox).bind(self.joint, "AngleMin")
-@@ -1888,13 +2030,65 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -1888,13 +2031,65 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
  
          self.assembly.recompute(True)
  
@@ -12228,7 +12229,7 @@ index e25c44893fd..3ac1bd9e1d8 100644
          return True
  
      def autoClosedOnTransactionChange(self):
-@@ -1917,6 +2111,25 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -1917,6 +2112,25 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
              self.assembly.ViewObject.MoveOnlyPreselected = False
              self.assembly.ViewObject.MoveInCommand = True
  
@@ -12254,7 +12255,7 @@ index e25c44893fd..3ac1bd9e1d8 100644
          Gui.Selection.removeSelectionGate()
          Gui.Selection.removeObserver(self)
          Gui.Selection.setSelectionStyle(Gui.Selection.SelectionStyle.NormalSelection)
-@@ -2152,9 +2365,22 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -2152,9 +2366,22 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
  
          self.blockOffsetRotation = True
          self.jForm.offsetSpinbox.setProperty("rawValue", pos.z)
@@ -12280,7 +12281,7 @@ index e25c44893fd..3ac1bd9e1d8 100644
          self.blockOffsetRotation = False
  
      def advancedOffsetToggled(self, on):
-@@ -2248,6 +2474,7 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -2248,6 +2475,7 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
      def updateJointList(self):
          self.jForm.featureList.clear()
          simplified_names = []
@@ -12288,7 +12289,7 @@ index e25c44893fd..3ac1bd9e1d8 100644
          for ref in self.refs:
  
              sname = UtilsAssembly.getObject(ref).Label
-@@ -2256,7 +2483,24 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -2256,7 +2484,24 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
              if element_name != "":
                  sname = sname + "." + element_name
              simplified_names.append(sname)
@@ -12313,7 +12314,7 @@ index e25c44893fd..3ac1bd9e1d8 100644
  
      def updateLimits(self):
          needLengthLimits = self.jType in JointUsingLimitLength
-@@ -2481,5 +2725,19 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -2481,5 +2726,19 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
          self.presel_ref = [comp, [new_sub]]
  
      def clearSelection(self, doc_name):

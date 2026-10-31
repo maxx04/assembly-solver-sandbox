@@ -4103,7 +4103,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(
         const bool hasVariant = jointType == JointType::Fixed || jointType == JointType::Slider
             || jointType == JointType::Revolute || jointType == JointType::Cylindrical;
         // Parallel: der Solver verlangt zJ = +zI (Kippwinkel 0, eindeutig); jointVariant() waehlt
-        // die Lage (die naehere; Regel C8 beim Anlegen, JointObject.py preSolveOpposite()).
+        // die Lage (die naehere; Regel C8 beim Anlegen, JointObject.py preSolveFlush()).
         // Ausnahme: ein Winkelgelenk mit 0 Grad wird ebenfalls als ParallelAxes gebaut, dort heisst
         // 0 Grad aber gleiche Richtung. Planar (Abstand Ebene-Ebene) behaelt im Solver die alten
         // Richtungskosinusse - mit den Kippwinkeln divergierte es je nach Seitenreihenfolge.
@@ -4504,9 +4504,9 @@ Base::Rotation AssemblyObject::jointVariant(
 
     // Parallel: nur das Vorzeichen der Z-Achse, immer die naehere Seite - die Kippwinkel-
     // Bedingungen konvergieren nur, solange die Ziellage weniger als 90 Grad entfernt ist. Regel C8
-    // (entgegengesetzt, docs/CONSTRAINTS.md) setzt das Anlegen des Gelenks durch (JointObject.py
-    // preSolveOpposite(): Teil vorher auf die Gegenseite klappen); hier bleibt, was steht -
-    // bestehende buendige Gelenke und "Ausrichtung wechseln" eingeschlossen.
+    // (buendig, docs/CONSTRAINTS.md) setzt das Anlegen des Gelenks durch (JointObject.py
+    // preSolveFlush(): Teil vorher auf die gleichsinnige Seite klappen); hier bleibt, was steht -
+    // bestehende gegeneinander stehende Gelenke und "Ausrichtung wechseln" eingeschlossen.
     if (jointType == JointType::Parallel) {
         const double zz = relation.getRotation().multVec(Base::Vector3d(0, 0, 1)).z;
         return zz > 0.0 ? Base::Rotation() : flipped;
