@@ -494,6 +494,41 @@ index f73c55f..53428c5 100644
  		bool stillConverging;
  		if (dxNormIterNo < (0.5 * dxNormIterNoOld)) {
  			stillConverging = true;
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/ParallelAxesJoint.cpp b/src/3rdParty/OndselSolver/OndselSolver/ParallelAxesJoint.cpp
+index f818820..22ac593 100644
+--- a/src/3rdParty/OndselSolver/OndselSolver/ParallelAxesJoint.cpp
++++ b/src/3rdParty/OndselSolver/OndselSolver/ParallelAxesJoint.cpp
+@@ -7,6 +7,9 @@
+  ***************************************************************************/
+  
+ #include "ParallelAxesJoint.h"
++#include "EndFrameqct.h"
++#include "AxisAngleConstraintIqcJqc.h"
++#include "DirectionCosineConstraintIJ.h"
+ #include "CREATE.h"
+ #include "System.h"
+ 
+@@ -24,8 +27,18 @@ void MbD::ParallelAxesJoint::initializeGlobally()
+ {
+ 	if (constraints->empty())
+ 	{
+-		addConstraint(CREATE<DirectionCosineConstraintIqcJqc>::ConstraintWith(frmI, frmJ, 2, 0));
+-		addConstraint(CREATE<DirectionCosineConstraintIqcJqc>::ConstraintWith(frmI, frmJ, 2, 1));
++		if (std::dynamic_pointer_cast<EndFrameqct>(frmI)) {
++			// Driven by a motion (time dependent frame): no time dependent angle constraint yet.
++			addConstraint(CREATE<DirectionCosineConstraintIqcJqc>::ConstraintWith(frmI, frmJ, 2, 0));
++			addConstraint(CREATE<DirectionCosineConstraintIqcJqc>::ConstraintWith(frmI, frmJ, 2, 1));
++		}
++		else {
++			// zJ parallel to zI with the same sign, as in RevoluteJoint (FreeCAD issue #32477):
++			// zI.xJ = zI.yJ = 0 also allows zJ = -zI. The caller chooses the wanted relation by
++			// turning marker J (FreeCAD: opposite z axes for planar and parallel joints).
++			addConstraint(AxisAngleConstraintIqcJqc::TiltZAboutX(frmI, frmJ));
++			addConstraint(AxisAngleConstraintIqcJqc::TiltZAboutY(frmI, frmJ));
++		}
+ 		this->root()->hasChanged = true;
+ 	}
+ 	else {
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/PosICNewtonRaphson.cpp b/src/3rdParty/OndselSolver/OndselSolver/PosICNewtonRaphson.cpp
 index 41963a1..55a7a2e 100644
 --- a/src/3rdParty/OndselSolver/OndselSolver/PosICNewtonRaphson.cpp

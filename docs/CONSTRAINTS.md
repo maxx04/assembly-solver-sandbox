@@ -140,3 +140,17 @@ Ein Konstrukteur soll sich nicht mit Freiheitsgraden beschäftigen müssen.
 Umsetzung und Upstream-Abweichung: docs/ARCHITECTURE.md §3.2d,
 `plans/2026-10-14-redundanz-mit-toleranz.md`.
 
+
+## C8. Planar- und Parallel-Gelenk: Gelenkrichtungen entgegengesetzt (2026-10-31)
+
+Nutzerentscheidung: Beim Planar-Gelenk (u.a. Abstand Ebene–Ebene) und beim Parallel-Gelenk
+stehen die z-Achsen der beiden Gelenk-Koordinatensysteme **entgegengesetzt**.
+
+- Das ist die gewollte Lage, nicht nur eine von zwei gleichwertigen Lösungen.
+- Der Solver soll nicht je nach Startlage zwischen „gleich“ und „entgegengesetzt“ wählen
+  (Rest der 180°-Mehrdeutigkeit, #32477).
+- Steht ein solches Gelenk schon gleichsinnig (bis 10 Grad, „bündig“) oder hat der Nutzer
+  „Ausrichtung wechseln“ benutzt, bleibt diese Lage. Bestehende Modelle klappen nicht um.
+- Umsetzung (2026-10-31): beim Anlegen klappt FreeCAD das bewegliche Teil auf die
+  entgegengesetzte Seite; das Parallel-Gelenk ist im Solver eindeutig, das Planar-Gelenk noch
+  nicht (docs/ARCHITECTURE.md §2.1d).

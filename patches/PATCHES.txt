@@ -162,6 +162,7 @@
 # Seit 2026-10-29: Simulation prueft vor jedem Bild die Gelenkgrenzen (SystemSolver::output(),
 # haelt am ersten verletzten an, ASMTAssembly::simulationStopMessage) und meldet jedes Bild
 # (ASMTAssembly::frameCallback, ExternalSystem::outputFor) fuer die Fortschrittsanzeige.
+# Seit 2026-10-31: ParallelAxesJoint eindeutig (Kippwinkel wie RevoluteJoint, Regel C8).
 2026.10.11-ondselsolver-redundancy-groups.patch
 
 # Build-Baum-Patches aus dem Dev-Build (/home/maxx/freecad/freecad-source), seit 2026-10-27 aktiv

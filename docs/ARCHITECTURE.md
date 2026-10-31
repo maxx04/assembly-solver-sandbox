@@ -272,6 +272,22 @@ Statt Bündeln (§2.1c) wird die Mehrdeutigkeit dort beseitigt, wo sie entsteht:
 - Prüfung: Testreihe 39/39, Matrix Ziehen und Simulation, MotionProfiles-Simulation, BG22
   (Mutter, Starr/Flexibel ohne Widerspruch), Ziehen-Rundumtest. Plan:
   `plans/2026-10-28-eindeutige-fixed-gelenke.md`.
+- **Parallel und Planar (2026-10-31, Regel C8 in docs/CONSTRAINTS.md: entgegengesetzt):**
+  - `ParallelAxesJoint` bekommt dieselben Kippwinkel wie das Drehgelenk; `jointVariant()` hält
+    die nähere Seite (die Kippwinkel konvergieren nur, solange die Ziellage weniger als 90 Grad
+    entfernt ist). Ausnahme Winkelgelenk mit 0 Grad (auch als ParallelAxes gebaut): gleiche
+    Richtung, kein Drehen von J.
+  - `PlanarJoint` (Abstand Ebene-Ebene) behält im Solver die alten Richtungskosinusse: mit den
+    Kippwinkeln divergierte es je nach Seitenreihenfolge (Referenzen A,B scheiterten aus 100-150
+    Grad, B,A nicht; Dreh-/Zylinder-/Parallelgelenk aus allen Winkeln stabil). Ursache nicht
+    gefunden, vermutlich im Zusammenspiel der Abstandsbedingung (`TranslationConstraintIqcJqc`,
+    K = I) mit den Winkel-Ableitungen - offen.
+  - C8 setzt das Anlegen durch: `JointObject.preSolveOpposite()` (in `setJointConnectors()` für
+    Abstand Ebene-Ebene und Parallel) klappt das bewegliche Teil um 180 Grad um die X-Achse
+    seiner JCS, wenn es gleichsinnig, aber nicht bündig (über 10 Grad) steht - ohne Verschieben,
+    wie `preSolve()` bei Fixed/Dreh. Bestehende bündige Gelenke (PROJ_CNC3018: 43 gleichsinnig,
+    49 entgegen) und „Ausrichtung wechseln“ bleiben unberührt.
+  - Test `test_planar_parallel_orientation_flat` (Weekly-Vanilla FAIL bei den 70-Grad-Fällen).
 
 ### 2.2 Interaktives Ziehen - warum nur die äußerste Baugruppe löst
 

@@ -143,6 +143,16 @@ JointParallelForbidden = [
 ]
 
 
+def _isPlanarFaceRef(ref):
+    """True, wenn die Referenz eine ebene Flaeche ist (Abstand Ebene-Ebene = Planar-Gelenk)."""
+    try:
+        obj, subs = ref[0], ref[1]
+        shape = obj.getSubObject(subs[0] if subs else "")
+        return isinstance(shape, Part.Face) and isinstance(shape.Surface, Part.Plane)
+    except Exception:
+        return False
+
+
 def solveIfAllowed(assembly, storePrev=False):
     # FCPROJECT-PATCH (2026-09-13, "geerdetes Teil springt beim Joint-Anlegen" - siehe
     # docs/ARCHITECTURE.md §2.4): "assembly.Type == 'Assembly'" ersetzt durch
@@ -879,6 +889,8 @@ class Joint:
                 self.preSolve(joint)
             elif joint.JointType in JointParallelForbidden:
                 self.preventParallel(joint)
+            elif joint.JointType in ("Distance", "Parallel"):
+                self.preSolveOpposite(joint)
 
             if isAssembly:
                 solveIfAllowed(assembly, True)
@@ -1033,6 +1045,49 @@ class Joint:
         for part in parts_to_move:
             part.Placement = transform_plc * part.Placement
 
+        return True
+
+    def preSolveOpposite(self, joint, savePlc=True):
+        """FCPROJECT-PATCH (2026-10-31, Regel C8 in docs/CONSTRAINTS.md): Planar-Gelenk (Abstand
+        Ebene-Ebene) und Parallel-Gelenk stehen mit entgegengesetzten JCS-z-Achsen. Steht das
+        bewegliche Teil beim Anlegen auf der gleichsinnigen Seite, aber nicht buendig (mehr als 10
+        Grad), wird es um 180 Grad um die x-Achse seiner JCS geklappt - ohne Verschieben. Der
+        Solver haelt danach die naehere Seite fest (AssemblyObject::jointVariant()); buendig
+        gesetzte Gelenke und "Ausrichtung wechseln" bleiben so, wie sie sind."""
+        if joint.JointType == "Distance" and not (
+            _isPlanarFaceRef(joint.Reference1) and _isPlanarFaceRef(joint.Reference2)
+        ):
+            return False
+        jcs1 = UtilsAssembly.getJcsGlobalPlc(joint.Placement1, joint.Reference1)
+        jcs2 = UtilsAssembly.getJcsGlobalPlc(joint.Placement2, joint.Reference2)
+        zAxis = App.Vector(0, 0, 1)
+        dot = jcs1.Rotation.multVec(zAxis).dot(jcs2.Rotation.multVec(zAxis))
+        if dot <= 0.0 or dot >= math.cos(math.radians(10.0)):
+            return False
+
+        assembly = self.getAssembly(joint)
+        part1 = UtilsAssembly.getMovingPart(joint.Reference1)
+        part2 = UtilsAssembly.getMovingPart(joint.Reference2)
+        if not part1 or not part2 or assembly is None:
+            return False
+        joint.Suppressed = True
+        part1Connected = assembly.isPartConnected(part1)
+        part2Connected = assembly.isPartConnected(part2)
+        joint.Suppressed = False
+        if not part2Connected:
+            moving_part, moving_jcs = part2, jcs2
+        elif not part1Connected:
+            moving_part, moving_jcs = part1, jcs1
+        else:
+            return False
+
+        parts_to_move = [moving_part] + assembly.getDownstreamParts(moving_part, joint)
+        if savePlc:
+            self.partsMovedByPresolved = {p: p.Placement for p in parts_to_move}
+        turn = moving_jcs * App.Placement(App.Vector(), App.Rotation(App.Vector(1, 0, 0), 180))
+        transform_plc = turn * moving_jcs.inverse()
+        for part in parts_to_move:
+            part.Placement = transform_plc * part.Placement
         return True
 
     def undoPreSolve(self, joint):

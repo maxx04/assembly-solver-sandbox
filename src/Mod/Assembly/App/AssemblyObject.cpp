@@ -4102,7 +4102,16 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(
     else {
         const bool hasVariant = jointType == JointType::Fixed || jointType == JointType::Slider
             || jointType == JointType::Revolute || jointType == JointType::Cylindrical;
-        turnJ = hasVariant ? jointVariant(joint, jointType, nestingPrefix) : Base::Rotation();
+        // Parallel: der Solver verlangt zJ = +zI (Kippwinkel 0, eindeutig); jointVariant() waehlt
+        // die Lage (die naehere; Regel C8 beim Anlegen, JointObject.py preSolveOpposite()).
+        // Ausnahme: ein Winkelgelenk mit 0 Grad wird ebenfalls als ParallelAxes gebaut, dort heisst
+        // 0 Grad aber gleiche Richtung. Planar (Abstand Ebene-Ebene) behaelt im Solver die alten
+        // Richtungskosinusse - mit den Kippwinkeln divergierte es je nach Seitenreihenfolge.
+        const bool opposite = std::dynamic_pointer_cast<ASMTParallelAxesJoint>(mbdJoint)
+            && jointType != JointType::Angle;
+        if (hasVariant || opposite) {
+            turnJ = jointVariant(joint, jointType, nestingPrefix);
+        }
         fullMarkerNameI = handleOneSideOfJoint(joint, refI, plcI, std::string(), nestingPrefix);
         fullMarkerNameJ = handleOneSideOfJoint(joint, refJ, plcJ, std::string(), nestingPrefix, turnJ);
     }
@@ -4492,6 +4501,16 @@ Base::Rotation AssemblyObject::jointVariant(
         * jcsWorld(part2, "Reference2", "Placement2");
     const Base::Rotation flipped(Base::Vector3d(1, 0, 0), M_PI);
     constexpr double nearSolution = 1e-3;  // mm bzw. rad
+
+    // Parallel: nur das Vorzeichen der Z-Achse, immer die naehere Seite - die Kippwinkel-
+    // Bedingungen konvergieren nur, solange die Ziellage weniger als 90 Grad entfernt ist. Regel C8
+    // (entgegengesetzt, docs/CONSTRAINTS.md) setzt das Anlegen des Gelenks durch (JointObject.py
+    // preSolveOpposite(): Teil vorher auf die Gegenseite klappen); hier bleibt, was steht -
+    // bestehende buendige Gelenke und "Ausrichtung wechseln" eingeschlossen.
+    if (jointType == JointType::Parallel) {
+        const double zz = relation.getRotation().multVec(Base::Vector3d(0, 0, 1)).z;
+        return zz > 0.0 ? Base::Rotation() : flipped;
+    }
 
     // Revolute/Cylindrical: nur das Vorzeichen der Z-Achse ist festzulegen (Drehung um Z frei).
     if (jointType == JointType::Revolute || jointType == JointType::Cylindrical) {
