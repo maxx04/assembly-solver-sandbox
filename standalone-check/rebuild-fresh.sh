@@ -15,6 +15,8 @@
 #      UNSEREN Build-Ordner und mit Ziel /home/maxx/freecad-sandbox/install statt in die
 #      Pixi-Umgebung. RPATH enthaelt die Pixi-Bibliotheken, damit die Installation sie auch ohne
 #      aktivierte Umgebung findet.
+#      FREECAD_VERSION_INCLUDE_GIT=ON (das Preset schaltet es aus): sonst zeigt "Ueber FreeCAD" bei
+#      Revisionsnummer und Erscheinungsdatum nur "Dev Build".
 #   3. bauen, 4. installieren (bricht ab, wenn die Sandbox-FreeCAD laeuft).
 # Alle Schritte laufen ueber `pixi run`, also mit Compiler, cmake und Bibliotheken der Umgebung.
 #
@@ -48,7 +50,8 @@ rm -rf "$BUILD"
 (cd "$SRC" && pixi_run cmake --preset conda-linux-rel-with-deb-info -B "$BUILD" \
     -DCMAKE_INSTALL_PREFIX="$INSTALL" \
     -DCMAKE_INSTALL_RPATH="${INSTALL}/lib;${ENV_DIR}/lib" \
-    -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON) > "${LOGDIR}/rebuild-fresh-configure.log" 2>&1 || {
+    -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON \
+    -DFREECAD_VERSION_INCLUDE_GIT=ON) > "${LOGDIR}/rebuild-fresh-configure.log" 2>&1 || {
     echo "FEHLER beim Konfigurieren - siehe ${LOGDIR}/rebuild-fresh-configure.log" >&2
     tail -20 "${LOGDIR}/rebuild-fresh-configure.log" >&2
     exit 1
