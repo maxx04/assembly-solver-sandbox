@@ -78,6 +78,70 @@ index e9cbc6e..f882fad 100644
  		bool debug = false;
          std::shared_ptr<ExternalSystem> externalSystem;
  
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/ASMTPointOnCurveJoint.cpp b/src/3rdParty/OndselSolver/OndselSolver/ASMTPointOnCurveJoint.cpp
+new file mode 100644
+index 0000000..1d1b66b
+--- /dev/null
++++ b/src/3rdParty/OndselSolver/OndselSolver/ASMTPointOnCurveJoint.cpp
+@@ -0,0 +1,27 @@
++/***************************************************************************
++ *   Copyright (c) 2023 Ondsel, Inc.                                       *
++ *                                                                         *
++ *   This file is part of OndselSolver.                                    *
++ *                                                                         *
++ *   See LICENSE file for details about copyright.                         *
++ ***************************************************************************/
++
++#include "ASMTPointOnCurveJoint.h"
++#include "PointOnCurveJoint.h"
++#include "CREATE.h"
++
++using namespace MbD;
++
++std::shared_ptr<ASMTPointOnCurveJoint> MbD::ASMTPointOnCurveJoint::With()
++{
++	auto asmt = std::make_shared<ASMTPointOnCurveJoint>();
++	asmt->initialize();
++	return asmt;
++}
++
++std::shared_ptr<ItemIJ> MbD::ASMTPointOnCurveJoint::mbdClassNew()
++{
++	auto joint = CREATE<PointOnCurveJoint>::With();
++	joint->curve = curve;
++	return joint;
++}
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/ASMTPointOnCurveJoint.h b/src/3rdParty/OndselSolver/OndselSolver/ASMTPointOnCurveJoint.h
+new file mode 100644
+index 0000000..70eb31c
+--- /dev/null
++++ b/src/3rdParty/OndselSolver/OndselSolver/ASMTPointOnCurveJoint.h
+@@ -0,0 +1,25 @@
++/***************************************************************************
++ *   Copyright (c) 2023 Ondsel, Inc.                                       *
++ *                                                                         *
++ *   This file is part of OndselSolver.                                    *
++ *                                                                         *
++ *   See LICENSE file for details about copyright.                         *
++ ***************************************************************************/
++
++#pragma once
++
++#include "ASMTJoint.h"
++#include "DispCompAlongCurveIeqcJeqc.h"
++
++namespace MbD {
++    // Point (origin of marker J) on a curve fixed in marker I; the curve is set by the caller as a
++    // foot point function in the coordinates of marker I (not stored in .asmt files).
++    class ASMTPointOnCurveJoint : public ASMTJoint
++    {
++    public:
++        static std::shared_ptr<ASMTPointOnCurveJoint> With();
++        std::shared_ptr<ItemIJ> mbdClassNew() override;
++
++        CurveFootFunction curve;
++    };
++}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/AnyPosICNewtonRaphson.cpp b/src/3rdParty/OndselSolver/OndselSolver/AnyPosICNewtonRaphson.cpp
 index fb9b2e1..8cb7bf8 100644
 --- a/src/3rdParty/OndselSolver/OndselSolver/AnyPosICNewtonRaphson.cpp
@@ -546,7 +610,7 @@ index 0000000..cac0dd7
 +    };
 +}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/CMakeLists.txt b/src/3rdParty/OndselSolver/OndselSolver/CMakeLists.txt
-index 9fc1e82..2412f8a 100644
+index 9fc1e82..54c8453 100644
 --- a/src/3rdParty/OndselSolver/OndselSolver/CMakeLists.txt
 +++ b/src/3rdParty/OndselSolver/OndselSolver/CMakeLists.txt
 @@ -19,6 +19,10 @@ set(ONDSELSOLVER_SRC
@@ -560,7 +624,32 @@ index 9fc1e82..2412f8a 100644
          AngleZIecJec.cpp
          AngleZIeqcJec.cpp
          AngleZIeqcJeqc.cpp
-@@ -334,6 +338,10 @@ set(ONDSELSOLVER_HEADERS
+@@ -63,6 +67,7 @@ set(ONDSELSOLVER_SRC
+         ASMTPerpendicularJoint.cpp
+         ASMTPlanarJoint.cpp
+         ASMTPointInLineJoint.cpp
++        ASMTPointOnCurveJoint.cpp
+         ASMTPointInPlaneJoint.cpp
+         ASMTPrincipalMassMarker.cpp
+         ASMTRackPinionJoint.cpp
+@@ -132,6 +137,7 @@ set(ONDSELSOLVER_SRC
+         DispCompIeqcJecO.cpp
+         DispCompIeqcJeqcIe.cpp
+         DispCompIeqcJeqcKeqc.cpp
++        DispCompAlongCurveIeqcJeqc.cpp
+         DispCompIeqcJeqcKeqct.cpp
+         DispCompIeqcJeqcO.cpp
+         DispCompIeqctJeqcIe.cpp
+@@ -249,6 +255,8 @@ set(ONDSELSOLVER_SRC
+         PiecewiseFunction.cpp
+         PlanarJoint.cpp
+         PointInLineJoint.cpp
++        PointOnCurveJoint.cpp
++        PointOnCurveConstraintIqcJqc.cpp
+         PointInPlaneJoint.cpp
+         Polynomial.cpp
+         PosICDragLimitNewtonRaphson.cpp
+@@ -334,6 +342,10 @@ set(ONDSELSOLVER_HEADERS
          AngleZConstraintIJ.h
          AngleZConstraintIqcJc.h
          AngleZConstraintIqcJqc.h
@@ -571,6 +660,31 @@ index 9fc1e82..2412f8a 100644
          AngleZIecJec.h
          AngleZIeqcJec.h
          AngleZIeqcJeqc.h
+@@ -376,6 +388,7 @@ set(ONDSELSOLVER_HEADERS
+         ASMTPerpendicularJoint.h
+         ASMTPlanarJoint.h
+         ASMTPointInLineJoint.h
++        ASMTPointOnCurveJoint.h
+         ASMTPointInPlaneJoint.h
+         ASMTPrincipalMassMarker.h
+         ASMTRackPinionJoint.h
+@@ -449,6 +462,7 @@ set(ONDSELSOLVER_HEADERS
+         DispCompIeqcJecO.h
+         DispCompIeqcJeqcIe.h
+         DispCompIeqcJeqcKeqc.h
++        DispCompAlongCurveIeqcJeqc.h
+         DispCompIeqcJeqcKeqct.h
+         DispCompIeqcJeqcO.h
+         DispCompIeqctJeqcIe.h
+@@ -566,6 +580,8 @@ set(ONDSELSOLVER_HEADERS
+         PerpendicularJoint.h
+         PlanarJoint.h
+         PointInLineJoint.h
++        PointOnCurveJoint.h
++        PointOnCurveConstraintIqcJqc.h
+         PointInPlaneJoint.h
+         PosICDragLimitNewtonRaphson.h
+         PosICDragNewtonRaphson.h
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/CylindricalJoint.cpp b/src/3rdParty/OndselSolver/OndselSolver/CylindricalJoint.cpp
 index 08ae509..e44c407 100644
 --- a/src/3rdParty/OndselSolver/OndselSolver/CylindricalJoint.cpp
@@ -607,6 +721,149 @@ index 08ae509..e44c407 100644
  		this->root()->hasChanged = true;
  	}
  	else {
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/DispCompAlongCurveIeqcJeqc.cpp b/src/3rdParty/OndselSolver/OndselSolver/DispCompAlongCurveIeqcJeqc.cpp
+new file mode 100644
+index 0000000..4f3976d
+--- /dev/null
++++ b/src/3rdParty/OndselSolver/OndselSolver/DispCompAlongCurveIeqcJeqc.cpp
+@@ -0,0 +1,90 @@
++/***************************************************************************
++ *   Copyright (c) 2023 Ondsel, Inc.                                       *
++ *                                                                         *
++ *   This file is part of OndselSolver.                                    *
++ *                                                                         *
++ *   See LICENSE file for details about copyright.                         *
++ ***************************************************************************/
++
++#include <cmath>
++
++#include "DispCompAlongCurveIeqcJeqc.h"
++#include "CREATE.h"
++
++using namespace MbD;
++
++MbD::DispCompAlongCurveIeqcJeqc::DispCompAlongCurveIeqcJeqc(EndFrmsptr frmi, EndFrmsptr frmj, size_t normal, CurveFootFunction curveFoot)
++	: DispCompIeqcJeqcKeqc(frmi, frmj, frmi, 0), normalIndex(normal), curve(std::move(curveFoot))
++{
++	compY = CREATE<DispCompIeqcJeqcKeqc>::With(frmi, frmj, frmi, 1);
++	compZ = CREATE<DispCompIeqcJeqcKeqc>::With(frmi, frmj, frmi, 2);
++}
++
++void MbD::DispCompAlongCurveIeqcJeqc::initializeGlobally()
++{
++	DispCompIeqcJeqcKeqc::initializeGlobally();
++	compY->initializeGlobally();
++	compZ->initializeGlobally();
++}
++
++void MbD::DispCompAlongCurveIeqcJeqc::initializeLocally()
++{
++	DispCompIeqcJeqcKeqc::initializeLocally();
++	compY->initializeLocally();
++	compZ->initializeLocally();
++}
++
++namespace {
++	FRowDsptr combine(const std::array<double, 3>& n, const FRowDsptr& a, const FRowDsptr& b, const FRowDsptr& c)
++	{
++		return a->times(n[0])->plusFullRow(b->times(n[1]))->plusFullRow(c->times(n[2]));
++	}
++
++	FMatDsptr combine(const std::array<double, 3>& n, const FMatDsptr& a, const FMatDsptr& b, const FMatDsptr& c)
++	{
++		return a->times(n[0])->plusFullMatrix(b->times(n[1]))->plusFullMatrix(c->times(n[2]));
++	}
++}
++
++void MbD::DispCompAlongCurveIeqcJeqc::calcPostDynCorrectorIteration()
++{
++	DispCompIeqcJeqcKeqc::calcPostDynCorrectorIteration();  // x component into the own members
++	compY->calcPostDynCorrectorIteration();
++	compZ->calcPostDynCorrectorIteration();
++
++	const std::array<double, 3> p { riIeJeKe, compY->riIeJeKe, compZ->riIeJeKe };
++	std::array<double, 3> c { p }, t { 1.0, 0.0, 0.0 };
++	if (curve) {
++		curve(p, c, t);
++	}
++	// Normals: n0 = t x e (e the axis least aligned with t), n1 = t x n0.
++	size_t e = 0;
++	for (size_t i = 1; i < 3; i++) {
++		if (std::abs(t[i]) < std::abs(t[e])) {
++			e = i;
++		}
++	}
++	std::array<double, 3> ev { 0.0, 0.0, 0.0 };
++	ev[e] = 1.0;
++	std::array<double, 3> n0 { t[1] * ev[2] - t[2] * ev[1], t[2] * ev[0] - t[0] * ev[2], t[0] * ev[1] - t[1] * ev[0] };
++	const double len = std::sqrt(n0[0] * n0[0] + n0[1] * n0[1] + n0[2] * n0[2]);
++	for (auto& v : n0) {
++		v /= len;
++	}
++	const std::array<double, 3> n1 { t[1] * n0[2] - t[2] * n0[1], t[2] * n0[0] - t[0] * n0[2], t[0] * n0[1] - t[1] * n0[0] };
++	const auto& n = normalIndex == 0 ? n0 : n1;
++
++	riIeJeKe = n[0] * p[0] + n[1] * p[1] + n[2] * p[2] - (n[0] * c[0] + n[1] * c[1] + n[2] * c[2]);
++	priIeJeKepEK = combine(n, priIeJeKepEK, compY->priIeJeKepEK, compZ->priIeJeKepEK);
++	ppriIeJeKepEKpEK = combine(n, ppriIeJeKepEKpEK, compY->ppriIeJeKepEKpEK, compZ->ppriIeJeKepEKpEK);
++	priIeJeKepXI = combine(n, priIeJeKepXI, compY->priIeJeKepXI, compZ->priIeJeKepXI);
++	priIeJeKepEI = combine(n, priIeJeKepEI, compY->priIeJeKepEI, compZ->priIeJeKepEI);
++	ppriIeJeKepXIpEK = combine(n, ppriIeJeKepXIpEK, compY->ppriIeJeKepXIpEK, compZ->ppriIeJeKepXIpEK);
++	ppriIeJeKepEIpEI = combine(n, ppriIeJeKepEIpEI, compY->ppriIeJeKepEIpEI, compZ->ppriIeJeKepEIpEI);
++	ppriIeJeKepEIpEK = combine(n, ppriIeJeKepEIpEK, compY->ppriIeJeKepEIpEK, compZ->ppriIeJeKepEIpEK);
++	priIeJeKepXJ = combine(n, priIeJeKepXJ, compY->priIeJeKepXJ, compZ->priIeJeKepXJ);
++	priIeJeKepEJ = combine(n, priIeJeKepEJ, compY->priIeJeKepEJ, compZ->priIeJeKepEJ);
++	ppriIeJeKepXJpEK = combine(n, ppriIeJeKepXJpEK, compY->ppriIeJeKepXJpEK, compZ->ppriIeJeKepXJpEK);
++	ppriIeJeKepEJpEJ = combine(n, ppriIeJeKepEJpEJ, compY->ppriIeJeKepEJpEJ, compZ->ppriIeJeKepEJpEJ);
++	ppriIeJeKepEJpEK = combine(n, ppriIeJeKepEJpEK, compY->ppriIeJeKepEJpEK, compZ->ppriIeJeKepEJpEK);
++}
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/DispCompAlongCurveIeqcJeqc.h b/src/3rdParty/OndselSolver/OndselSolver/DispCompAlongCurveIeqcJeqc.h
+new file mode 100644
+index 0000000..c49b6b1
+--- /dev/null
++++ b/src/3rdParty/OndselSolver/OndselSolver/DispCompAlongCurveIeqcJeqc.h
+@@ -0,0 +1,41 @@
++/***************************************************************************
++ *   Copyright (c) 2023 Ondsel, Inc.                                       *
++ *                                                                         *
++ *   This file is part of OndselSolver.                                    *
++ *                                                                         *
++ *   See LICENSE file for details about copyright.                         *
++ ***************************************************************************/
++
++#pragma once
++
++#include <array>
++#include <functional>
++
++#include "DispCompIeqcJeqcKeqc.h"
++
++namespace MbD {
++    // Foot point of a curve that is fixed in frame I: for a point p (coordinates in I) return the
++    // closest curve point c and the unit tangent t there (also in I).
++    using CurveFootFunction = std::function<void(const std::array<double, 3>& p,
++        std::array<double, 3>& c, std::array<double, 3>& t)>;
++
++    // Distance of the origin of J from a curve fixed in I, along normal 'normalIndex' (0 or 1) of the
++    // curve at the foot point: n.(A_I^T (rJ - rI)) - n.c. Built as a linear combination of the three
++    // axis components (DispCompIeqcJeqcKeqc with K = I, axes x, y, z); n and c are taken as fixed
++    // within an iteration (foot point method - first derivatives exact on the curve, curvature
++    // terms of the second derivatives left out).
++    class DispCompAlongCurveIeqcJeqc : public DispCompIeqcJeqcKeqc
++    {
++    public:
++        DispCompAlongCurveIeqcJeqc(EndFrmsptr frmi, EndFrmsptr frmj, size_t normalIndex, CurveFootFunction curve);
++
++        void calcPostDynCorrectorIteration() override;
++        void initializeGlobally() override;
++        void initializeLocally() override;
++
++    private:
++        size_t normalIndex;
++        CurveFootFunction curve;
++        std::shared_ptr<DispCompIeqcJeqcKeqc> compY, compZ;
++    };
++}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/DispCompIecJecKeqc.cpp b/src/3rdParty/OndselSolver/OndselSolver/DispCompIecJecKeqc.cpp
 index a365064..b2848c0 100644
 --- a/src/3rdParty/OndselSolver/OndselSolver/DispCompIecJecKeqc.cpp
@@ -785,6 +1042,154 @@ index f818820..e70221f 100644
  		this->root()->hasChanged = true;
  	}
  	else {
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/PointOnCurveConstraintIqcJqc.cpp b/src/3rdParty/OndselSolver/OndselSolver/PointOnCurveConstraintIqcJqc.cpp
+new file mode 100644
+index 0000000..735e068
+--- /dev/null
++++ b/src/3rdParty/OndselSolver/OndselSolver/PointOnCurveConstraintIqcJqc.cpp
+@@ -0,0 +1,36 @@
++/***************************************************************************
++ *   Copyright (c) 2023 Ondsel, Inc.                                       *
++ *                                                                         *
++ *   This file is part of OndselSolver.                                    *
++ *                                                                         *
++ *   See LICENSE file for details about copyright.                         *
++ ***************************************************************************/
++
++#include "PointOnCurveConstraintIqcJqc.h"
++
++using namespace MbD;
++
++MbD::PointOnCurveConstraintIqcJqc::PointOnCurveConstraintIqcJqc(EndFrmsptr frmi, EndFrmsptr frmj, size_t normal, CurveFootFunction curveFoot)
++	: TranslationConstraintIqcJqc(frmi, frmj, 0), normalIndex(normal), curve(std::move(curveFoot))
++{
++}
++
++std::shared_ptr<PointOnCurveConstraintIqcJqc> MbD::PointOnCurveConstraintIqcJqc::With(EndFrmsptr frmi, EndFrmsptr frmj, size_t normal, CurveFootFunction curveFoot)
++{
++	auto con = std::make_shared<PointOnCurveConstraintIqcJqc>(frmi, frmj, normal, std::move(curveFoot));
++	con->initialize();
++	con->setConstant(0.0);
++	return con;
++}
++
++void MbD::PointOnCurveConstraintIqcJqc::initriIeJeIe()
++{
++	auto disp = std::make_shared<DispCompAlongCurveIeqcJeqc>(frmI, frmJ, normalIndex, curve);
++	disp->initialize();
++	riIeJeIe = disp;
++}
++
++std::string MbD::PointOnCurveConstraintIqcJqc::constraintSpec()
++{
++	return normalIndex == 0 ? "PointOnCurveConstraintN0" : "PointOnCurveConstraintN1";
++}
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/PointOnCurveConstraintIqcJqc.h b/src/3rdParty/OndselSolver/OndselSolver/PointOnCurveConstraintIqcJqc.h
+new file mode 100644
+index 0000000..fa9c386
+--- /dev/null
++++ b/src/3rdParty/OndselSolver/OndselSolver/PointOnCurveConstraintIqcJqc.h
+@@ -0,0 +1,28 @@
++/***************************************************************************
++ *   Copyright (c) 2023 Ondsel, Inc.                                       *
++ *                                                                         *
++ *   This file is part of OndselSolver.                                    *
++ *                                                                         *
++ *   See LICENSE file for details about copyright.                         *
++ ***************************************************************************/
++
++#pragma once
++
++#include "TranslationConstraintIqcJqc.h"
++#include "DispCompAlongCurveIeqcJeqc.h"
++
++namespace MbD {
++    // Origin of J on a curve fixed in I, one of the two equations (normal 0 or 1 at the foot point).
++    class PointOnCurveConstraintIqcJqc : public TranslationConstraintIqcJqc
++    {
++    public:
++        PointOnCurveConstraintIqcJqc(EndFrmsptr frmi, EndFrmsptr frmj, size_t normalIndex, CurveFootFunction curve);
++        static std::shared_ptr<PointOnCurveConstraintIqcJqc> With(EndFrmsptr frmi, EndFrmsptr frmj, size_t normalIndex, CurveFootFunction curve);
++        void initriIeJeIe() override;
++        std::string constraintSpec() override;
++
++    private:
++        size_t normalIndex;
++        CurveFootFunction curve;
++    };
++}
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/PointOnCurveJoint.cpp b/src/3rdParty/OndselSolver/OndselSolver/PointOnCurveJoint.cpp
+new file mode 100644
+index 0000000..3f30550
+--- /dev/null
++++ b/src/3rdParty/OndselSolver/OndselSolver/PointOnCurveJoint.cpp
+@@ -0,0 +1,34 @@
++/***************************************************************************
++ *   Copyright (c) 2023 Ondsel, Inc.                                       *
++ *                                                                         *
++ *   This file is part of OndselSolver.                                    *
++ *                                                                         *
++ *   See LICENSE file for details about copyright.                         *
++ ***************************************************************************/
++
++#include "PointOnCurveJoint.h"
++#include "PointOnCurveConstraintIqcJqc.h"
++#include "System.h"
++
++using namespace MbD;
++
++MbD::PointOnCurveJoint::PointOnCurveJoint()
++{
++}
++
++MbD::PointOnCurveJoint::PointOnCurveJoint(const std::string& str) : Joint(str)
++{
++}
++
++void MbD::PointOnCurveJoint::initializeGlobally()
++{
++	if (constraints->empty())
++	{
++		addConstraint(PointOnCurveConstraintIqcJqc::With(frmI, frmJ, 0, curve));
++		addConstraint(PointOnCurveConstraintIqcJqc::With(frmI, frmJ, 1, curve));
++		this->root()->hasChanged = true;
++	}
++	else {
++		Joint::initializeGlobally();
++	}
++}
+diff --git a/src/3rdParty/OndselSolver/OndselSolver/PointOnCurveJoint.h b/src/3rdParty/OndselSolver/OndselSolver/PointOnCurveJoint.h
+new file mode 100644
+index 0000000..1ab2dd3
+--- /dev/null
++++ b/src/3rdParty/OndselSolver/OndselSolver/PointOnCurveJoint.h
+@@ -0,0 +1,26 @@
++/***************************************************************************
++ *   Copyright (c) 2023 Ondsel, Inc.                                       *
++ *                                                                         *
++ *   This file is part of OndselSolver.                                    *
++ *                                                                         *
++ *   See LICENSE file for details about copyright.                         *
++ ***************************************************************************/
++
++#pragma once
++
++#include "Joint.h"
++#include "DispCompAlongCurveIeqcJeqc.h"
++
++namespace MbD {
++    // Origin of marker J moves on a curve fixed in marker I (any orientation): two equations,
++    // 4 degrees of freedom left. The curve is given as a foot point function (CurveFootFunction).
++    class PointOnCurveJoint : public Joint
++    {
++    public:
++        PointOnCurveJoint();
++        PointOnCurveJoint(const std::string& str);
++        void initializeGlobally() override;
++
++        CurveFootFunction curve;
++    };
++}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/PosICNewtonRaphson.cpp b/src/3rdParty/OndselSolver/OndselSolver/PosICNewtonRaphson.cpp
 index 41963a1..55a7a2e 100644
 --- a/src/3rdParty/OndselSolver/OndselSolver/PosICNewtonRaphson.cpp
@@ -1188,20 +1593,21 @@ index 3c6a44d..c715762 100644
  	}
  	else {
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/System.cpp b/src/3rdParty/OndselSolver/OndselSolver/System.cpp
-index 9e402dc..76dba74 100644
+index 9e402dc..3a25829 100644
 --- a/src/3rdParty/OndselSolver/OndselSolver/System.cpp
 +++ b/src/3rdParty/OndselSolver/OndselSolver/System.cpp
-@@ -17,6 +17,9 @@
+@@ -17,6 +17,10 @@
  #include "CREATE.h"
  #include "ExternalSystem.h"
  #include "PrescribedMotion.h"
 +#include "RedundantConstraint.h"
 +#include "DirectionCosineConstraintIJ.h"
++#include "AngleZConstraintIJ.h"
 +#include <cmath>
  
  using namespace MbD;
  
-@@ -122,6 +125,7 @@ void MbD::System::runPreDrag(std::shared_ptr<System> self)
+@@ -122,6 +126,7 @@ void MbD::System::runPreDrag(std::shared_ptr<System> self)
  		if (!hasChanged) break;
  	}
  	partsJointsMotionsLimitsForcesTorquesDo([](std::shared_ptr<Item> item) { item->postInput(); });
@@ -1209,7 +1615,7 @@ index 9e402dc..76dba74 100644
  	systemSolver->runPreDrag();
  	externalSystem->updateFromMbD();
  }
-@@ -275,3 +279,50 @@ void MbD::System::deactivateLimits()
+@@ -275,3 +280,53 @@ void MbD::System::deactivateLimits()
  {
  	std::for_each(limits->cbegin(), limits->cend(), [](auto& limit) { limit->deactivate(); });
  }
@@ -1254,14 +1660,17 @@ index 9e402dc..76dba74 100644
 +			inner->prePosIC();
 +			inner->postPosICIteration();
 +			// classname() ist unter GCC ein verstuemmelter Typname - Art ueber den Typ bestimmen.
-+			const bool isAngle = std::dynamic_pointer_cast<DirectionCosineConstraintIJ>(inner) != nullptr;
-+			states.push_back({joint->name, i, inner->aG, isAngle});
++			// Winkelbedingungen der eindeutigen Gelenke (AngleZ*, AxisAngle*) liefern den Winkel selbst in
++			// rad - ohne diese Unterscheidung liefen sie gegen die Laengentoleranz (0,01 "mm" = 0,57 Grad).
++			const bool isRadians = std::dynamic_pointer_cast<AngleZConstraintIJ>(inner) != nullptr;
++			const bool isAngle = isRadians || std::dynamic_pointer_cast<DirectionCosineConstraintIJ>(inner) != nullptr;
++			states.push_back({joint->name, i, inner->aG, isAngle, isRadians});
 +		}
 +	}
 +	return states;
 +}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/System.h b/src/3rdParty/OndselSolver/OndselSolver/System.h
-index 2f775b7..2b085b4 100644
+index 2f775b7..f789da1 100644
 --- a/src/3rdParty/OndselSolver/OndselSolver/System.h
 +++ b/src/3rdParty/OndselSolver/OndselSolver/System.h
 @@ -18,7 +18,11 @@
@@ -1276,7 +1685,7 @@ index 2f775b7..2b085b4 100644
  
  #include "Item.h"
  #include "LimitIJ.h"
-@@ -75,6 +79,20 @@ namespace MbD {
+@@ -75,6 +79,21 @@ namespace MbD {
  		void outputFor(AnalysisType type);
  		bool limitsSatisfied();
  		void deactivateLimits();
@@ -1289,15 +1698,16 @@ index 2f775b7..2b085b4 100644
 +		{
 +			std::string jointName;
 +			size_t index;
-+			double value;    // Restwert der Bedingung (mm bzw. Kosinus)
++			double value;    // Restwert der Bedingung (mm, Kosinus bzw. Radiant)
 +			bool isAngle;    // DirectionCosine*: Abweichung = asin(|value|)
++			bool isRadians = false;  // Winkelbedingung (AngleZ*/AxisAngle*): value ist der Winkel in rad
 +		};
 +		// Alle derzeit herausgenommenen Bedingungen mit ihrem Restwert am aktuellen Stand.
 +		std::vector<RedundantConstraintState> redundantConstraintStates();
  
  		std::shared_ptr<ExternalSystem> externalSystem;
  		std::shared_ptr<std::vector<std::shared_ptr<Part>>> parts;
-@@ -83,6 +101,19 @@ namespace MbD {
+@@ -83,6 +102,19 @@ namespace MbD {
  		std::shared_ptr<std::vector<std::shared_ptr<ForceTorqueItem>>> forcesTorques;
  		bool hasChanged = false;
  		std::shared_ptr<SystemSolver> systemSolver;

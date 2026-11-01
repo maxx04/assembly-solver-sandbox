@@ -165,6 +165,9 @@
 # Seit 2026-10-31: ParallelAxesJoint eindeutig (Kippwinkel wie RevoluteJoint, Regel C8).
 # Seit 2026-11-01: zeitabhaengige Winkelbausteine AxisAngleIeqctJeqc/AxisAngleConstraintIqctJqc fuer
 # Motion-getriebene Gelenke (statt Rueckfall auf Richtungskosinusse).
+# Seit 2026-11-01: Punkt-auf-Kurve (DispCompAlongCurveIeqcJeqc, PointOnCurveConstraintIqcJqc,
+# PointOnCurveJoint, ASMTPointOnCurveJoint); redundantConstraintStates() meldet isRadians fuer
+# AngleZ*/AxisAngle*-Bedingungen.
 2026.10.11-ondselsolver-redundancy-groups.patch
 
 # Build-Baum-Patches aus dem Dev-Build (/home/maxx/freecad/freecad-source), seit 2026-10-27 aktiv

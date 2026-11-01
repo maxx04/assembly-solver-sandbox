@@ -903,9 +903,10 @@ void AssemblyObject::updateSolveStatus()
     std::set<std::pair<std::string, std::size_t>> conflictsNow;
     for (const auto& st : mbdAssembly->mbdSystem->redundantConstraintStates()) {
         removedNow.insert({st.jointName, st.index});
-        const double dev = st.isAngle
-            ? Base::toDegrees(std::asin(std::min(1.0, std::abs(st.value))))
-            : std::abs(st.value);
+        // Laenge in mm; Richtungskosinus -> asin; Winkelbedingung (AngleZ/AxisAngle) schon in rad.
+        const double dev = !st.isAngle ? std::abs(st.value)
+            : st.isRadians             ? Base::toDegrees(std::abs(st.value))
+                                       : Base::toDegrees(std::asin(std::min(1.0, std::abs(st.value))));
         const bool ok = dev <= (st.isAngle ? tolAngle : tolLength);
         std::string solverName = st.jointName;
         if (solverName.rfind(solverPathPrefix, 0) == 0) {
