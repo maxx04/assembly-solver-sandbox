@@ -260,9 +260,12 @@ Statt Bündeln (§2.1c) wird die Mehrdeutigkeit dort beseitigt, wo sie entsteht:
     statt drei Richtungskosinusse (vier Lösungen, #32477). Einzige Lösung: deckungsgleich.
   - `RevoluteJoint`, `CylindricalJoint`: Kippwinkel von zJ um X und um Y von I = 0 statt
     `zI·xJ = zI·yJ = 0` (erlaubte auch zJ = -zI). Drehung um Z bleibt frei.
-  - Treibt eine Motion das Gelenk (Bezugssystem I zeitabhängig, `EndFrameqct`), bleiben die
-    alten Bedingungen: für die Winkel gibt es keine zeitabhängige Variante, die Simulation startet
-    aus der gelösten Lage.
+  - Treibt eine Motion das Gelenk (Bezugssystem I zeitabhängig, `EndFrameqct`), nehmen die
+    Gelenke seit 2026-11-01 dieselben Winkel in zeitabhängiger Form: `AxisAngleIeqctJeqc` /
+    `AxisAngleConstraintIqctJqc` leiten die Zeitableitungen des atan2-Winkels aus denen der
+    Richtungskosinusse (`DirectionCosineIeqctJeqc`) ab, wie bei den Ableitungen nach E
+    (Geschwindigkeits- und Beschleunigungsterme wie `DirectionCosineConstraintIqctJqc`). Vorher
+    fielen sie auf die alten, mehrdeutigen Richtungskosinusse zurück.
 - **AssemblyObject:** FreeCADs gewollte Varianten (deckungsgleich / „umgekehrt“ = 180 Grad um X)
   werden beim Modellaufbau in den Marker J eingerechnet (`jointVariant()`): Fixed/Slider nahe
   einer der vier früheren Lösungen die aktuelle (Slider: nur die Drehung), Dreh/Zylinder das
