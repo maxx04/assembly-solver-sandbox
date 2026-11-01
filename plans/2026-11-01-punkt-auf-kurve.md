@@ -54,7 +54,10 @@ Eine Bahn besteht oft aus mehreren Kanten (Gerade – Bogen – Gerade, Skizzen-
    - Scharfe Ecken: Tangente springt; der Fußpunkt kann an der Ecke hängen bleiben oder springen.
      Für echte Mechanismen sind solche Bahnen ohnehin verrundet - Hinweis an den Nutzer, ggf.
      Warnung bei Knick.
-   - Offene Kette: an den Enden bleibt der Punkt am Endpunkt stehen (natürlicher Anschlag).
+   - Offene Kette/Kurve: Über ein Ende hinaus ist der nächste Kurvenpunkt der Endpunkt; die zwei
+     Gleichungen halten den Punkt dann auf der **Verlängerung der Tangente** fest, nicht am Ende
+     (kein Anschlag). Ein echter Anschlag bräuchte eine Grenze auf dem Kurvenparameter (wie die
+     Längengrenze beim Slider) - offen.
 2. **Umwandeln in eine Spline (Alternative):** FreeCAD kann eine Kette zu einer Kurve machen, z.B.
    Draft „Wire to B-spline“ (interpoliert durch die Ecken, verändert die Form leicht) oder die
    Curves-Werkbank „Join curves“ (verbindet Kanten zu einer B-Spline). Dann reicht eine Kante.
@@ -63,9 +66,25 @@ Eine Bahn besteht oft aus mehreren Kanten (Gerade – Bogen – Gerade, Skizzen-
 Empfehlung: 1 umsetzen (der Konstrukteur wählt einfach eine Kante der Bahn), 2 als Ausweg
 dokumentieren.
 
+## FreeCAD-Seite umgesetzt (2026-11-01)
+
+- `AssemblyObject::makeMbdJointDistance()`, Fall `PointCurve` mit Abstand 0: `makeCurveFootFunction()`
+  holt die Kante in den eigenen Koordinaten des referenzierten Objekts (dieselben, auf die sich
+  Placement1/2 beziehen) und rechnet in das System des Markers um. Kette: liegt die Kante in genau
+  einem Draht (Skizzen-Kontur, Part::Wire), gilt der ganze Draht; bei Körpern (jede Kante in zwei
+  Flächenrändern) nur die Kante. Fußpunkt per `Extrema_ExtPC` (Toleranz 1e-10) plus Kantenenden.
+- Regel: gewählt werden muss eine **gekrümmte** Kante der Kette. Ist die gewählte Kante eine Gerade,
+  bleibt es „Punkt auf (unendlicher) Gerade“ wie bisher (`PointLine`) - bestehende Modelle mit
+  Punkt–Gerade in Rechteck-Skizzen ändern sich so nicht. Offen: auch bei gewählter Geraden die
+  Kette nehmen, wenn der Draht gekrümmte Kanten hat (Verhaltensänderung, mit Nutzer klären).
+- Test `test_point_on_curve_flat`: 3D-B-Spline, schräger Kreisbogen, Kette Gerade–Bogen–Gerade
+  (Start an jeder der drei Kanten), Bahn verschoben/gedreht, Placement1 schief - Punkt ≤ 2e-14 mm
+  auf der Bahn. Weekly-Vanilla: 7-40 mm daneben (FAIL).
+- Redundanzprüfung (Regel C7): die zwei Gleichungen sind Längen in mm, gegen die Längentoleranz.
+
 ## Nächste Schritte
 
-1. FreeCAD-Seite (`AssemblyObject::makeMbdJointDistance`, Fall `PointCurve`, Abstand 0):
+1. (erledigt, siehe oben) FreeCAD-Seite (`AssemblyObject::makeMbdJointDistance`, Fall `PointCurve`, Abstand 0):
    Kante bzw. Kette aus der Referenz holen (in den Koordinaten des Objekts), in das System von
    Marker I umrechnen, Fußpunkt-Funktion mit OCC bauen, `ASMTPointOnCurveJoint` statt
    `ASMTPointInPlaneJoint`.

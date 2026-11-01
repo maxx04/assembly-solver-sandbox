@@ -50,6 +50,12 @@
 #include <Base/Sequencer.h>
 
 #include <Mod/Part/App/TopoShape.h>
+#include <Mod/Part/App/PartFeature.h>
+#include <BRepAdaptor_Curve.hxx>
+#include <Extrema_ExtPC.hxx>
+#include <TopExp_Explorer.hxx>
+#include <TopoDS.hxx>
+#include <TopoDS_Edge.hxx>
 #include <Mod/Part/App/AttachExtension.h>
 
 #include <OndselSolver/CREATE.h>
@@ -69,6 +75,7 @@
 #include <OndselSolver/ASMTParallelAxesJoint.h>
 #include <OndselSolver/ASMTPerpendicularJoint.h>
 #include <OndselSolver/ASMTPointInPlaneJoint.h>
+#include <OndselSolver/ASMTPointOnCurveJoint.h>
 #include <OndselSolver/ASMTPointInLineJoint.h>
 #include <OndselSolver/ASMTLineInPlaneJoint.h>
 #include <OndselSolver/ASMTPlanarJoint.h>
@@ -3908,6 +3915,97 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointOfType(
     }
 }
 
+// FCPROJECT-PATCH (2026-11-01, plans/2026-11-01-punkt-auf-kurve.md): Fusspunkt-Funktion fuer das
+// Abstand-Gelenk Punkt-Kurve (Abstand 0). Die Kante kommt in den eigenen Koordinaten des
+// referenzierten Objekts - in denselben, auf die sich Placement1/2 beziehen -, die Funktion rechnet in
+// das System des Markers (= Placement der Referenz) um. Liegt die Kante in genau einem Draht (z.B.
+// Kontur einer Skizze), gilt der ganze Draht als Bahn (Kurven-/Linienkette); bei Koerpern gehoert
+// jede Kante zu zwei Flaechenraendern, dort bleibt es bei der Kante. Fusspunkt per Extrema_ExtPC
+// (Toleranz 1e-10, weit unter der Solver-Toleranz) plus Kantenenden.
+static MbD::CurveFootFunction makeCurveFootFunction(
+    App::DocumentObject* joint,
+    const char* refName,
+    const char* plcName
+)
+{
+    auto* prop = joint->getPropertyByName<App::PropertyXLinkSub>(refName);
+    App::DocumentObject* obj = getObjFromRef(prop);
+    const std::string elt = getElementFromProp(joint, refName);
+    if (!obj || elt.empty()) {
+        return {};
+    }
+    const auto shape = PartApp::Feature::getTopoShape(obj, PartApp::ShapeOption::ResolveLink);
+    if (shape.isNull()) {
+        return {};
+    }
+    TopoDS_Shape edgeShape;
+    try {
+        edgeShape = shape.getSubShape(elt.c_str(), true);
+    }
+    catch (...) {
+        return {};
+    }
+    if (edgeShape.IsNull() || edgeShape.ShapeType() != TopAbs_EDGE) {
+        return {};
+    }
+    TopoDS_Shape path = edgeShape;
+    int wiresWithEdge = 0;
+    for (TopExp_Explorer w(shape.getShape(), TopAbs_WIRE); w.More(); w.Next()) {
+        for (TopExp_Explorer e(w.Current(), TopAbs_EDGE); e.More(); e.Next()) {
+            if (e.Current().IsSame(edgeShape)) {
+                ++wiresWithEdge;
+                path = w.Current();
+                break;
+            }
+        }
+    }
+    if (wiresWithEdge != 1) {
+        path = edgeShape;
+    }
+    std::vector<TopoDS_Edge> edges;
+    for (TopExp_Explorer e(path, TopAbs_EDGE); e.More(); e.Next()) {
+        edges.push_back(TopoDS::Edge(e.Current()));
+    }
+    const Base::Placement jcs = App::GeoFeature::getPlacementFromProp(joint, plcName);
+    const Base::Placement jcsInv = jcs.inverse();
+    return [edges, jcs, jcsInv](const std::array<double, 3>& p, std::array<double, 3>& c, std::array<double, 3>& t) {
+        Base::Vector3d pObj;
+        jcs.multVec(Base::Vector3d(p[0], p[1], p[2]), pObj);
+        const gp_Pnt point(pObj.x, pObj.y, pObj.z);
+        double best = std::numeric_limits<double>::max();
+        gp_Pnt bestPoint(pObj.x, pObj.y, pObj.z);
+        gp_Vec bestTangent(1.0, 0.0, 0.0);
+        for (const auto& edge : edges) {
+            BRepAdaptor_Curve curve(edge);
+            auto consider = [&](double u) {
+                gp_Pnt q;
+                gp_Vec d;
+                curve.D1(u, q, d);
+                const double dist = q.Distance(point);
+                if (dist < best && d.Magnitude() > gp::Resolution()) {
+                    best = dist;
+                    bestPoint = q;
+                    bestTangent = d;
+                }
+            };
+            consider(curve.FirstParameter());
+            consider(curve.LastParameter());
+            Extrema_ExtPC extrema(point, curve, curve.FirstParameter(), curve.LastParameter(), 1e-10);
+            if (extrema.IsDone()) {
+                for (int i = 1; i <= extrema.NbExt(); ++i) {
+                    consider(extrema.Point(i).Parameter());
+                }
+            }
+        }
+        bestTangent.Normalize();
+        Base::Vector3d footLocal, tangentLocal;
+        jcsInv.multVec(Base::Vector3d(bestPoint.X(), bestPoint.Y(), bestPoint.Z()), footLocal);
+        jcsInv.getRotation().multVec(Base::Vector3d(bestTangent.X(), bestTangent.Y(), bestTangent.Z()), tangentLocal);
+        c = {footLocal.x, footLocal.y, footLocal.z};
+        t = {tangentLocal.x, tangentLocal.y, tangentLocal.z};
+    };
+}
+
 std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointDistance(App::DocumentObject* joint, bool& swapSides)
 {
     DistanceType type = getDistanceType(joint, &swapSides);
@@ -4052,6 +4150,15 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointDistance(App::DocumentObj
         }
 
         case DistanceType::PointCurve: {
+            // FCPROJECT-PATCH (2026-11-01): Abstand 0 = Punkt genau auf der Kurve bzw. Kette
+            // (Punkt-auf-Kurve, Fusspunkt-Verfahren). Abstand != 0 wie bisher.
+            if (std::abs(getJointDistance(joint)) < Precision::Confusion()) {
+                if (auto foot = makeCurveFootFunction(joint, refName1, swapSides ? "Placement2" : "Placement1")) {
+                    auto mbdJoint = ASMTPointOnCurveJoint::With();
+                    mbdJoint->curve = foot;
+                    return mbdJoint;
+                }
+            }
             // For other curves we do a point in plane-of-the-curve.
             // Maybe it would be best tangent / distance to the conic?
             // For arcs and circles we could use ASMTRevSphJoint. But is it better than

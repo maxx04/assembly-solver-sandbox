@@ -292,6 +292,17 @@ Statt Bündeln (§2.1c) wird die Mehrdeutigkeit dort beseitigt, wo sie entsteht:
     gleichsinnig, 49 entgegen) und „Ausrichtung wechseln“ bleiben unberührt.
   - Test `test_planar_parallel_orientation_flat` (Weekly-Vanilla FAIL bei den 110-Grad-Fällen).
 
+### 2.1e Punkt auf Kurve über das Abstand-Gelenk (2026-11-01)
+
+Abstand Punkt–Kurve mit Abstand 0 rechnet nicht mehr „Punkt in der Ebene der Kurve“, sondern hält
+den Punkt genau auf der Kurve bzw. Kurvenkette (kein neuer Gelenktyp, Dateiformat unverändert):
+OndselSolver `PointOnCurveJoint` (Fußpunkt-Verfahren, zwei Gleichungen senkrecht zur Tangente als
+Linearkombination der drei Achs-Abstände `DispCompIeqcJeqcKeqc`), FreeCAD
+`makeCurveFootFunction()` (Kante bzw. Draht aus der Referenz, `Extrema_ExtPC`). Über ein offenes
+Ende hinaus folgt der Punkt der Tangenten-Verlängerung (kein Anschlag). Gewählte Gerade bleibt
+„Punkt auf Gerade“. Plan, Grenzen und offene Punkte: `plans/2026-11-01-punkt-auf-kurve.md`; Tests
+`standalone-check/solver-tests/` und `test_point_on_curve_flat`.
+
 ### 2.2 Interaktives Ziehen - warum nur die äußerste Baugruppe löst
 
 ```mermaid
