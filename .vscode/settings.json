@@ -6,15 +6,15 @@
 
   "//useCMakePresets": "FreeCADs eigenes, mitgeliefertes CMakePresets.json (Presets 'debug'/'rel-with-deb-info' etc.) wird von CMake Tools sonst automatisch bevorzugt und konfiguriert dann in build/debug bzw. build/relWithDebInfo - VOELLIG SEPARATE, nie eingerichtete Verzeichnisse ohne unsere Neon-Qt6/venv-Umgebung. Dort greift dann System-Python (~/.platformio/penv statt unserem .venv), Shiboken6/PySide6 fehlen komplett, und der fehlende 'lark'-Python-Package bricht die Konfiguration sogar hart ab (CMake Error, nicht nur Warning). cmake.buildDirectory/installPrefix oben werden in diesem Preset-Modus nur TEILWEISE respektiert (installPrefix ja, binaryDir nein) - deshalb komplett auf den klassischen, nicht-Preset-Modus zurueckschalten, der unsere obigen Einstellungen vollstaendig nutzt.",
   "cmake.useCMakePresets": "never",
-  "cmake.configureOnOpen": true,
+  "//configureOnOpen": "Seit 2026-11-01 (Pixi): AUS - CMake Tools wuerde den Build-Ordner sonst ohne Pixi-Umgebung (System-Compiler/-Python von Ubuntu 26.04) neu konfigurieren. Konfiguriert wird nur ueber standalone-check: Ziel rebuild-fresh-and-deploy (FreeCADs Preset conda-linux-rel-with-deb-info).",
+  "cmake.configureOnOpen": false,
   "cmake.automaticReconfigure": false,
   "cmake.configureOnEdit": false,
 
-  "//environment": "Ohne diese Variablen findet CMake Tools' eigener Configure-Lauf die Neon-Qt6/Shiboken6-Umgebung nicht (siehe reference-neon-qt6-pyside6-environment.md) - der PySide6-Python-Import-Check in SetupShibokenAndPyside.cmake schlaegt dann fehl ('libshiboken6.abi3.so.6.11: cannot open shared object file'), FREECAD_USE_SHIBOKEN wird fuer DIESEN Lauf lokal auf OFF gesetzt (nicht dauerhaft im Cache, aber der dabei erzeugte Build-Stand waere trotzdem ohne Shiboken - der Simulation-Dialog-Base::Quantity-Bug kaeme zurueck). CMAKE_PREFIX_PATH selbst bleibt unabhaengig davon im Cache erhalten (urspruenglich per -D gesetzt), nur LD_LIBRARY_PATH/QT_PLUGIN_PATH fehlen CMake Tools' eigenem Prozessumfeld.",
+  "//environment": "Seit 2026-11-01: FreeCADs Pixi-Umgebung (/home/maxx/freecad-sandbox/freecad-source/.pixi/envs/default) statt Neon-Qt6 + .venv. Bauen/Installieren am besten ueber die standalone-check-Ziele (laufen per pixi run).",
   "cmake.environment": {
-    "VIRTUAL_ENV": "/home/maxx/Dokumente/FreeCAD-Development/.venv",
-    "LD_LIBRARY_PATH": "/home/maxx/Dokumente/FreeCAD-Development/neon-qt6-pyside6/root/usr/lib/x86_64-linux-gnu",
-    "QT_PLUGIN_PATH": "/home/maxx/Dokumente/FreeCAD-Development/neon-qt6-pyside6/root/usr/lib/x86_64-linux-gnu/qt6/plugins",
+    "CONDA_PREFIX": "/home/maxx/freecad-sandbox/freecad-source/.pixi/envs/default",
+    "PATH": "/home/maxx/freecad-sandbox/freecad-source/.pixi/envs/default/bin:${env:PATH}",
     "PYTHONNOUSERSITE": "1"
   },
   "cmake.defaultVariants": {

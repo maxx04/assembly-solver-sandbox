@@ -70,25 +70,26 @@ get_filename_component(SANDBOX_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 set(FREECAD_SANDBOX_BUILD_DIR "/home/maxx/freecad-sandbox/freecad-source/build" CACHE PATH
     "Build-Ordner des eigenstaendigen freecad-source-Klons (Symlinks auf diese Sandbox)")
 
-# FCPROJECT-PATCH (2026-10-04, Vanilla-Resync auf 7d2c4213e9): upstreams cMake/FindPySide6.cmake
-# prueft beim (Neu-)Konfigurieren jetzt per Python-Import, ob PySide6.QtSvgWidgets vorhanden ist.
-# Unser PySide6 kommt aus der eigenen Neon-Qt6-Umgebung (siehe reference-neon-qt6-pyside6-
-# environment / check-neon-sync.sh), deren Bibliotheken (u.a. libshiboken6.abi3.so) nicht im
-# System-Suchpfad liegen - ohne LD_LIBRARY_PATH bricht das Konfigurieren ab ("Unable to import
-# Shiboken"). Gleicher Pfad wie in run-test.sh/run-freecad-sandbox.sh.
-set(NEON_QT6_LIB_DIR "/home/maxx/Dokumente/FreeCAD-Development/neon-qt6-pyside6/root/usr/lib/x86_64-linux-gnu"
-    CACHE PATH "Bibliotheken der eigenen Neon-Qt6/PySide6/Shiboken6-Umgebung")
+# FCPROJECT-PATCH (2026-11-01, Ubuntu 26.04): Bau-Umgebung ist FreeCADs eigene Pixi-Umgebung
+# (conda-forge, wie FreeCADs Pixi-CI und die Weekly-AppImage) statt der frueheren KDE-Neon-Qt6-
+# Umgebung. Jeder Bau-/Installationsschritt laeuft ueber `pixi run` im Quellordner des Build-Baums
+# (Compiler clang + mold, cmake, Qt 6.11, Python 3.13 aus .pixi/envs/default). CFLAGS & Co. leer wie
+# in FreeCADs Pixi-Tasks.
+set(SANDBOX_PIXI "/home/maxx/.pixi/bin/pixi" CACHE FILEPATH "pixi (Version wie FreeCADs CI)")
+set(SANDBOX_INSTALL_DIR "/home/maxx/freecad-sandbox/install" CACHE PATH "Installationsziel der Sandbox")
+set(SANDBOX_PIXI_RUN "${SANDBOX_PIXI}" run --manifest-path "${FREECAD_SANDBOX_BUILD_DIR}/../pixi.toml" --frozen
+    env CFLAGS= CXXFLAGS= DEBUG_CFLAGS= DEBUG_CXXFLAGS=)
 
 # FCPROJECT-PATCH (2026-10-04): parallel auf allen Kernen bauen - ohne --parallel lief make
 # einzeln (ein Vollbau nach einem Vanilla-Sprung dauerte so Stunden statt ~13-24 Minuten).
 cmake_host_system_information(RESULT SANDBOX_BUILD_JOBS QUERY NUMBER_OF_LOGICAL_CORES)
 
 add_custom_target(build-and-deploy
-    COMMAND ${CMAKE_COMMAND} -E env "LD_LIBRARY_PATH=${NEON_QT6_LIB_DIR}:$ENV{LD_LIBRARY_PATH}"
-            ${CMAKE_COMMAND} --build "${FREECAD_SANDBOX_BUILD_DIR}" --parallel ${SANDBOX_BUILD_JOBS}
+    COMMAND ${SANDBOX_PIXI_RUN}
+            cmake --build "${FREECAD_SANDBOX_BUILD_DIR}" --parallel ${SANDBOX_BUILD_JOBS}
             --target Assembly OndselSolver AssemblyGui AssemblyTests FreeCADMain
-    COMMAND ${CMAKE_COMMAND} -E env "LD_LIBRARY_PATH=${NEON_QT6_LIB_DIR}:$ENV{LD_LIBRARY_PATH}"
-            ${CMAKE_COMMAND} --install "${FREECAD_SANDBOX_BUILD_DIR}"
+    COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/install-clean.sh"
+            "${FREECAD_SANDBOX_BUILD_DIR}/.." "${FREECAD_SANDBOX_BUILD_DIR}" "${SANDBOX_INSTALL_DIR}"
     COMMENT "Baut Assembly+OndselSolver+AssemblyGui+Python-Skripte+FreeCAD-Executable neu und installiert nach /home/maxx/freecad-sandbox/install"
     VERBATIM
     USES_TERMINAL
@@ -106,10 +107,9 @@ add_custom_target(build-and-deploy
 # alt und passen nicht mehr zur neuen Basisbibliothek (live: "MeasureGui.so: undefined symbol
 # _ZN4Base4Unit7InertiaE"). Dieses Ziel baut und installiert ALLE Module.
 add_custom_target(build-all-and-deploy
-    COMMAND ${CMAKE_COMMAND} -E env "LD_LIBRARY_PATH=${NEON_QT6_LIB_DIR}:$ENV{LD_LIBRARY_PATH}"
-            ${CMAKE_COMMAND} --build "${FREECAD_SANDBOX_BUILD_DIR}" --parallel ${SANDBOX_BUILD_JOBS}
-    COMMAND ${CMAKE_COMMAND} -E env "LD_LIBRARY_PATH=${NEON_QT6_LIB_DIR}:$ENV{LD_LIBRARY_PATH}"
-            ${CMAKE_COMMAND} --install "${FREECAD_SANDBOX_BUILD_DIR}"
+    COMMAND ${SANDBOX_PIXI_RUN} cmake --build "${FREECAD_SANDBOX_BUILD_DIR}" --parallel ${SANDBOX_BUILD_JOBS}
+    COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/install-clean.sh"
+            "${FREECAD_SANDBOX_BUILD_DIR}/.." "${FREECAD_SANDBOX_BUILD_DIR}" "${SANDBOX_INSTALL_DIR}"
     COMMENT "Baut ALLE FreeCAD-Module neu und installiert nach /home/maxx/freecad-sandbox/install (nach einem Vanilla-Wechsel des Build-Baums noetig)"
     VERBATIM
     USES_TERMINAL
@@ -123,7 +123,7 @@ add_custom_target(build-all-and-deploy
 add_custom_target(rebuild-fresh-and-deploy
     COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/rebuild-fresh.sh"
             "${FREECAD_SANDBOX_BUILD_DIR}/.." "${FREECAD_SANDBOX_BUILD_DIR}"
-            "${NEON_QT6_LIB_DIR}" ${SANDBOX_BUILD_JOBS}
+            "${SANDBOX_INSTALL_DIR}" ${SANDBOX_BUILD_JOBS}
     COMMENT "Kompletter Neubau aus leerem Build-Ordner + Installation (woechentliches Standard-Update)"
     VERBATIM
     USES_TERMINAL

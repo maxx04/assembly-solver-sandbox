@@ -1,0 +1,13 @@
+diff --git a/src/App/PropertyLinks.cpp b/src/App/PropertyLinks.cpp
+index 67ffb6b2ea..f673fa9d72 100644
+--- a/src/App/PropertyLinks.cpp
++++ b/src/App/PropertyLinks.cpp
+@@ -4212,7 +4212,7 @@ void PropertyXLink::Save(Base::Writer& writer) const
+         writer.Stream() << writer.ind() << "<XLink name=\"" << _pcLink->getExportName();
+     }
+     else {
+-        const char* path = getDocumentPath();
++        const char* path = filePath.c_str();
+         std::string _path;
+         if (exporting) {
+             // Here means we are exporting the owner but not exporting the

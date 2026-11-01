@@ -201,3 +201,12 @@ build: 2026.09.27-freecad-gui-qt6-qbytearray-qstring-fixes.patch
 # mit Sandbox-eigenen Gelenktypen (Zweig tangent-joint: Tangent) bekommen zusaetzlich im Kopf
 # "...-sandbox" und eine Warnung beim Speichern (src/Mod/Assembly/AssemblySandboxSaveCheck.py).
 build: 2026.10.17-freecad-version-suffix-sandbox.patch
+
+# 2026-11-01: Upstream-Regression ruecknehmen. FreeCAD 24ea8589aa ("fix errored XLink's file
+# property", zu Issue #33468) schreibt in PropertyXLink::Save() getDocumentPath() statt filePath -
+# das ist docInfo->filePath(), ein ABSOLUTER Pfad. Folge: jede gespeicherte Baugruppe verweist mit
+# festem Pfad auf ihre Teile (Projekt nicht mehr verschiebbar), und nach "Speichern unter" eines
+# Teils schreibt eine geoeffnete Baugruppe den alten Pfad (FCProject-DocObserver-Test FAIL).
+# Weekly 2026.10.28 enthaelt den Commit noch nicht und schreibt relativ. Entfernen, sobald Upstream
+# korrigiert (Faktenblatt bugreports/xlink-absolute-path-regression/).
+build: 2026.11.01-freecad-xlink-relative-path-revert.patch

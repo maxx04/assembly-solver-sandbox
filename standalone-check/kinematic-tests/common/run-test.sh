@@ -58,26 +58,10 @@ else
     FC_LIB_DIR="$(cd "$(dirname "$FC_BIN")/../lib" && pwd)"
 fi
 
-# FCPROJECT-PATCH (2026-09-24, siehe Projekt-Memory "reference-neon-qt6-pyside6-environment"):
-# FreeCAD wird jetzt gegen eine eigene, in sich konsistente Qt6/PySide6/Shiboken6-Umgebung
-# gebaut (neon-qt6-pyside6/root/, aus dem KDE-Neon-Repo als .deb-Pakete entpackt, kein
-# Systemeingriff) statt gegen System-Qt + pip-PySide6 zu mischen. Die alte
-# ".venv/.../PySide6/Qt/lib"-Struktur (spezifisch fuer pip-Wheels, die ihr eigenes Qt buendeln)
-# existiert dadurch nicht mehr - Neons PySide6 erwartet Qt separat unter
-# neon-qt6-pyside6/root/usr/lib/x86_64-linux-gnu. VIRTUAL_ENV bleibt trotzdem noetig: FreeCADs
-# eigener Interpreter.cpp haengt "$VIRTUAL_ENV/lib/pythonX.Y/site-packages" an sys.path an (das
-# .venv verweist dort per Symlinks auf die Neon-Pakete) - PYTHONPATH selbst wird von FreeCADs
-# isoliertem Python-Start ignoriert, deshalb hier bewusst nicht mehr gesetzt.
 if [[ $APPIMAGE -eq 0 ]]; then
-    VENV_DIR="/home/maxx/Dokumente/FreeCAD-Development/.venv"
-    export VIRTUAL_ENV="${VENV_DIR}"
-    NEON_ROOT="/home/maxx/Dokumente/FreeCAD-Development/neon-qt6-pyside6/root/usr"
-    NEON_LIB="${NEON_ROOT}/lib/x86_64-linux-gnu"
-    export QT_PLUGIN_PATH="${NEON_LIB}/qt6/plugins"
-    # RUNPATH-Fix (eigener lib-Ordner zuerst) - siehe docs/JOURNAL.md "ROOT CAUSE GEFUNDEN UND
-    # BEHOBEN": jede kopierte FreeCAD-Installation traegt sonst ein fest einprogrammiertes RUNPATH
-    # auf die urspruengliche Installation.
-    export LD_LIBRARY_PATH="${FC_LIB_DIR}:${NEON_LIB}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    # 2026-11-01 (Ubuntu 26.04): FreeCADs Pixi-Umgebung statt Neon-Qt6 + .venv. Der Build-Baum
+    # (<src>/build) und die Installation finden ihre Bibliotheken ueber den RPATH.
+    source "$(dirname "${BASH_SOURCE[0]}")/../../pixi-runtime-env.sh"
 fi
 export PYTHONNOUSERSITE=1
 export QT_QPA_PLATFORM=xcb
