@@ -19,8 +19,13 @@ BUILD="$(realpath -m "${2:?build-dir fehlt}")"
 INSTALL="$(realpath -m "${3:?install-dir fehlt}")"
 PIXI="${PIXI:-/home/maxx/.pixi/bin/pixi}"
 
-if pgrep -af "^${INSTALL}/bin/FreeCAD" | grep -qv "kinematic-test"; then
-    echo "FEHLER: die Sandbox-FreeCAD laeuft noch - bitte schliessen und erneut installieren." >&2
+# Erst die Liste holen, dann pruefen: "pgrep | grep -q" scheitert unter pipefail (grep -q beendet
+# sich beim ersten Treffer, pgrep bekommt SIGPIPE, die Pipeline gilt als fehlgeschlagen) - so lief
+# die Installation am 2026-11-01 trotz laufender FreeCAD durch.
+running="$(pgrep -af "^${INSTALL}/bin/FreeCAD" | grep -v "kinematic-test" || true)"
+if [[ -n "$running" ]]; then
+    echo "FEHLER: die Sandbox-FreeCAD laeuft noch - bitte schliessen und erneut installieren:" >&2
+    echo "$running" >&2
     exit 1
 fi
 rm -rf "${INSTALL}.prev"
