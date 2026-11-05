@@ -348,6 +348,32 @@ Elternkoordinaten zurück. Ohne gedrehten Container ändert sich nichts.
 - Hintergrund: Andere FreeCAD-Versionen uebergehen solche Gelenke beim Loesen still; der
   Gelenk-Dialog bricht dort mit `'Tangent' is not in list` ab. Die Datei selbst bleibt intakt.
 
+### 2.2c Für normales FreeCAD prüfen / normalisieren (2026-11-05)
+
+Menü Assembly → Sandbox. Plan und Messbefunde: `plans/2026-11-05-datei-normalisieren.md`.
+
+- **Warum nötig:** Die Datei *lädt* überall (feste Bedingung). Zwei Dinge unterscheiden sich:
+  1. Aufbau: normales FreeCAD führt in flexiblen Unterbaugruppen Gelenk*kopien* (§2.3), die
+     Sandbox nicht (§5). Die Weekly legt sie beim Laden an, **FreeCAD 1.1.4 nicht**: dort ist die
+     Unterbaugruppe innen ohne Gelenk und fällt beim Ziehen auseinander.
+  2. Deutung: Punkt auf Kurve, Mehrfachinstanzen, starre Gruppe über die Grenze (§4.4),
+     Gelenkgrenzen usw. löst normales FreeCAD anders. Nicht reparierbar, nur meldbar.
+- **Aufbau:** `SandboxCompat.py` (Projekt per `getDependentDocuments()` einsammeln, statische
+  Regeln, Abläufe, HTML-Bericht), `SandboxCompatWorker.py` (Arbeitsskript für einen eigenen
+  `freecadcmd`-Prozess, Auftrag als JSON über `SANDBOX_COMPAT_JOB`; läuft in Sandbox UND normalem
+  FreeCAD, darf nichts aus der Sandbox importieren), `CommandSandboxCompat.py` (Dialog, Befehle).
+- **Prüfen:** Kopie in Temp-Ordner → `sandbox-solve` (Sandbox löst und speichert) →
+  `reference-check` (normales FreeCAD öffnet, löst, misst Bewegung je Teil, zählt Gelenkkopien).
+- **Normalisieren:** Kopie in `<Projektordner>_FreeCAD` (relative Verweise bleiben gültig) →
+  `sandbox-solve` (optional Punkt-auf-Kurve-Gelenke `Suppressed`) → `reference-finish` (normales
+  FreeCAD stößt flexible Unterbaugruppen an und legt **seine eigenen** Gelenkkopien an; weil es
+  dabei schon lösen kann, werden die Sandbox-Lagen vor dem Speichern zurückgesetzt) → Kennung
+  `-sandbox` aus `ProgramVersion` → `reference-check` auf einer Wegwerf-Kopie.
+- Hilfsprozesse bekommen ein leeres Profil (`FREECAD_USER_HOME`), das fremde FreeCAD zusätzlich
+  eine von Pixi/conda bereinigte Umgebung. Normales FreeCAD: Einstellung
+  `SandboxCompatReferenceFreeCAD`, Standard Weekly-AppImage.
+- Test: `standalone-check/kinematic-tests/test_sandbox_compat`.
+
 ### 2.3 Verschachteln: `AssemblyLink::updateContents()` (die Kopier-Pipeline)
 
 ```

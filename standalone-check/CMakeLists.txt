@@ -129,6 +129,28 @@ add_custom_target(rebuild-fresh-and-deploy
     USES_TERMINAL
 )
 
+# FCPROJECT-PATCH (2026-11-05, Nutzerauftrag "cmake ziel appimage zum weitergeben"): aktuellen
+# Sandbox-Stand als Linux-AppImage packen, nach FreeCADs eigenem Weg fuer die Weekly-AppImage
+# (package/bundle). Eigener Release-Build-Ordner (/home/maxx/freecad-sandbox/appimage-build) und
+# Staging-Ordner - Pixi-Umgebung und normale Installation bleiben unberuehrt. Ergebnis unter
+# /home/maxx/freecad-sandbox/appimage/. Details siehe build-appimage.sh.
+#   appimage        - inkrementell (erster Lauf = kompletter Bau)
+#   appimage-fresh  - Build-Ordner vorher leeren (nach einem Vanilla-Update)
+add_custom_target(appimage
+    COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/build-appimage.sh"
+            "${FREECAD_SANDBOX_BUILD_DIR}/.." ${SANDBOX_BUILD_JOBS}
+    COMMENT "Packt den Sandbox-Stand als AppImage zum Weitergeben (/home/maxx/freecad-sandbox/appimage)"
+    VERBATIM
+    USES_TERMINAL
+)
+add_custom_target(appimage-fresh
+    COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/build-appimage.sh"
+            "${FREECAD_SANDBOX_BUILD_DIR}/.." ${SANDBOX_BUILD_JOBS} --fresh
+    COMMENT "Wie appimage, aber aus leerem Build-Ordner"
+    VERBATIM
+    USES_TERMINAL
+)
+
 add_custom_target(check-patches
     COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/check-patches.sh" "${SANDBOX_ROOT}"
     WORKING_DIRECTORY "${SANDBOX_ROOT}"

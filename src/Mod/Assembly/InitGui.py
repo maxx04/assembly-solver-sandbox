@@ -79,6 +79,7 @@ class AssemblyWorkbench(Workbench):
         import CommandCreateSnapshot
         import CommandCreateBom
         import CommandShowIdentityGraph
+        import CommandSandboxCompat
         import Preferences
 
         FreeCADGui.addLanguagePath(":/translations")
@@ -133,6 +134,12 @@ class AssemblyWorkbench(Workbench):
         self.appendMenu(
             [QT_TRANSLATE_NOOP("Workbench", "&Assembly")],
             cmdList + cmdListMenuOnly + ["Separator"] + cmdListJoints,
+        )
+        # FCPROJECT-PATCH (2026-11-05): Sandbox-Werkzeuge in eigenem Untermenue, siehe
+        # CommandSandboxCompat.py und plans/2026-11-05-datei-normalisieren.md.
+        self.appendMenu(
+            [QT_TRANSLATE_NOOP("Workbench", "&Assembly"), QT_TRANSLATE_NOOP("Workbench", "Sandbox")],
+            ["Assembly_SandboxCheck", "Assembly_SandboxNormalize", "Separator", "Assembly_ShowIdentityGraph"],
         )
 
     def Activated(self):

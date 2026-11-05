@@ -32,6 +32,9 @@ set(Assembly_Scripts
     CommandCreateSnapshot.py
     CommandExportASMT.py
     CommandShowIdentityGraph.py
+    CommandSandboxCompat.py
+    SandboxCompat.py
+    SandboxCompatWorker.py
     TestAssemblyWorkbench.py
     JointObject.py
     Preferences.py

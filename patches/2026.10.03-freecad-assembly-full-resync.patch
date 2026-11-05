@@ -1,6 +1,6 @@
 diff --git a/src/Mod/Assembly/App/AssemblyIdentityGraph.cpp b/src/Mod/Assembly/App/AssemblyIdentityGraph.cpp
 new file mode 100644
-index 00000000000..47def4aba5b
+index 0000000000..47def4aba5
 --- /dev/null
 +++ b/src/Mod/Assembly/App/AssemblyIdentityGraph.cpp
 @@ -0,0 +1,2202 @@
@@ -2208,7 +2208,7 @@ index 00000000000..47def4aba5b
 +}  // namespace Assembly
 diff --git a/src/Mod/Assembly/App/AssemblyIdentityGraph.h b/src/Mod/Assembly/App/AssemblyIdentityGraph.h
 new file mode 100644
-index 00000000000..c44380d9475
+index 0000000000..c44380d947
 --- /dev/null
 +++ b/src/Mod/Assembly/App/AssemblyIdentityGraph.h
 @@ -0,0 +1,298 @@
@@ -2511,7 +2511,7 @@ index 00000000000..c44380d9475
 +
 +}  // namespace Assembly
 diff --git a/src/Mod/Assembly/App/AssemblyLink.cpp b/src/Mod/Assembly/App/AssemblyLink.cpp
-index c4b69bde0a2..b482491da9b 100644
+index c4b69bde0a..b482491da9 100644
 --- a/src/Mod/Assembly/App/AssemblyLink.cpp
 +++ b/src/Mod/Assembly/App/AssemblyLink.cpp
 @@ -21,6 +21,7 @@
@@ -3254,7 +3254,7 @@ index c4b69bde0a2..b482491da9b 100644
  {
      // Make sure there is no joint group
 diff --git a/src/Mod/Assembly/App/AssemblyLink.h b/src/Mod/Assembly/App/AssemblyLink.h
-index 9309b26e5bf..491532a52f4 100644
+index 9309b26e5b..491532a52f 100644
 --- a/src/Mod/Assembly/App/AssemblyLink.h
 +++ b/src/Mod/Assembly/App/AssemblyLink.h
 @@ -74,12 +74,12 @@ public:
@@ -3331,7 +3331,7 @@ index 9309b26e5bf..491532a52f4 100644
  
  
 diff --git a/src/Mod/Assembly/App/AssemblyLinkPyImp.cpp b/src/Mod/Assembly/App/AssemblyLinkPyImp.cpp
-index 7ca17b4e3be..6e38571c0c2 100644
+index 7ca17b4e3b..6e38571c0c 100644
 --- a/src/Mod/Assembly/App/AssemblyLinkPyImp.cpp
 +++ b/src/Mod/Assembly/App/AssemblyLinkPyImp.cpp
 @@ -22,6 +22,8 @@
@@ -3368,7 +3368,7 @@ index 7ca17b4e3be..6e38571c0c2 100644
  
      return ret;
 diff --git a/src/Mod/Assembly/App/AssemblyObject.cpp b/src/Mod/Assembly/App/AssemblyObject.cpp
-index 2f5b06dacf6..ac98e34e05b 100644
+index 2f5b06dacf..ac98e34e05 100644
 --- a/src/Mod/Assembly/App/AssemblyObject.cpp
 +++ b/src/Mod/Assembly/App/AssemblyObject.cpp
 @@ -24,6 +24,10 @@
@@ -8428,7 +8428,7 @@ index 2f5b06dacf6..ac98e34e05b 100644
  }
  
 diff --git a/src/Mod/Assembly/App/AssemblyObject.h b/src/Mod/Assembly/App/AssemblyObject.h
-index 63bb7168d88..29de63194ef 100644
+index 63bb7168d8..29de63194e 100644
 --- a/src/Mod/Assembly/App/AssemblyObject.h
 +++ b/src/Mod/Assembly/App/AssemblyObject.h
 @@ -25,7 +25,10 @@
@@ -9143,7 +9143,7 @@ index 63bb7168d88..29de63194ef 100644
      std::vector<std::string> lastPartialRedundantJoints;
      std::vector<std::string> lastMalformedJoints;
 diff --git a/src/Mod/Assembly/App/AssemblyObject.pyi b/src/Mod/Assembly/App/AssemblyObject.pyi
-index 95db04dc83b..eaa043f9266 100644
+index 95db04dc83..eaa043f926 100644
 --- a/src/Mod/Assembly/App/AssemblyObject.pyi
 +++ b/src/Mod/Assembly/App/AssemblyObject.pyi
 @@ -111,13 +111,48 @@ class AssemblyObject(Part):
@@ -9360,7 +9360,7 @@ index 95db04dc83b..eaa043f9266 100644
      Joints: Final[list]
      """A list of all joints this assembly has."""
 diff --git a/src/Mod/Assembly/App/AssemblyObjectPyImp.cpp b/src/Mod/Assembly/App/AssemblyObjectPyImp.cpp
-index ddd002de8af..1ad455d0c36 100644
+index ddd002de8a..1ad455d0c3 100644
 --- a/src/Mod/Assembly/App/AssemblyObjectPyImp.cpp
 +++ b/src/Mod/Assembly/App/AssemblyObjectPyImp.cpp
 @@ -143,15 +143,36 @@ PyObject* AssemblyObjectPy::clearUndo(PyObject* args) const
@@ -9672,7 +9672,7 @@ index ddd002de8af..1ad455d0c36 100644
 +    Py_Return;
 +}
 diff --git a/src/Mod/Assembly/App/AssemblyUtils.cpp b/src/Mod/Assembly/App/AssemblyUtils.cpp
-index 3e0b804b8f6..3a40c069739 100644
+index 3e0b804b8f..3a40c06973 100644
 --- a/src/Mod/Assembly/App/AssemblyUtils.cpp
 +++ b/src/Mod/Assembly/App/AssemblyUtils.cpp
 @@ -161,7 +161,10 @@ double getEdgeRadius(const App::DocumentObject* obj, const std::string& elt)
@@ -10358,7 +10358,7 @@ index 3e0b804b8f6..3a40c069739 100644
  
      if (isAngle) {
 diff --git a/src/Mod/Assembly/App/AssemblyUtils.h b/src/Mod/Assembly/App/AssemblyUtils.h
-index 5296675ffa8..58eeeecb757 100644
+index 5296675ffa..58eeeecb75 100644
 --- a/src/Mod/Assembly/App/AssemblyUtils.h
 +++ b/src/Mod/Assembly/App/AssemblyUtils.h
 @@ -132,6 +132,7 @@ enum class DistanceType
@@ -10502,7 +10502,7 @@ index 5296675ffa8..58eeeecb757 100644
  
  }  // namespace Assembly
 diff --git a/src/Mod/Assembly/App/CMakeLists.txt b/src/Mod/Assembly/App/CMakeLists.txt
-index bd52b9d8814..bc53f2b69db 100644
+index bd52b9d881..bc53f2b69d 100644
 --- a/src/Mod/Assembly/App/CMakeLists.txt
 +++ b/src/Mod/Assembly/App/CMakeLists.txt
 @@ -52,6 +52,8 @@ SET(Assembly_SRCS
@@ -10516,7 +10516,7 @@ index bd52b9d8814..bc53f2b69db 100644
      Groups.cpp
 diff --git a/src/Mod/Assembly/AssemblySandboxSaveCheck.py b/src/Mod/Assembly/AssemblySandboxSaveCheck.py
 new file mode 100644
-index 00000000000..28f2cfa389e
+index 0000000000..28f2cfa389
 --- /dev/null
 +++ b/src/Mod/Assembly/AssemblySandboxSaveCheck.py
 @@ -0,0 +1,94 @@
@@ -10615,14 +10615,17 @@ index 00000000000..28f2cfa389e
 +        _observer = SandboxSaveCheck()
 +        App.addDocumentObserver(_observer)
 diff --git a/src/Mod/Assembly/CMakeLists.txt b/src/Mod/Assembly/CMakeLists.txt
-index 975da1c3341..c62d5f85bda 100644
+index 975da1c334..4a557400e4 100644
 --- a/src/Mod/Assembly/CMakeLists.txt
 +++ b/src/Mod/Assembly/CMakeLists.txt
-@@ -31,12 +31,14 @@ set(Assembly_Scripts
+@@ -31,12 +31,17 @@ set(Assembly_Scripts
      CommandCreateSimulation.py
      CommandCreateSnapshot.py
      CommandExportASMT.py
 +    CommandShowIdentityGraph.py
++    CommandSandboxCompat.py
++    SandboxCompat.py
++    SandboxCompatWorker.py
      TestAssemblyWorkbench.py
      JointObject.py
      Preferences.py
@@ -10634,7 +10637,7 @@ index 975da1c3341..c62d5f85bda 100644
  
  if(BUILD_GUI)
 diff --git a/src/Mod/Assembly/CommandCreateSimulation.py b/src/Mod/Assembly/CommandCreateSimulation.py
-index 3c89d4a40ec..299dcf8ef52 100644
+index 3c89d4a40e..299dcf8ef5 100644
 --- a/src/Mod/Assembly/CommandCreateSimulation.py
 +++ b/src/Mod/Assembly/CommandCreateSimulation.py
 @@ -422,13 +422,18 @@ class ViewProviderMotion:
@@ -10764,7 +10767,7 @@ index 3c89d4a40ec..299dcf8ef52 100644
      # Taskbox keyboard event handler
      def eventFilter(self, watched, event):
 diff --git a/src/Mod/Assembly/CommandCreateView.py b/src/Mod/Assembly/CommandCreateView.py
-index 9ad65b6ca9e..17aaa7e8576 100644
+index 9ad65b6ca9..17aaa7e857 100644
 --- a/src/Mod/Assembly/CommandCreateView.py
 +++ b/src/Mod/Assembly/CommandCreateView.py
 @@ -1352,8 +1352,8 @@ class TaskAssemblyCreateView(QtCore.QObject):
@@ -10778,9 +10781,260 @@ index 9ad65b6ca9e..17aaa7e8576 100644
  
          self.blockDraggerMove = True
          self.assembly.ViewObject.DraggerPlacement = plc
+diff --git a/src/Mod/Assembly/CommandSandboxCompat.py b/src/Mod/Assembly/CommandSandboxCompat.py
+new file mode 100644
+index 0000000000..4c38687566
+--- /dev/null
++++ b/src/Mod/Assembly/CommandSandboxCompat.py
+@@ -0,0 +1,245 @@
++# SPDX-License-Identifier: LGPL-2.1-or-later
++# /**************************************************************************
++#                                                                           *
++#    This file is part of FreeCAD.                                          *
++#                                                                           *
++#    FreeCAD is free software: you can redistribute it and/or modify it     *
++#    under the terms of the GNU Lesser General Public License as            *
++#    published by the Free Software Foundation, either version 2.1 of the   *
++#    License, or (at your option) any later version.                        *
++#                                                                           *
++#    FreeCAD is distributed in the hope that it will be useful, but         *
++#    WITHOUT ANY WARRANTY; without even the implied warranty of             *
++#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU       *
++#    Lesser General Public License for more details.                        *
++#                                                                           *
++#    You should have received a copy of the GNU Lesser General Public       *
++#    License along with FreeCAD. If not, see                                *
++#    <https://www.gnu.org/licenses/>.                                       *
++#                                                                           *
++# **************************************************************************/
++
++# FCPROJECT-PATCH (2026-11-05): Befehle "Für FreeCAD prüfen…" und "Für FreeCAD normalisieren…"
++# im Menü Assembly -> Sandbox. Logik in SandboxCompat.py, Plan plans/2026-11-05-datei-normalisieren.md.
++
++import os
++
++import FreeCAD as App
++
++from PySide.QtCore import QT_TRANSLATE_NOOP
++
++if App.GuiUp:
++    import FreeCADGui as Gui
++    from PySide import QtCore, QtWidgets
++
++import SandboxCompat
++
++__title__ = "Assembly Sandbox Compatibility Commands"
++__author__ = "Claude"
++__url__ = "https://www.freecad.org"
++
++
++def _activeDocument():
++    doc = App.ActiveDocument
++    return doc if doc is not None and doc.FileName else None
++
++
++class CompatDialog(QtWidgets.QDialog if App.GuiUp else object):
++    def __init__(self, doc):
++        super().__init__(Gui.getMainWindow())
++        self.doc = doc
++        self.lastReport = None
++        self.setWindowTitle(f"Für FreeCAD prüfen / normalisieren – {doc.Label}")
++        self.resize(820, 620)
++        lay = QtWidgets.QVBoxLayout(self)
++
++        intro = QtWidgets.QLabel(
++            "Prüft die Datei samt allen verknüpften Dateien des Projekts darauf, wie sie in "
++            "normalem FreeCAD aussieht. Normalisieren schreibt eine angepasste Kopie in einen neuen "
++            "Ordner – die Originale bleiben unverändert."
++        )
++        intro.setWordWrap(True)
++        lay.addWidget(intro)
++
++        row = QtWidgets.QHBoxLayout()
++        row.addWidget(QtWidgets.QLabel("Normales FreeCAD für die Gegenprobe:"))
++        self.refEdit = QtWidgets.QLineEdit(SandboxCompat.referenceFreeCAD())
++        self.refEdit.setPlaceholderText("AppImage, FreeCAD- oder FreeCADCmd-Programm (leer = keine Gegenprobe)")
++        row.addWidget(self.refEdit, 1)
++        browse = QtWidgets.QPushButton("…")
++        browse.clicked.connect(self.browseReference)
++        row.addWidget(browse)
++        lay.addLayout(row)
++
++        self.suppressBox = QtWidgets.QCheckBox(
++            "Gelenke, die normales FreeCAD nicht kann (Punkt auf Kurve), in der Kopie deaktivieren"
++        )
++        self.suppressBox.setChecked(True)
++        lay.addWidget(self.suppressBox)
++
++        self.view = QtWidgets.QTextBrowser()
++        self.view.setOpenExternalLinks(True)
++        lay.addWidget(self.view, 1)
++
++        buttons = QtWidgets.QHBoxLayout()
++        self.checkBtn = QtWidgets.QPushButton("Prüfen")
++        self.checkBtn.clicked.connect(self.runCheck)
++        self.normBtn = QtWidgets.QPushButton("Normalisieren…")
++        self.normBtn.clicked.connect(self.runNormalize)
++        copyBtn = QtWidgets.QPushButton("Bericht kopieren")
++        copyBtn.clicked.connect(self.copyReport)
++        closeBtn = QtWidgets.QPushButton("Schließen")
++        closeBtn.clicked.connect(self.close)
++        for b in (self.checkBtn, self.normBtn, copyBtn):
++            buttons.addWidget(b)
++        buttons.addStretch(1)
++        buttons.addWidget(closeBtn)
++        lay.addLayout(buttons)
++
++    # ---------------------------------------------------------------- Hilfen
++
++    def browseReference(self):
++        path, _ = QtWidgets.QFileDialog.getOpenFileName(
++            self, "Normales FreeCAD wählen", os.path.dirname(self.refEdit.text()) or os.path.expanduser("~")
++        )
++        if path:
++            self.refEdit.setText(path)
++
++    def reference(self):
++        path = self.refEdit.text().strip()
++        SandboxCompat.setReferenceFreeCAD(path)
++        return path
++
++    def _busy(self, title):
++        dlg = QtWidgets.QProgressDialog(title, "Abbrechen", 0, 0, self)
++        dlg.setWindowModality(QtCore.Qt.WindowModal)
++        dlg.setMinimumDuration(0)
++        dlg.show()
++
++        def progress(text):
++            dlg.setLabelText(f"{title}\n{text}")
++            QtWidgets.QApplication.processEvents()
++            return not dlg.wasCanceled()
++
++        return dlg, progress
++
++    def _unsavedWarning(self):
++        project = SandboxCompat.Project(self.doc)
++        pending = project.unsaved + project.modified
++        if not pending:
++            return True
++        answer = QtWidgets.QMessageBox.question(
++            self,
++            "Nicht gespeichert",
++            "Diese Dokumente haben ungespeicherte Änderungen, geprüft wird der gespeicherte Stand:\n"
++            + "\n".join(pending)
++            + "\n\nTrotzdem fortfahren?",
++        )
++        return answer == QtWidgets.QMessageBox.Yes
++
++    def _show(self, report, title):
++        self.lastReport = report
++        self.view.setHtml(SandboxCompat.reportHtml(report, title))
++
++    def _setEnabled(self, on):
++        self.checkBtn.setEnabled(on)
++        self.normBtn.setEnabled(on)
++
++    # ---------------------------------------------------------------- Abläufe
++
++    def runCheck(self):
++        if not self._unsavedWarning():
++            return
++        self._setEnabled(False)
++        dlg, progress = self._busy("Prüfe Projekt …")
++        try:
++            report = SandboxCompat.checkProject(self.doc, self.reference(), progress)
++        finally:
++            dlg.close()
++            self._setEnabled(True)
++        self._show(report, "Prüfung (Originale unverändert)")
++
++    def runNormalize(self):
++        if not self._unsavedWarning():
++            return
++        project = SandboxCompat.Project(self.doc)
++        parent = QtWidgets.QFileDialog.getExistingDirectory(
++            self,
++            "Wohin soll die normalisierte Kopie? (es wird ein neuer Unterordner angelegt)",
++            os.path.dirname(project.root),
++        )
++        if not parent:
++            return
++        base = os.path.basename(project.root.rstrip(os.sep)) or "Projekt"
++        target = os.path.join(parent, base + "_FreeCAD")
++        n = 2
++        while os.path.exists(target):
++            target = os.path.join(parent, f"{base}_FreeCAD_{n}")
++            n += 1
++        self._setEnabled(False)
++        dlg, progress = self._busy(f"Normalisiere nach {target} …")
++        try:
++            report = SandboxCompat.normalizeProject(
++                self.doc, target, self.reference(), self.suppressBox.isChecked(), progress
++            )
++        finally:
++            dlg.close()
++            self._setEnabled(True)
++        self._show(report, "Normalisiert (Kopie)")
++
++    def copyReport(self):
++        QtWidgets.QApplication.clipboard().setText(self.view.toPlainText())
++
++
++class _CompatCommand:
++    mode = "check"
++
++    def IsActive(self):
++        return _activeDocument() is not None
++
++    def Activated(self):
++        doc = _activeDocument()
++        if doc is None:
++            return
++        dlg = CompatDialog(doc)
++        dlg.show()
++        if self.mode == "check":
++            dlg.runCheck()
++        else:
++            dlg.runNormalize()
++
++
++class CommandSandboxCheck(_CompatCommand):
++    mode = "check"
++
++    def GetResources(self):
++        return {
++            "Pixmap": "Assembly_ExportASMT",
++            "MenuText": QT_TRANSLATE_NOOP("Assembly_SandboxCheck", "Für FreeCAD prüfen…"),
++            "ToolTip": QT_TRANSLATE_NOOP(
++                "Assembly_SandboxCheck",
++                "Prüft die Datei samt verknüpften Dateien: verhält sie sich in normalem FreeCAD "
++                "genauso wie in dieser Sandbox? Ändert nichts.",
++            ),
++        }
++
++
++class CommandSandboxNormalize(_CompatCommand):
++    mode = "normalize"
++
++    def GetResources(self):
++        return {
++            "Pixmap": "Assembly_ExportASMT",
++            "MenuText": QT_TRANSLATE_NOOP("Assembly_SandboxNormalize", "Für FreeCAD normalisieren…"),
++            "ToolTip": QT_TRANSLATE_NOOP(
++                "Assembly_SandboxNormalize",
++                "Schreibt das Projekt als Kopie in einen neuen Ordner, aufbereitet für normales "
++                "FreeCAD (Gelenkkopien in Unterbaugruppen, optional nicht unterstützte Gelenke "
++                "deaktiviert), mit Gegenprobe.",
++            ),
++        }
++
++
++if App.GuiUp:
++    Gui.addCommand("Assembly_SandboxCheck", CommandSandboxCheck())
++    Gui.addCommand("Assembly_SandboxNormalize", CommandSandboxNormalize())
 diff --git a/src/Mod/Assembly/CommandShowIdentityGraph.py b/src/Mod/Assembly/CommandShowIdentityGraph.py
 new file mode 100644
-index 00000000000..e5d30ab6424
+index 0000000000..e5d30ab642
 --- /dev/null
 +++ b/src/Mod/Assembly/CommandShowIdentityGraph.py
 @@ -0,0 +1,114 @@
@@ -10899,7 +11153,7 @@ index 00000000000..e5d30ab6424
 +if App.GuiUp:
 +    Gui.addCommand("Assembly_ShowIdentityGraph", CommandShowIdentityGraph())
 diff --git a/src/Mod/Assembly/CommandSolveAssembly.py b/src/Mod/Assembly/CommandSolveAssembly.py
-index 52820a85668..53a4f004b03 100644
+index 52820a8566..53a4f004b0 100644
 --- a/src/Mod/Assembly/CommandSolveAssembly.py
 +++ b/src/Mod/Assembly/CommandSolveAssembly.py
 @@ -63,6 +63,17 @@ class CommandSolveAssembly:
@@ -10921,7 +11175,7 @@ index 52820a85668..53a4f004b03 100644
          Gui.ActiveDocument.commitCommand()
  
 diff --git a/src/Mod/Assembly/Gui/CMakeLists.txt b/src/Mod/Assembly/Gui/CMakeLists.txt
-index 25d0db6d391..00e86e80873 100644
+index 25d0db6d39..00e86e8087 100644
 --- a/src/Mod/Assembly/Gui/CMakeLists.txt
 +++ b/src/Mod/Assembly/Gui/CMakeLists.txt
 @@ -94,7 +94,7 @@ endif(WIN32)
@@ -10934,7 +11188,7 @@ index 25d0db6d391..00e86e80873 100644
  
  fc_copy_sources(AssemblyGui "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_DATADIR}/Mod/Assembly" ${AssemblyGuiIcon_SVG})
 diff --git a/src/Mod/Assembly/Gui/Commands.cpp b/src/Mod/Assembly/Gui/Commands.cpp
-index 401387c64bf..ebe913f4722 100644
+index 401387c64b..ebe913f472 100644
 --- a/src/Mod/Assembly/Gui/Commands.cpp
 +++ b/src/Mod/Assembly/Gui/Commands.cpp
 @@ -71,6 +71,22 @@ void selectObjects(const std::vector<App::DocumentObject*>& objectsToSelect)
@@ -10998,7 +11252,7 @@ index 401387c64bf..ebe913f4722 100644
  
      selectObjects(jointsToSelect);
 diff --git a/src/Mod/Assembly/Gui/Resources/Assembly.qrc b/src/Mod/Assembly/Gui/Resources/Assembly.qrc
-index 9381256f562..bbff0d43012 100644
+index 9381256f56..bbff0d4301 100644
 --- a/src/Mod/Assembly/Gui/Resources/Assembly.qrc
 +++ b/src/Mod/Assembly/Gui/Resources/Assembly.qrc
 @@ -8,6 +8,7 @@
@@ -11011,7 +11265,7 @@ index 9381256f562..bbff0d43012 100644
          <file>icons/Assembly_CreateJointCylindrical.svg</file>
 diff --git a/src/Mod/Assembly/Gui/Resources/icons/Assembly_ShowIdentityGraph.svg b/src/Mod/Assembly/Gui/Resources/icons/Assembly_ShowIdentityGraph.svg
 new file mode 100644
-index 00000000000..5149eeefb47
+index 0000000000..5149eeefb4
 --- /dev/null
 +++ b/src/Mod/Assembly/Gui/Resources/icons/Assembly_ShowIdentityGraph.svg
 @@ -0,0 +1,21 @@
@@ -11037,7 +11291,7 @@ index 00000000000..5149eeefb47
 +  <circle cx="49" cy="45" r="12.5" fill="none" stroke="#0b1521" stroke-width="1.5" />
 +</svg>
 diff --git a/src/Mod/Assembly/Gui/Resources/preferences/Assembly.ui b/src/Mod/Assembly/Gui/Resources/preferences/Assembly.ui
-index 10ebe705fe6..22633cc4dfb 100644
+index 10ebe705fe..22633cc4df 100644
 --- a/src/Mod/Assembly/Gui/Resources/preferences/Assembly.ui
 +++ b/src/Mod/Assembly/Gui/Resources/preferences/Assembly.ui
 @@ -84,6 +84,58 @@ The files are named "runPreDrag.asmt" and "dragging.log" and are located in the
@@ -11100,7 +11354,7 @@ index 10ebe705fe6..22633cc4dfb 100644
       <property name="orientation">
        <enum>Qt::Vertical</enum>
 diff --git a/src/Mod/Assembly/Gui/ViewProviderAssembly.cpp b/src/Mod/Assembly/Gui/ViewProviderAssembly.cpp
-index 4a27e982913..a10408ffcb4 100644
+index 4a27e98291..a10408ffcb 100644
 --- a/src/Mod/Assembly/Gui/ViewProviderAssembly.cpp
 +++ b/src/Mod/Assembly/Gui/ViewProviderAssembly.cpp
 @@ -53,6 +53,7 @@
@@ -11855,7 +12109,7 @@ index 4a27e982913..a10408ffcb4 100644
      }
  }
 diff --git a/src/Mod/Assembly/Gui/ViewProviderAssemblyLink.cpp b/src/Mod/Assembly/Gui/ViewProviderAssemblyLink.cpp
-index 63038e53603..44205e3e2c6 100644
+index 63038e5360..44205e3e2c 100644
 --- a/src/Mod/Assembly/Gui/ViewProviderAssemblyLink.cpp
 +++ b/src/Mod/Assembly/Gui/ViewProviderAssemblyLink.cpp
 @@ -43,6 +43,8 @@
@@ -11918,7 +12172,7 @@ index 63038e53603..44205e3e2c6 100644
 +    return children;
 +}
 diff --git a/src/Mod/Assembly/Gui/ViewProviderAssemblyLink.h b/src/Mod/Assembly/Gui/ViewProviderAssemblyLink.h
-index 948b806f0fa..e7906365695 100644
+index 948b806f0f..e790636569 100644
 --- a/src/Mod/Assembly/Gui/ViewProviderAssemblyLink.h
 +++ b/src/Mod/Assembly/Gui/ViewProviderAssemblyLink.h
 @@ -73,6 +73,16 @@ public:
@@ -11939,7 +12193,7 @@ index 948b806f0fa..e7906365695 100644
  
  }  // namespace AssemblyGui
 diff --git a/src/Mod/Assembly/Init.py b/src/Mod/Assembly/Init.py
-index 350b5238a12..ecf7326bee7 100644
+index 350b5238a1..ecf7326bee 100644
 --- a/src/Mod/Assembly/Init.py
 +++ b/src/Mod/Assembly/Init.py
 @@ -35,3 +35,10 @@ FreeCAD.__unit_test__ += ["TestAssemblyWorkbench"]
@@ -11954,7 +12208,7 @@ index 350b5238a12..ecf7326bee7 100644
 +AssemblySandboxSaveCheck.install()
 +
 diff --git a/src/Mod/Assembly/InitGui.py b/src/Mod/Assembly/InitGui.py
-index e2ac92c0ebe..11d2db7deab 100644
+index e2ac92c0eb..59fd3d7d57 100644
 --- a/src/Mod/Assembly/InitGui.py
 +++ b/src/Mod/Assembly/InitGui.py
 @@ -60,6 +60,12 @@ class AssemblyWorkbench(Workbench):
@@ -11970,15 +12224,16 @@ index e2ac92c0ebe..11d2db7deab 100644
          from PySide import QtCore, QtGui
          from PySide.QtCore import QT_TRANSLATE_NOOP
          import CommandCreateAssembly
-@@ -72,6 +78,7 @@ class AssemblyWorkbench(Workbench):
+@@ -72,6 +78,8 @@ class AssemblyWorkbench(Workbench):
          import CommandCreateSimulation
          import CommandCreateSnapshot
          import CommandCreateBom
 +        import CommandShowIdentityGraph
++        import CommandSandboxCompat
          import Preferences
  
          FreeCADGui.addLanguagePath(":/translations")
-@@ -91,6 +98,7 @@ class AssemblyWorkbench(Workbench):
+@@ -91,6 +99,7 @@ class AssemblyWorkbench(Workbench):
              "Assembly_CreateSnapshot",
              "Assembly_CreateSimulation",
              "Assembly_CreateBom",
@@ -11986,8 +12241,21 @@ index e2ac92c0ebe..11d2db7deab 100644
          ]
  
          cmdListMenuOnly = [
+@@ -126,6 +135,12 @@ class AssemblyWorkbench(Workbench):
+             [QT_TRANSLATE_NOOP("Workbench", "&Assembly")],
+             cmdList + cmdListMenuOnly + ["Separator"] + cmdListJoints,
+         )
++        # FCPROJECT-PATCH (2026-11-05): Sandbox-Werkzeuge in eigenem Untermenue, siehe
++        # CommandSandboxCompat.py und plans/2026-11-05-datei-normalisieren.md.
++        self.appendMenu(
++            [QT_TRANSLATE_NOOP("Workbench", "&Assembly"), QT_TRANSLATE_NOOP("Workbench", "Sandbox")],
++            ["Assembly_SandboxCheck", "Assembly_SandboxNormalize", "Separator", "Assembly_ShowIdentityGraph"],
++        )
+ 
+     def Activated(self):
+         # update the translation engine
 diff --git a/src/Mod/Assembly/JointObject.py b/src/Mod/Assembly/JointObject.py
-index e25c44893fd..9bab0446841 100644
+index e25c44893f..9bab044684 100644
 --- a/src/Mod/Assembly/JointObject.py
 +++ b/src/Mod/Assembly/JointObject.py
 @@ -143,21 +143,51 @@ JointParallelForbidden = [
@@ -12457,7 +12725,7 @@ index e25c44893fd..9bab0446841 100644
          self.refs.clear()
          self.updateJoint()
 diff --git a/src/Mod/Assembly/Preferences.py b/src/Mod/Assembly/Preferences.py
-index 5bb07ccea66..40c7c6232a1 100644
+index 5bb07ccea6..40c7c6232a 100644
 --- a/src/Mod/Assembly/Preferences.py
 +++ b/src/Mod/Assembly/Preferences.py
 @@ -40,6 +40,10 @@ class PreferencesPage:
@@ -12477,8 +12745,838 @@ index 5bb07ccea66..40c7c6232a1 100644
          self.form.groundFirstPart.setCurrentIndex(pref.GetInt("GroundFirstPart", 0))
 +        self.form.redundancyToleranceLength.setValue(pref.GetFloat("RedundancyToleranceLength", 0.01))
 +        self.form.redundancyToleranceAngle.setValue(pref.GetFloat("RedundancyToleranceAngle", 0.01))
+diff --git a/src/Mod/Assembly/SandboxCompat.py b/src/Mod/Assembly/SandboxCompat.py
+new file mode 100644
+index 0000000000..64e3596a7f
+--- /dev/null
++++ b/src/Mod/Assembly/SandboxCompat.py
+@@ -0,0 +1,598 @@
++# SPDX-License-Identifier: LGPL-2.1-or-later
++# /**************************************************************************
++#                                                                           *
++#    This file is part of FreeCAD.                                          *
++#                                                                           *
++#    FreeCAD is free software: you can redistribute it and/or modify it     *
++#    under the terms of the GNU Lesser General Public License as            *
++#    published by the Free Software Foundation, either version 2.1 of the   *
++#    License, or (at your option) any later version.                        *
++#                                                                           *
++#    FreeCAD is distributed in the hope that it will be useful, but         *
++#    WITHOUT ANY WARRANTY; without even the implied warranty of             *
++#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU       *
++#    Lesser General Public License for more details.                        *
++#                                                                           *
++#    You should have received a copy of the GNU Lesser General Public       *
++#    License along with FreeCAD. If not, see                                *
++#    <https://www.gnu.org/licenses/>.                                       *
++#                                                                           *
++# **************************************************************************/
++
++# FCPROJECT-PATCH (2026-11-05, Nutzerauftrag "Datei normalisieren / mit FreeCAD kompatibel machen
++# innerhalb Projekt und Verknüpfungen", Plan plans/2026-11-05-datei-normalisieren.md).
++#
++# Dateiformat: die Sandbox schreibt keine eigenen Eigenschaften, jede Sandbox-Datei öffnet in
++# normalem FreeCAD. Unterschiede gibt es an zwei Stellen:
++#   1. Aufbau: normales FreeCAD führt in flexiblen Unterbaugruppen Kopien der inneren Gelenke,
++#      die Sandbox nicht ("Adressieren statt Kopieren"). Die Weekly legt sie beim Laden selbst an,
++#      die stabile 1.1.4 NICHT (gemessen 2026-11-05) - dort ist die Unterbaugruppe innen ohne
++#      Gelenk. Das Normalisieren lässt deshalb ein normales FreeCAD die Kopien anlegen
++#      (reference-finish), damit der Aufbau exakt dessen eigener ist.
++#   2. Deutung: manche Gelenke löst normales FreeCAD anders (Punkt auf Kurve, Mehrfachinstanzen,
++#      Grenzen ...). Das ist nicht reparierbar, nur meldbar; die Gegenprobe (reference-check)
++#      misst, welches Teil sich wie weit bewegt.
++#
++# Alles laeuft in eigenen FreeCAD-Prozessen auf KOPIEN der Dateien (SandboxCompatWorker.py) -
++# die geöffneten Dokumente und die Originale bleiben unberührt.
++
++import json
++import os
++import shutil
++import subprocess
++import tempfile
++import time
++import zipfile
++
++import FreeCAD as App
++
++PREF_PATH = "User parameter:BaseApp/Preferences/Mod/Assembly"
++PREF_REFERENCE = "SandboxCompatReferenceFreeCAD"
++
++# Standard für die Gegenprobe (Nutzerentscheidung 2026-11-05: Weekly-AppImage), danach weitere
++# übliche Orte. Auf fremden Rechnern stellt der Nutzer den Pfad im Dialog ein.
++REFERENCE_CANDIDATES = (
++    "/home/maxx/freecad/App_weekly/freecad.App",
++    "/home/maxx/freecad/App_stable/freecad.App",
++    "/usr/bin/FreeCADCmd",
++    "/usr/bin/freecadcmd",
++    "/usr/bin/freecad",
++)
++
++WORKER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "SandboxCompatWorker.py")
++
++# Umgebungsvariablen, die die Sandbox-Umgebung (Pixi/conda, eigene Bibliotheken) setzt und die ein
++# fremdes FreeCAD durcheinanderbringen wuerden.
++_FOREIGN_ENV = (
++    "LD_LIBRARY_PATH",
++    "PYTHONPATH",
++    "PYTHONHOME",
++    "PYTHONNOUSERSITE",
++    "CONDA_PREFIX",
++    "CONDA_DEFAULT_ENV",
++    "CONDA_SHLVL",
++    "PIXI_PROJECT_ROOT",
++    "QT_PLUGIN_PATH",
++    "QT_QPA_PLATFORM_PLUGIN_PATH",
++    "QML2_IMPORT_PATH",
++    "FREECAD_USER_HOME",
++    "SSL_CERT_FILE",
++)
++
++LEVEL_RED = "rot"
++LEVEL_YELLOW = "gelb"
++LEVEL_INFO = "info"
++
++
++# --------------------------------------------------------------------------- Einstellungen
++
++
++def referenceFreeCAD():
++    """Pfad des normalen FreeCAD für Gegenprobe/Abschluss, oder '' wenn keins gefunden."""
++    path = App.ParamGet(PREF_PATH).GetString(PREF_REFERENCE, "")
++    if path and os.path.exists(path):
++        return path
++    for cand in REFERENCE_CANDIDATES:
++        if os.path.exists(cand):
++            return cand
++    return ""
++
++
++def setReferenceFreeCAD(path):
++    App.ParamGet(PREF_PATH).SetString(PREF_REFERENCE, path or "")
++
++
++def _isAppImage(path):
++    try:
++        with open(path, "rb") as f:
++            head = f.read(11)
++        return head[8:11] == b"AI\x02"
++    except OSError:
++        return False
++
++
++def _commandFor(path):
++    """Befehlszeile für FreeCAD ohne Oberfläche aus einem Pfad (AppImage, Binary, Ordner)."""
++    if os.path.isdir(path):
++        for name in ("FreeCADCmd", "freecadcmd"):
++            cand = os.path.join(path, "bin", name)
++            if os.path.exists(cand):
++                return [cand]
++        return None
++    if _isAppImage(path):
++        return [path, "freecadcmd"]
++    base = os.path.basename(path)
++    if base.lower() in ("freecadcmd", "freecadcmd.exe"):
++        return [path]
++    folder = os.path.dirname(path)
++    for name in ("FreeCADCmd", "freecadcmd", "FreeCADCmd.exe"):
++        cand = os.path.join(folder, name)
++        if os.path.exists(cand):
++            return [cand]
++    return None
++
++
++def sandboxCommand():
++    """FreeCAD ohne Oberfläche aus DIESER Installation (Sandbox)."""
++    home = App.getHomePath()
++    for name in ("FreeCADCmd", "freecadcmd"):
++        cand = os.path.join(home, "bin", name)
++        if os.path.exists(cand):
++            return [cand]
++    return None
++
++
++# --------------------------------------------------------------------------- Projekt einsammeln
++
++
++class Project:
++    """Aktives Dokument plus alle Dateien, auf die es (rekursiv) verweist."""
++
++    def __init__(self, doc):
++        self.doc = doc
++        self.docs = [d for d in doc.getDependentDocuments(True)]
++        self.unsaved = [d.Label for d in self.docs if not d.FileName]
++        self.modified = [d.Label for d in self.docs if d.FileName and d.isTouched()]
++        self.files = []
++        for d in self.docs:
++            if d.FileName and d.FileName not in self.files:
++                self.files.append(os.path.normpath(d.FileName))
++        top = os.path.normpath(doc.FileName) if doc.FileName else None
++        # Hauptdatei zuletzt: erst die Unterbaugruppen, dann wer sie einbaut
++        if top in self.files:
++            self.files.remove(top)
++            self.files.append(top)
++        self.top = top
++        folders = [os.path.dirname(f) for f in self.files]
++        self.root = os.path.commonpath(folders) if folders else ""
++
++    def relative(self, path):
++        return os.path.relpath(path, self.root)
++
++    def copyTo(self, target):
++        """Alle Projektdateien mit gleicher Ordnerstruktur kopieren (relative Verweise bleiben
++        gültig). Gibt die neuen Pfade in derselben Reihenfolge zurück."""
++        out = []
++        for f in self.files:
++            dst = os.path.join(target, self.relative(f))
++            os.makedirs(os.path.dirname(dst), exist_ok=True)
++            shutil.copy2(f, dst)
++            out.append(dst)
++        return out
++
++
++# --------------------------------------------------------------------------- statische Prüfung
++
++
++def _subShape(obj, sub):
++    try:
++        import Part
++
++        return Part.getShape(obj, sub, needSubElement=True, noElementMap=True)
++    except Exception:  # noqa: BLE001
++        return None
++
++
++def _refKind(ref):
++    """'vertex', 'line', 'curve', 'face' oder None für eine Gelenkreferenz."""
++    try:
++        obj, subs = ref[0], ref[1]
++        sub = subs[0] if subs else ""
++    except Exception:  # noqa: BLE001
++        return None
++    element = sub.split(".")[-1] if sub else ""
++    if element.startswith("Vertex"):
++        return "vertex"
++    if element.startswith("Face"):
++        return "face"
++    if element.startswith("Edge"):
++        shape = _subShape(obj, sub)
++        try:
++            import Part
++
++            if shape is not None and isinstance(shape.Curve, (Part.Line, Part.LineSegment)):
++                return "line"
++        except Exception:  # noqa: BLE001
++            pass
++        return "curve"
++    return None
++
++
++def _distanceValue(joint):
++    d = getattr(joint, "Distance", 0.0)
++    return getattr(d, "Value", d)
++
++
++def isPointOnCurve(joint):
++    if getattr(joint, "JointType", "") != "Distance" or abs(_distanceValue(joint)) > 1e-9:
++        return False
++    kinds = {_refKind(getattr(joint, "Reference1", None)), _refKind(getattr(joint, "Reference2", None))}
++    return kinds == {"vertex", "curve"}
++
++
++def _hasLimits(joint):
++    return any(
++        getattr(joint, p, False)
++        for p in ("EnableLengthMin", "EnableLengthMax", "EnableAngleMin", "EnableAngleMax")
++    )
++
++
++def staticFindings(project):
++    """Regeln aus dem Plan, Abschnitt 1b. Liste von dicts (file, name, label, level, text)."""
++    findings = []
++    linkTargets = {}
++    for doc in project.docs:
++        path = os.path.normpath(doc.FileName) if doc.FileName else doc.Label
++        for obj in doc.Objects:
++            if hasattr(obj, "JointType") and not getattr(obj, "Suppressed", False):
++                if isPointOnCurve(obj):
++                    findings.append(
++                        dict(
++                            file=path,
++                            name=obj.Name,
++                            label=obj.Label,
++                            level=LEVEL_RED,
++                            kind="pointOnCurve",
++                            text="Punkt auf Kurve (Abstand 0): normales FreeCAD kennt das nicht "
++                            "und löst es als gewöhnliches Abstandsgelenk - das Teil springt.",
++                        )
++                    )
++                if _hasLimits(obj):
++                    findings.append(
++                        dict(
++                            file=path,
++                            name=obj.Name,
++                            label=obj.Label,
++                            level=LEVEL_INFO,
++                            kind="limits",
++                            text="Gelenkgrenzen: normales FreeCAD beachtet sie nur beim Ziehen, "
++                            "nicht beim Lösen und nicht in der Simulation.",
++                        )
++                    )
++            if obj.TypeId == "Assembly::AssemblyLink":
++                target = getattr(obj, "LinkedObject", None)
++                if target is not None:
++                    linkTargets.setdefault(target.FullName, []).append((path, obj))
++    for target, uses in linkTargets.items():
++        if len(uses) < 2:
++            continue
++        for path, obj in uses:
++            findings.append(
++                dict(
++                    file=path,
++                    name=obj.Name,
++                    label=obj.Label,
++                    level=LEVEL_YELLOW,
++                    kind="duplicateInstance",
++                    text=f"Unterbaugruppe {len(uses)}x eingebaut: normales FreeCAD verliert "
++                    "Gelenke an den weiteren Instanzen oder ordnet sie falsch zu.",
++                )
++            )
++    return findings
++
++
++# --------------------------------------------------------------------------- Arbeitsprozesse
++
++
++def _cleanEnv(foreign):
++    env = dict(os.environ)
++    if foreign:
++        for k in _FOREIGN_ENV:
++            env.pop(k, None)
++    env.pop("SESSION_MANAGER", None)
++    return env
++
++
++def runWorker(cmd, mode, files, foreign, extra=None, timeout=900, progress=None):
++    """Startet SandboxCompatWorker.py in einem eigenen FreeCAD-Prozess. progress(text) wird
++    während des Wartens regelmaessig aufgerufen (Oberfläche bedienbar halten); gibt es False
++    zurück, wird abgebrochen."""
++    work = tempfile.mkdtemp(prefix="fc-sandbox-compat-")
++    try:
++        jobPath = os.path.join(work, "job.json")
++        outPath = os.path.join(work, "out.json")
++        profile = os.path.join(work, "profile")
++        os.makedirs(profile)
++        job = {"mode": mode, "files": files, "out": outPath}
++        job.update(extra or {})
++        with open(jobPath, "w", encoding="utf-8") as f:
++            json.dump(job, f)
++        env = _cleanEnv(foreign)
++        env["SANDBOX_COMPAT_JOB"] = jobPath
++        # eigenes, leeres Profil: der Hilfsprozess soll weder Addons laden noch beim Beenden die
++        # Einstellungen der laufenden Sitzung überschreiben
++        env["FREECAD_USER_HOME"] = profile
++        logPath = os.path.join(work, "log.txt")
++        with open(logPath, "w", encoding="utf-8") as log:
++            proc = subprocess.Popen(
++                cmd + [WORKER], env=env, cwd=work, stdout=log, stderr=subprocess.STDOUT
++            )
++            start = time.time()
++            while proc.poll() is None:
++                if time.time() - start > timeout:
++                    proc.kill()
++                    return {"error": f"Zeitüberschreitung nach {timeout} s ({' '.join(cmd)})"}
++                if progress is not None and progress(f"{mode}: {int(time.time() - start)} s") is False:
++                    proc.kill()
++                    return {"error": "abgebrochen"}
++                time.sleep(0.2)
++        if not os.path.exists(outPath):
++            with open(logPath, encoding="utf-8", errors="replace") as log:
++                tail = log.read()[-1500:]
++            return {"error": f"kein Ergebnis von {' '.join(cmd)}:\n{tail}"}
++        with open(outPath, encoding="utf-8") as f:
++            return json.load(f)
++    finally:
++        shutil.rmtree(work, ignore_errors=True)
++
++
++def stripSandboxMark(path):
++    """Kennung '-sandbox' aus ProgramVersion im Dateikopf entfernen (nur falls vorhanden)."""
++    import re
++
++    pattern = re.compile(r'(ProgramVersion="[^"]*?)-sandbox([^"]*")')
++    with zipfile.ZipFile(path) as z:
++        xml = z.read("Document.xml").decode("utf-8")
++        newText, n = pattern.subn(r"\1\2", xml, count=1)
++        if n == 0:
++            return False
++        items = [(i, z.read(i.filename)) for i in z.infolist()]
++    newXml = newText.encode("utf-8")
++    tmp = path + ".tmp"
++    with zipfile.ZipFile(tmp, "w") as out:
++        for info, data in items:
++            out.writestr(info, newXml if info.filename == "Document.xml" else data)
++    os.replace(tmp, path)
++    return True
++
++
++# --------------------------------------------------------------------------- Abläufe
++
++
++def _missingCopies(result):
++    """Labels flexibler Unterbaugruppen, denen in normalem FreeCAD Gelenkkopien fehlen."""
++    return [
++        label
++        for label, n, expected in (result.get("jointCopies") or {}).values()
++        if expected and n < expected
++    ]
++
++
++class Report:
++    def __init__(self, project):
++        self.project = project
++        self.static = []
++        self.reference = None  # Ergebnis reference-check
++        self.referenceVersion = ""
++        self.finish = None
++        self.notes = []
++        self.errors = []
++        self.target = None
++
++    def worstLevel(self):
++        levels = [f["level"] for f in self.static]
++        if self.reference:
++            for r in self.reference:
++                if r.get("moves") or r.get("broken") or r.get("error"):
++                    levels.append(LEVEL_RED)
++                if _missingCopies(r):
++                    levels.append(LEVEL_YELLOW)
++        if self.errors:
++            levels.append(LEVEL_RED)
++        for lvl in (LEVEL_RED, LEVEL_YELLOW, LEVEL_INFO):
++            if lvl in levels:
++                return lvl
++        return "gruen"
++
++
++def _check(report, files, reference, progress):
++    cmd = _commandFor(reference) if reference else None
++    if not cmd:
++        report.notes.append(
++            "Keine Gegenprobe: kein normales FreeCAD eingestellt oder gefunden. Es gibt nur die "
++            "statische Prüfung."
++        )
++        return
++    res = runWorker(cmd, "reference-check", files, True, progress=progress)
++    if "error" in res:
++        report.errors.append("Gegenprobe: " + res["error"])
++        return
++    report.referenceVersion = f"{res.get('version', '?')} ({res.get('build', '')})"
++    report.reference = res.get("results", [])
++    for r in report.reference:
++        r["rel"] = os.path.relpath(r["file"], os.path.dirname(files[-1]))
++
++
++def checkProject(doc, reference, progress=None):
++    """Prüfen: nichts an den Originalen aendern. Kopie in einen Temp-Ordner, dort in der Sandbox
++    loesen und speichern, dann Gegenprobe mit normalem FreeCAD auf einer zweiten Kopie."""
++    project = Project(doc)
++    report = Report(project)
++    report.static = staticFindings(project)
++    if not project.files:
++        report.errors.append("Dokument ist nicht gespeichert.")
++        return report
++    tmp = tempfile.mkdtemp(prefix="fc-sandbox-check-")
++    try:
++        files = project.copyTo(tmp)
++        cmd = sandboxCommand()
++        if cmd:
++            res = runWorker(cmd, "sandbox-solve", files, False, progress=progress)
++            if "error" in res:
++                report.errors.append("Sandbox-Lösen: " + res["error"])
++        _check(report, files, reference, progress)
++    finally:
++        shutil.rmtree(tmp, ignore_errors=True)
++    return report
++
++
++def normalizeProject(doc, target, reference, suppressUnsupported, progress=None):
++    """Normalisieren in einen NEUEN Ordner. Originale bleiben unberührt."""
++    project = Project(doc)
++    report = Report(project)
++    report.static = staticFindings(project)
++    report.target = target
++    if not project.files:
++        report.errors.append("Dokument ist nicht gespeichert.")
++        return report
++    if os.path.exists(target) and os.listdir(target):
++        report.errors.append(f"Zielordner ist nicht leer: {target}")
++        return report
++    files = project.copyTo(target)
++    mapping = dict(zip(project.files, files))
++
++    suppress = []
++    if suppressUnsupported:
++        for f in report.static:
++            if f["kind"] == "pointOnCurve" and f["file"] in mapping:
++                suppress.append([mapping[f["file"]], f["name"]])
++                f["text"] += " In der Kopie deaktiviert."
++                f["level"] = LEVEL_YELLOW
++
++    # 1. in der Sandbox loesen (Lagen wie in der Sandbox), ggf. Gelenke deaktivieren, speichern
++    cmd = sandboxCommand()
++    if cmd:
++        res = runWorker(cmd, "sandbox-solve", files, False, {"suppress": suppress}, progress=progress)
++        if "error" in res:
++            report.errors.append("Sandbox-Lösen: " + res["error"])
++            return report
++        for r in res.get("results", []):
++            if r.get("error"):
++                report.errors.append(f"{os.path.basename(r['file'])}: {r['error']}")
++    else:
++        report.errors.append("FreeCADCmd dieser Installation nicht gefunden.")
++        return report
++
++    # 2. normales FreeCAD legt seine Gelenkkopien an (ohne zu loesen) und speichert
++    refCmd = _commandFor(reference) if reference else None
++    if refCmd:
++        res = runWorker(refCmd, "reference-finish", files, True, progress=progress)
++        if "error" in res:
++            report.errors.append("Abschluss mit normalem FreeCAD: " + res["error"])
++        else:
++            report.finish = res.get("results", [])
++    else:
++        report.notes.append(
++            "Ohne normales FreeCAD fehlen in flexiblen Unterbaugruppen dessen Gelenkkopien; "
++            "FreeCAD 1.1 legt sie beim Öffnen nicht selbst an."
++        )
++
++    # 3. Kopfzeile säubern
++    for f in files:
++        try:
++            if stripSandboxMark(f):
++                report.notes.append(f"Sandbox-Kennung entfernt: {os.path.basename(f)}")
++        except Exception as e:  # noqa: BLE001
++            report.errors.append(f"{os.path.basename(f)}: Kopf nicht lesbar ({e})")
++
++    # 4. Gegenprobe auf einer Wegwerf-Kopie des Ergebnisses
++    tmp = tempfile.mkdtemp(prefix="fc-sandbox-check-")
++    try:
++        checkFiles = []
++        for f in files:
++            dst = os.path.join(tmp, os.path.relpath(f, target))
++            os.makedirs(os.path.dirname(dst), exist_ok=True)
++            shutil.copy2(f, dst)
++            checkFiles.append(dst)
++        _check(report, checkFiles, reference, progress)
++    finally:
++        shutil.rmtree(tmp, ignore_errors=True)
++    return report
++
++
++# --------------------------------------------------------------------------- Bericht
++
++
++def reportHtml(report, title):
++    colors = {LEVEL_RED: "#d33", LEVEL_YELLOW: "#c90", LEVEL_INFO: "#38c", "gruen": "#393"}
++    words = {LEVEL_RED: "verhält sich anders", LEVEL_YELLOW: "Hinweis", LEVEL_INFO: "Info", "gruen": "identisch"}
++    worst = report.worstLevel()
++    p = report.project
++    html = [f"<h3>{title}</h3>"]
++    html.append(
++        f"<p><b style='color:{colors[worst]}'>Gesamt: {words[worst]}</b><br>"
++        f"Projektordner: {p.root}<br>{len(p.files)} Datei(en)"
++        + (f"<br>Ziel: {report.target}" if report.target else "")
++        + (f"<br>Gegenprobe mit FreeCAD {report.referenceVersion}" if report.referenceVersion else "")
++        + "</p>"
++    )
++    if p.unsaved or p.modified:
++        html.append(
++            "<p style='color:#c90'>Nicht gespeicherte Änderungen werden nicht berücksichtigt: "
++            + ", ".join(p.unsaved + p.modified)
++            + "</p>"
++        )
++    for e in report.errors:
++        html.append(f"<p style='color:#d33'><b>Fehler:</b> {e}</p>")
++    if report.static:
++        html.append("<h4>Gelenke und Unterbaugruppen</h4><table cellpadding='3'>")
++        for f in report.static:
++            html.append(
++                f"<tr><td style='color:{colors[f['level']]}'>&#9679;</td>"
++                f"<td>{os.path.relpath(f['file'], p.root) if p.root else f['file']}</td>"
++                f"<td><b>{f['label']}</b></td><td>{f['text']}</td></tr>"
++            )
++        html.append("</table>")
++    if report.reference is not None:
++        html.append("<h4>Gegenprobe: so sieht es in normalem FreeCAD aus</h4><table cellpadding='3'>")
++        for r in report.reference:
++            name = os.path.basename(r["file"])
++            if r.get("error"):
++                html.append(f"<tr><td style='color:#d33'>&#9679;</td><td>{name}</td><td>{r['error']}</td></tr>")
++                continue
++            parts = []
++            if r.get("broken"):
++                parts.append("Fehlerhafte Objekte: " + ", ".join(r["broken"]))
++            missing = _missingCopies(r)
++            if missing:
++                parts.append(
++                    "flexible Unterbaugruppe ohne Gelenkkopien (fällt beim Ziehen auseinander): "
++                    + ", ".join(missing)
++                )
++            for label, dist, angle in (r.get("moves") or [])[:8]:
++                parts.append(f"{label}: verschoben {dist:g} mm, gedreht {angle:g}&deg;")
++            bad = [s for s in r.get("solve", []) if s[1] not in (0, "0")]
++            for asm, code in bad:
++                parts.append(f"Lösen von {asm} meldet {code}")
++            level = LEVEL_RED if (r.get("moves") or r.get("broken") or bad) else (LEVEL_YELLOW if missing else "gruen")
++            text = "<br>".join(parts) if parts else "keine Bewegung, keine Fehler"
++            html.append(f"<tr><td style='color:{colors[level]}'>&#9679;</td><td>{name}</td><td>{text}</td></tr>")
++        html.append("</table>")
++    if report.finish:
++        made, shifted = [], []
++        for r in report.finish:
++            for label, n, expected in (r.get("jointCopies") or {}).values():
++                if expected:
++                    made.append(f"{os.path.basename(r['file'])}: {label} ({n} von {expected} Gelenken)")
++            for label, dist, angle in (r.get("movedOnRecompute") or [])[:8]:
++                shifted.append(f"{os.path.basename(r['file'])}: {label} {dist:g} mm / {angle:g}&deg;")
++        if made:
++            html.append("<h4>Gelenkkopien für normales FreeCAD angelegt</h4><p>" + "<br>".join(made) + "</p>")
++        if shifted:
++            html.append(
++                "<p style='color:#c90'>Normales FreeCAD hat beim Neuberechnen verschoben (in der Kopie "
++                "auf die Sandbox-Lage zurückgesetzt):<br>" + "<br>".join(shifted) + "</p>"
++            )
++    for n in report.notes:
++        html.append(f"<p style='color:#38c'>{n}</p>")
++    return "\n".join(html)
+diff --git a/src/Mod/Assembly/SandboxCompatWorker.py b/src/Mod/Assembly/SandboxCompatWorker.py
+new file mode 100644
+index 0000000000..999985fe3e
+--- /dev/null
++++ b/src/Mod/Assembly/SandboxCompatWorker.py
+@@ -0,0 +1,220 @@
++# SPDX-License-Identifier: LGPL-2.1-or-later
++# /**************************************************************************
++#                                                                           *
++#    This file is part of FreeCAD.                                          *
++#                                                                           *
++#    FreeCAD is free software: you can redistribute it and/or modify it     *
++#    under the terms of the GNU Lesser General Public License as            *
++#    published by the Free Software Foundation, either version 2.1 of the   *
++#    License, or (at your option) any later version.                        *
++#                                                                           *
++#    FreeCAD is distributed in the hope that it will be useful, but         *
++#    WITHOUT ANY WARRANTY; without even the implied warranty of             *
++#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU       *
++#    Lesser General Public License for more details.                        *
++#                                                                           *
++#    You should have received a copy of the GNU Lesser General Public       *
++#    License along with FreeCAD. If not, see                                *
++#    <https://www.gnu.org/licenses/>.                                       *
++#                                                                           *
++# **************************************************************************/
++
++# FCPROJECT-PATCH (2026-11-05, Befehl "Für FreeCAD prüfen/normalisieren", siehe
++# plans/2026-11-05-datei-normalisieren.md): Arbeitsskript für einen eigenen FreeCAD-Prozess ohne
++# Oberfläche (FreeCADCmd). Laeuft sowohl in der Sandbox als auch in einem NORMALEN FreeCAD
++# (Weekly, 1.1.x) - darf deshalb nichts aus der Sandbox importieren und nur Python-API nutzen,
++# die es in normalem FreeCAD gibt.
++#
++# Auftrag kommt als JSON-Datei, Pfad in der Umgebungsvariable SANDBOX_COMPAT_JOB:
++#   {"mode": "...", "files": [...], "out": "<ergebnis.json>", ...}
++# Modi:
++#   sandbox-solve    jede Datei oeffnen, alle Baugruppen loesen, ggf. Gelenke deaktivieren
++#                    ("suppress": [[datei, objektname], ...]), speichern
++#   reference-finish jede Datei oeffnen, flexible Unterbaugruppen neu berechnen lassen (normales
++#                    FreeCAD legt dabei seine Gelenkkopien an), speichern - NICHT loesen
++#   reference-check  jede Datei oeffnen, Lagen merken, alle Baugruppen loesen, Bewegung je Teil
++#                    messen; nichts speichern
++
++import json
++import math
++import os
++import traceback
++
++import FreeCAD as App
++
++
++def _closeAll():
++    for name in list(App.listDocuments().keys()):
++        try:
++            App.closeDocument(name)
++        except Exception:
++            pass
++
++
++def _assemblies(doc):
++    return [o for o in doc.Objects if o.TypeId == "Assembly::AssemblyObject"]
++
++
++def _placements(doc):
++    result = {}
++    for o in doc.Objects:
++        if o.TypeId in ("App::Link", "Assembly::AssemblyLink", "App::Part", "PartDesign::Body") or (
++            o.isDerivedFrom("Part::Feature") and o.getParentGeoFeatureGroup() is not None
++        ):
++            plc = getattr(o, "Placement", None)
++            if plc is not None:
++                result[o.Name] = (o.Label, list(plc.Base), list(plc.Rotation.Q))
++    return result
++
++
++def _jointCopies(doc):
++    """Flexible Unterbaugruppen: (Label, Gelenkkopien darin, Gelenke im Original, die normales
++    FreeCAD kopieren wuerde). Starre Gruppen und Erdungen haben keinen JointType und werden von
++    normalem FreeCAD nicht kopiert - sie zaehlen nicht mit."""
++    out = {}
++    for o in doc.Objects:
++        if o.TypeId != "Assembly::AssemblyLink" or getattr(o, "Rigid", True):
++            continue
++        n = 0
++        for g in o.Group:
++            if g.TypeId == "Assembly::JointGroup":
++                n += len(g.Group)
++        expected = 0
++        src = getattr(o, "LinkedObject", None)
++        for g in getattr(src, "Group", []) or []:
++            if g.TypeId == "Assembly::JointGroup":
++                expected += sum(
++                    1
++                    for j in g.Group
++                    if hasattr(j, "JointType") and not getattr(j, "Suppressed", False)
++                )
++        out[o.Name] = (o.Label, n, expected)
++    return out
++
++
++def _brokenObjects(doc):
++    return [o.Label for o in doc.Objects if "Invalid" in o.State or "Error" in o.State]
++
++
++def _solveAll(doc):
++    codes = []
++    for asm in _assemblies(doc):
++        try:
++            codes.append([asm.Label, int(asm.solve())])
++        except Exception as e:  # noqa: BLE001
++            codes.append([asm.Label, str(e)])
++    return codes
++
++
++def _movement(before, after):
++    moves = []
++    for name, (label, base0, q0) in before.items():
++        if name not in after:
++            continue
++        _, base1, q1 = after[name]
++        dist = math.dist(base0, base1)
++        dot = min(1.0, abs(sum(a * b for a, b in zip(q0, q1))))
++        angle = math.degrees(2.0 * math.acos(dot))
++        if dist > 1e-4 or angle > 1e-3:
++            moves.append([label, round(dist, 4), round(angle, 3)])
++    moves.sort(key=lambda m: -(m[1] + m[2] / 10.0))
++    return moves
++
++
++def _sandboxSolve(job):
++    suppress = {}
++    for path, objName in job.get("suppress", []):
++        suppress.setdefault(os.path.normpath(path), []).append(objName)
++    results = []
++    for path in job["files"]:
++        entry = {"file": path}
++        try:
++            doc = App.openDocument(path)
++            entry["solve"] = _solveAll(doc)
++            done = []
++            for objName in suppress.get(os.path.normpath(path), []):
++                obj = doc.getObject(objName)
++                if obj is not None and hasattr(obj, "Suppressed"):
++                    obj.Suppressed = True
++                    done.append(obj.Label)
++            entry["suppressed"] = done
++            doc.recompute()
++            doc.save()
++        except Exception:  # noqa: BLE001
++            entry["error"] = traceback.format_exc(limit=3)
++        _closeAll()
++        results.append(entry)
++    return results
++
++
++def _referenceFinish(job):
++    results = []
++    for path in job["files"]:
++        entry = {"file": path}
++        try:
++            doc = App.openDocument(path)
++            links = [
++                o
++                for o in doc.Objects
++                if o.TypeId == "Assembly::AssemblyLink" and not getattr(o, "Rigid", True)
++            ]
++            before = _placements(doc)
++            for link in links:
++                link.touch()
++            doc.recompute()
++            entry["jointCopies"] = _jointCopies(doc)
++            # Neuberechnen kann in normalem FreeCAD schon loesen und Teile verschieben. Die Kopie
++            # soll aber die Lagen der Sandbox behalten - die Abweichung meldet die Gegenprobe.
++            entry["movedOnRecompute"] = _movement(before, _placements(doc))
++            for name, (_label, base, q) in before.items():
++                obj = doc.getObject(name)
++                if obj is not None:
++                    obj.Placement = App.Placement(App.Vector(*base), App.Rotation(*q))
++            doc.save()
++        except Exception:  # noqa: BLE001
++            entry["error"] = traceback.format_exc(limit=3)
++        _closeAll()
++        results.append(entry)
++    return results
++
++
++def _referenceCheck(job):
++    results = []
++    for path in job["files"]:
++        entry = {"file": path}
++        try:
++            doc = App.openDocument(path)
++            entry["broken"] = _brokenObjects(doc)
++            entry["jointCopies"] = _jointCopies(doc)
++            before = _placements(doc)
++            entry["solve"] = _solveAll(doc)
++            entry["moves"] = _movement(before, _placements(doc))
++            entry["brokenAfter"] = _brokenObjects(doc)
++        except Exception:  # noqa: BLE001
++            entry["error"] = traceback.format_exc(limit=3)
++        _closeAll()
++        results.append(entry)
++    return results
++
++
++def run():
++    jobPath = os.environ.get("SANDBOX_COMPAT_JOB")
++    if not jobPath:
++        return
++    with open(jobPath, encoding="utf-8") as f:
++        job = json.load(f)
++    handlers = {
++        "sandbox-solve": _sandboxSolve,
++        "reference-finish": _referenceFinish,
++        "reference-check": _referenceCheck,
++    }
++    out = {"version": ".".join(App.Version()[0:3]), "build": App.Version()[3]}
++    try:
++        out["results"] = handlers[job["mode"]](job)
++    except Exception:  # noqa: BLE001
++        out["error"] = traceback.format_exc(limit=5)
++    with open(job["out"], "w", encoding="utf-8") as f:
++        json.dump(out, f)
++
++
++run()
 diff --git a/src/Mod/Assembly/SoSwitchMarker.py b/src/Mod/Assembly/SoSwitchMarker.py
-index 841105d2956..52a553489c0 100644
+index 841105d295..52a553489c 100644
 --- a/src/Mod/Assembly/SoSwitchMarker.py
 +++ b/src/Mod/Assembly/SoSwitchMarker.py
 @@ -145,8 +145,8 @@ class SoSwitchMarker(coin.SoSwitch):
@@ -12493,7 +13591,7 @@ index 841105d2956..52a553489c0 100644
          t = placement.Base
          self.transform.translation.setValue(t.x, t.y, t.z)
 diff --git a/src/Mod/Assembly/UtilsAssembly.py b/src/Mod/Assembly/UtilsAssembly.py
-index ff000e06748..7b288a31ce0 100644
+index ff000e0674..7b288a31ce 100644
 --- a/src/Mod/Assembly/UtilsAssembly.py
 +++ b/src/Mod/Assembly/UtilsAssembly.py
 @@ -379,7 +379,12 @@ def getRootPath(obj, part):

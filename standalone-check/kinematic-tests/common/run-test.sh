@@ -126,7 +126,14 @@ LOG_FILE="/tmp/freecad-kinematic-test-${INSTALL_TAG}-$(basename "$TEST_SCRIPT" .
 # WICHTIG (Lektion aus docs/JOURNAL.md): stdout eines Gui-Prozesses ist unzuverlaessig (print()
 # landet ueber die Report-View-Umleitung, nicht garantiert auf dem eigenen stdout) - IMMER das
 # echte --log-file auswerten, nie nur die Bash-Ausgabe.
-timeout ${KINEMATIC_TEST_TIMEOUT:-60} "$FC_BIN" -l --log-file "$LOG_FILE" "${SCRIPT_DIR}/run_under_gui.py" >/dev/null 2>&1 || true
+# Zeitlimit: KINEMATIC_TEST_TIMEOUT > Datei TIMEOUT im Testordner (2026-11-05, fuer Tests mit
+# eigenen FreeCAD-Hilfsprozessen) > 60 s.
+TEST_TIMEOUT_FILE="$(dirname "$TEST_SCRIPT")/TIMEOUT"
+DEFAULT_TIMEOUT=60
+if [[ -f "$TEST_TIMEOUT_FILE" ]]; then
+    DEFAULT_TIMEOUT="$(tr -dc '0-9' < "$TEST_TIMEOUT_FILE")"
+fi
+timeout ${KINEMATIC_TEST_TIMEOUT:-${DEFAULT_TIMEOUT:-60}} "$FC_BIN" -l --log-file "$LOG_FILE" "${SCRIPT_DIR}/run_under_gui.py" >/dev/null 2>&1 || true
 
 echo "=== ${INSTALL_DIR} / $(basename "$TEST_SCRIPT") ==="
 grep "^Msg:" "$LOG_FILE" | sed 's/^Msg: //'
