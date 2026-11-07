@@ -1,0 +1,52 @@
+diff --git a/src/Gui/TaskView/TaskView.cpp b/src/Gui/TaskView/TaskView.cpp
+index 563cd1400f..2c026aa7f8 100644
+--- a/src/Gui/TaskView/TaskView.cpp
++++ b/src/Gui/TaskView/TaskView.cpp
+@@ -1003,10 +1003,19 @@ void TaskView::accept(App::Document* doc)
+ 
+     // Make sure that if 'accept' calls 'closeDialog' the deletion is postponed until
+     // the dialog leaves the 'accept' method
+-    foundTaskInfo->ActiveDialog->setProperty("taskview_accept_or_reject", true);
+-    bool success = foundTaskInfo->ActiveDialog->accept();
+-    foundTaskInfo->ActiveDialog->setProperty("taskview_accept_or_reject", QVariant());
+-    if (success || foundTaskInfo->ActiveDialog->property("taskview_remove_dialog").isValid()) {
++    // FCPROJECT-PATCH (2026-11-07): 'accept()' can run arbitrary code (recompute, resetEdit,
++    // activating another document). slotActiveDocument() may then emplace_back() into taskInfos,
++    // which invalidates foundTaskInfo, and the dialog itself may be gone. Keep a guarded pointer
++    // to the dialog and do not touch the iterator after the call (SIGSEGV in
++    // QObject::doSetProperty from TaskView::reject seen when closing a sketch).
++    QPointer<TaskDialog> dialog = foundTaskInfo->ActiveDialog;
++    dialog->setProperty("taskview_accept_or_reject", true);
++    bool success = dialog->accept();
++    if (!dialog) {
++        return;
++    }
++    dialog->setProperty("taskview_accept_or_reject", QVariant());
++    if (success || dialog->property("taskview_remove_dialog").isValid()) {
+         removeDialog(doc);
+     }
+ }
+@@ -1021,10 +1030,19 @@ void TaskView::reject(App::Document* doc)
+ 
+     // Make sure that if 'reject' calls 'closeDialog' the deletion is postponed until
+     // the dialog leaves the 'reject' method
+-    foundTaskInfo->ActiveDialog->setProperty("taskview_accept_or_reject", true);
+-    bool success = foundTaskInfo->ActiveDialog->reject();
+-    foundTaskInfo->ActiveDialog->setProperty("taskview_accept_or_reject", QVariant());
+-    if (success || foundTaskInfo->ActiveDialog->property("taskview_remove_dialog").isValid()) {
++    // FCPROJECT-PATCH (2026-11-07): 'reject()' can run arbitrary code (recompute, resetEdit,
++    // activating another document). slotActiveDocument() may then emplace_back() into taskInfos,
++    // which invalidates foundTaskInfo, and the dialog itself may be gone. Keep a guarded pointer
++    // to the dialog and do not touch the iterator after the call (SIGSEGV in
++    // QObject::doSetProperty from TaskView::reject seen when closing a sketch).
++    QPointer<TaskDialog> dialog = foundTaskInfo->ActiveDialog;
++    dialog->setProperty("taskview_accept_or_reject", true);
++    bool success = dialog->reject();
++    if (!dialog) {
++        return;
++    }
++    dialog->setProperty("taskview_accept_or_reject", QVariant());
++    if (success || dialog->property("taskview_remove_dialog").isValid()) {
+         removeDialog(doc);
+     }
+ }

@@ -938,8 +938,8 @@ def getCenterOfBoundingBox(objs, refs):
     return center
 
 
-def findCylindersIntersection(obj, surface, edge, elt_index):
-    for j, facej in enumerate(obj.Shape.Faces):
+def findCylindersIntersection(shape, surface, edge, elt_index):
+    for j, facej in enumerate(shape.Faces):
         surfacej = facej.Surface
         if (elt_index - 1) == j or surfacej.TypeId != "Part::GeomCylinder":
             continue
@@ -1054,6 +1054,24 @@ So here we want to find a placement that corresponds to a local coordinate syste
 """
 
 
+def getReferenceOwnerShape(ref):
+    # Same root and subname as getGlobalPlacement, without the element token.
+    # That object's shape is current; a link array's stored compound is not.
+    root = ref[0]
+    sub = ref[1][0]
+    parents = root.Parents
+    if parents is not None and len(parents) == 1 and len(parents[0]) == 2:
+        root = parents[0][0]
+        sub = parents[0][1] + sub
+    dot = sub.rfind(".")
+    if root is None or dot <= 0:
+        return None
+    shape = Part.getShape(root, sub[: dot + 1], App.Matrix(), True)
+    if shape is None or shape.isNull():
+        return None
+    return shape
+
+
 def findPlacement(ref, ignoreVertex=False):
     if not isRefValid(ref, 2):
         return App.Placement()
@@ -1080,15 +1098,28 @@ def findPlacement(ref, ignoreVertex=False):
     elt_type, elt_index = extract_type_and_number(elt)
     vtx_type, _ = extract_type_and_number(vtx)
 
+    shape = obj.Shape
+    useLive = False
+    if isLinkArray(obj):
+        # The array's stored Shape lags behind a moved inner body until the array recomputes.
+        live = getReferenceOwnerShape(ref)
+        if live is not None:
+            try:
+                element = live.getElement(elt)
+            except IndexError:
+                element = None
+            if element is not None and not element.isNull():
+                shape, useLive = live, True
+
     isLine = False
 
     if elt_type == "Vertex":
-        vertex = get_element(obj.Shape, elt)
+        vertex = get_element(shape, elt)
         if vertex is None:
             return App.Placement()
         plc.Base = (vertex.X, vertex.Y, vertex.Z)
     elif elt_type == "Edge":
-        edge = get_element(obj.Shape, elt)
+        edge = get_element(shape, elt)
         if edge is None:
             return App.Placement()
 
@@ -1105,7 +1136,7 @@ def findPlacement(ref, ignoreVertex=False):
                 line_middle = (edge_points[0] + edge_points[1]) * 0.5
                 plc.Base = line_middle
         else:
-            vertex = get_element(obj.Shape, vtx)
+            vertex = get_element(shape, vtx)
             if vertex is None:
                 return App.Placement()
 
@@ -1122,7 +1153,7 @@ def findPlacement(ref, ignoreVertex=False):
             plane = Part.Plane(plane_origin, plane_normal)
             plc.Rotation = App.Rotation(plane.Rotation)
     elif elt_type == "Face":
-        face = get_element(obj.Shape, elt)
+        face = get_element(shape, elt)
         if face is None:
             return App.Placement()
 
@@ -1156,10 +1187,10 @@ def findPlacement(ref, ignoreVertex=False):
                 surface.TypeId == "Part::GeomCylinder" and curve.TypeId == "Part::GeomBSplineCurve"
             ):
                 # handle special case of 2 cylinder intersecting.
-                plc.Base = findCylindersIntersection(obj, surface, edge, elt_index)
+                plc.Base = findCylindersIntersection(shape, surface, edge, elt_index)
 
         else:
-            vertex = get_element(obj.Shape, vtx)
+            vertex = get_element(shape, vtx)
             if vertex is None:
                 return App.Placement()
 
@@ -1169,12 +1200,32 @@ def findPlacement(ref, ignoreVertex=False):
         if hasattr(surface, "Rotation") and surface.Rotation is not None:
             plc.Rotation = App.Rotation(surface.Rotation)
 
-    if hasattr(obj, "ExpandArray"):
-        # For draft arrays, the Shape has both the array placement and the base placement.
-        plc = obj.Base.Placement.inverse() * plc
+    if useLive:
+        # FCPROJECT-PATCH (2026-11-07, Resync auf de81f43ebd): Upstream (d73537dd33) rechnet hier
+        # relativ zu getGlobalPlacement(ref). Bei uns multiplizieren getJcsGlobalPlc() und der
+        # C++-Solver (getJcsReferenceGlobalPlacement) aber nur bis getObject(ref) - dasselbe
+        # Bezugssystem muss auch hier stehen, sonst sitzt das Gelenk am Link-Array-Element versetzt.
+        plc = getGlobalPlacement(ref, obj).inverse() * plc
+    else:
+        if hasattr(obj, "ExpandArray"):
+            # For draft arrays, the Shape has both the array placement and the base placement.
+            plc = obj.Base.Placement.inverse() * plc
 
-    # change plc to be relative to the object placement.
-    plc = obj.Placement.inverse() * plc
+        # change plc to be relative to the object placement.
+        plc = obj.Placement.inverse() * plc
+
+        if isLinkArray(obj):
+            # Child placements are already in the array shape, except a linked
+            # object's own Placement when LinkTransform is off.
+            sub = ref[1][0]
+            if ref[0] != obj and sub:
+                names = sub.split(".")
+                if obj.Name in names:
+                    sub = ".".join(names[names.index(obj.Name) + 1 :])
+            head, dot, _tail = sub.partition(".")
+            if dot:
+                beyond = obj.getPlacementOf(head + ".").inverse() * obj.getPlacementOf(sub)
+                plc = beyond.inverse() * plc
 
     # post-process of plc for some special cases
     if elt_type == "Vertex":

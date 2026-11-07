@@ -13591,7 +13591,7 @@ index 841105d295..52a553489c 100644
          t = placement.Base
          self.transform.translation.setValue(t.x, t.y, t.z)
 diff --git a/src/Mod/Assembly/UtilsAssembly.py b/src/Mod/Assembly/UtilsAssembly.py
-index ff000e0674..7b288a31ce 100644
+index 20f0656b65..2eb2b8b95b 100644
 --- a/src/Mod/Assembly/UtilsAssembly.py
 +++ b/src/Mod/Assembly/UtilsAssembly.py
 @@ -379,7 +379,12 @@ def getRootPath(obj, part):
@@ -13643,7 +13643,20 @@ index ff000e0674..7b288a31ce 100644
  def getBomGroup(assembly):
      bom_group = None
  
-@@ -1308,6 +1332,22 @@ def getComponentReference(assembly, root_obj, sub_string):
+@@ -1177,7 +1201,11 @@ def findPlacement(ref, ignoreVertex=False):
+             plc.Rotation = App.Rotation(surface.Rotation)
+ 
+     if useLive:
+-        plc = getGlobalPlacement(ref).inverse() * plc
++        # FCPROJECT-PATCH (2026-11-07, Resync auf de81f43ebd): Upstream (d73537dd33) rechnet hier
++        # relativ zu getGlobalPlacement(ref). Bei uns multiplizieren getJcsGlobalPlc() und der
++        # C++-Solver (getJcsReferenceGlobalPlacement) aber nur bis getObject(ref) - dasselbe
++        # Bezugssystem muss auch hier stehen, sonst sitzt das Gelenk am Link-Array-Element versetzt.
++        plc = getGlobalPlacement(ref, obj).inverse() * plc
+     else:
+         if hasattr(obj, "ExpandArray"):
+             # For draft arrays, the Shape has both the array placement and the base placement.
+@@ -1355,6 +1383,22 @@ def getComponentReference(assembly, root_obj, sub_string):
              continue
          if obj.isDerivedFrom("Assembly::AssemblyLink"):
              if hasattr(obj, "Rigid") and not obj.Rigid:

@@ -6,7 +6,7 @@
 #     gegen ein ECHTES Vanilla-Checkout des Ziel-Commits, nicht mehr gegen HEAD - siehe dortige
 #     Kommentare)
 #
-# VANILLA_BASE: cc6104c38b
+# VANILLA_BASE: de81f43ebd
 # ^ Nutzerauftrag 2026-09-27 ("wer prueft, dass alle Commits im Patch landen?"): der Commit,
 # gegen den die Patches oben den Diff bilden (git diff VANILLA_BASE HEAD -- src/Mod/Assembly
 # src/3rdParty/OndselSolver). check-patches.sh liest diese Zeile automatisch und prueft nach dem
@@ -210,3 +210,13 @@ build: 2026.10.17-freecad-version-suffix-sandbox.patch
 # Weekly 2026.10.28 enthaelt den Commit noch nicht und schreibt relativ. Entfernen, sobald Upstream
 # korrigiert (Faktenblatt bugreports/xlink-absolute-path-regression/).
 build: 2026.11.01-freecad-xlink-relative-path-revert.patch
+
+# 2026-11-07: Absturz beim Schliessen einer Skizze (Nutzer, Projekt 4xCNC_GEH). Gui::TaskView::
+# accept()/reject() merkten sich einen Iterator in taskInfos und den Dialog-Zeiger und benutzten
+# beide NACH dem Aufruf von dialog->accept()/reject() weiter. Der Aufruf kann beliebigen Code
+# ausloesen (Neuberechnung, resetEdit, Aktivieren eines anderen Dokuments ->
+# slotActiveDocument() -> taskInfos.emplace_back() -> Iterator ungueltig). SIGSEGV in
+# QObject::doSetProperty aus TaskView::reject. Jetzt QPointer auf den Dialog, Iterator nach dem
+# Aufruf nicht mehr benutzt. Upstream main (de81f43ebd) unveraendert - Kandidat fuer einen
+# Bugreport (Text schreibt der Nutzer).
+build: 2026.11.07-freecad-taskview-accept-reject-dangling.patch
