@@ -1,7 +1,5 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
-from __future__ import annotations
-
 from typing import Any, Final
 
 from Base.Metadata import constmethod, export
@@ -39,7 +37,6 @@ class AssemblyObject(Part):
         -1 if solver error,
         -2 if redundant constraints.
         """
-        ...
 
     @constmethod
     def generateSimulation(self, simulationObject: DocumentObject, /) -> int:
@@ -59,7 +56,6 @@ class AssemblyObject(Part):
         -1 if solver error,
         -2 if redundant constraints.
         """
-        ...
 
     @constmethod
     def updateForFrame(self, index: int, /) -> None:
@@ -71,12 +67,10 @@ class AssemblyObject(Part):
 
         Returns: None
         """
-        ...
 
     @constmethod
     def numberOfFrames(self) -> int:
         """Return Number of frames"""
-        ...
 
     @constmethod
     def updateSolveStatus(self) -> Any:
@@ -85,7 +79,6 @@ class AssemblyObject(Part):
         Args: None
 
         Returns: None"""
-        ...
 
     @constmethod
     def undoSolve(self) -> Any:
@@ -94,21 +87,18 @@ class AssemblyObject(Part):
         undoSolve()
 
         Returns: None"""
-        ...
 
     @constmethod
     def ensureIdentityPlacements(self) -> None:
         """
         Makes sure that LinkGroups or sub-assemblies have identity placements.
         """
-        ...
 
     @constmethod
     def clearUndo(self) -> None:
         """
         Clear the registered undo positions.
         """
-        ...
 
     @constmethod
     def isPartConnected(self, obj: DocumentObject, verboseLog: bool = False, /) -> bool:
@@ -116,7 +106,6 @@ class AssemblyObject(Part):
         Check if a part is connected to the ground through joints.
         Returns: True if part is connected to ground.
         """
-        ...
 
     @constmethod
     def exportIdentityGraphDot(self) -> str:
@@ -126,7 +115,6 @@ class AssemblyObject(Part):
 
         Returns: DOT source, e.g. to render with `dot -Tsvg` or an online Graphviz viewer.
         """
-        ...
 
     @constmethod
     def verifyIdentityGraphAgainstAsmt(self) -> str:
@@ -140,7 +128,6 @@ class AssemblyObject(Part):
 
         Returns: human-readable report text.
         """
-        ...
 
     @constmethod
     def verifyIdentityGraphHandleConsistency(self) -> list[str]:
@@ -151,7 +138,6 @@ class AssemblyObject(Part):
         Returns: one "SPLIT ..." line per body that is represented by more than one handle
         (empty list = consistent).
         """
-        ...
 
     @constmethod
     def isJointConnectingPartToGround(self, joint: DocumentObject, prop_name: str, /) -> Any:
@@ -164,7 +150,6 @@ class AssemblyObject(Part):
 
         Returns: True if part is connected to ground.
         """
-        ...
 
     @constmethod
     def isPartGrounded(self, obj: DocumentObject, /) -> Any:
@@ -176,7 +161,6 @@ class AssemblyObject(Part):
 
         Returns: True if part has grounded joint.
         """
-        ...
 
     @constmethod
     def verifyIdentityGraphEquivalence(self) -> Any:
@@ -190,7 +174,6 @@ class AssemblyObject(Part):
         Returns: Liste von Strings, je Zeile "MATCH ...", "DIVERGENCE (by design, dupliziert) ..."
         (erwartete Abweichung bei Instanz-Duplikation) oder "MISMATCH ..." (unerwartete Abweichung).
         """
-        ...
 
     @constmethod
     def exportAsASMT(self, file_name: str, /) -> None:
@@ -200,7 +183,6 @@ class AssemblyObject(Part):
         Args:
         - fileName: The name of the file where the ASMT will be exported.
         """
-        ...
 
     @constmethod
     def getJointInstances(self) -> list[tuple]:
@@ -210,7 +192,6 @@ class AssemblyObject(Part):
         different prefixes (e.g. "SubLink001."); joints directly in this assembly have prefix "".
         Used by the simulation to address a motion to one instance (Motion.Joint subname).
         """
-        ...
 
     @constmethod
     def getJointOfPartConnectingToGround(self, part: DocumentObject, /) -> tuple:
@@ -218,7 +199,6 @@ class AssemblyObject(Part):
         Diagnostic: the joint that connects part towards ground (as used by the GUI drag-mode
         search), as (joint or None, reference property name, nesting prefix).
         """
-        ...
 
     @constmethod
     def getUpstreamMovingPart(self, part: DocumentObject, /) -> tuple:
@@ -226,7 +206,6 @@ class AssemblyObject(Part):
         Diagnostic: follows fixed joints from part towards ground until a non-fixed joint is found
         (as ViewProviderAssembly::findDragMode() does), as (part or None, joint or None, name).
         """
-        ...
 
     @constmethod
     def getRedundancyStates(self) -> list[str]:
@@ -234,7 +213,6 @@ class AssemblyObject(Part):
         FCProject: redundant (removed) constraints of the last solve, one line each:
         "<joint> [<index>]: Abweichung <value> mm|deg, geschluckt|Konflikt".
         """
-        ...
 
     @constmethod
     def getLimitViolations(self) -> list[str]:
@@ -242,7 +220,6 @@ class AssemblyObject(Part):
         FCProject: joint limits the last solve could not keep, one line per limit:
         "<joint>: <value> <unit>, erlaubt <min> .. <max> <unit>".
         """
-        ...
 
     @constmethod
     def getRedundancyGroups(self) -> list[str]:
@@ -251,7 +228,6 @@ class AssemblyObject(Part):
         "<culprit> (<type>), zusammen mit: <other joints>". The culprit is the most recently
         created joint of this assembly in the group.
         """
-        ...
 
     @constmethod
     def getDragJointOfPart(self, part: DocumentObject, /) -> tuple:
@@ -261,7 +237,6 @@ class AssemblyObject(Part):
         with the fewest degrees of freedom. Returns (part at that joint or None, joint or None,
         reference name, [other ground connections found]).
         """
-        ...
 
     @constmethod
     def getDownstreamParts(
@@ -288,7 +263,6 @@ class AssemblyObject(Part):
         Returns:
             A list of App.DocumentObject instances representing the downstream parts.
         """
-        ...
 
     @constmethod
     def preDrag(self, drag_parts: list[DocumentObject], /) -> None:
@@ -314,7 +288,6 @@ class AssemblyObject(Part):
         ViewProviderAssembly::tryMouseMove() does for a real mouse move) and call doDragStep()
         after each change; call postDrag() once at the end (mouse-up equivalent).
         """
-        ...
 
     @constmethod
     def doDragStep(self) -> None:
@@ -332,7 +305,6 @@ class AssemblyObject(Part):
         Must be called after preDrag(); has no effect (raises no error but does nothing useful)
         if preDrag() was never called or postDrag() already ended the drag.
         """
-        ...
 
     @constmethod
     def postDrag(self) -> None:
@@ -341,6 +313,5 @@ class AssemblyObject(Part):
         preDrag()/doDragStep(), see docs/ARCHITECTURE.md #2.2). Lets the MbD solver do its own
         post-drag bookkeeping and marks the object as touched.
         """
-        ...
     Joints: Final[list]
     """A list of all joints this assembly has."""

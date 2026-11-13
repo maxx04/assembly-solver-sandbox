@@ -9143,11 +9143,11 @@ index 63bb7168d8..29de63194e 100644
      std::vector<std::string> lastPartialRedundantJoints;
      std::vector<std::string> lastMalformedJoints;
 diff --git a/src/Mod/Assembly/App/AssemblyObject.pyi b/src/Mod/Assembly/App/AssemblyObject.pyi
-index 95db04dc83..eaa043f926 100644
+index b8bfe4fb77..4ef9286e94 100644
 --- a/src/Mod/Assembly/App/AssemblyObject.pyi
 +++ b/src/Mod/Assembly/App/AssemblyObject.pyi
-@@ -111,13 +111,48 @@ class AssemblyObject(Part):
-         ...
+@@ -101,12 +101,44 @@ class AssemblyObject(Part):
+         """
  
      @constmethod
 -    def isPartConnected(self, obj: DocumentObject, /) -> bool:
@@ -9156,7 +9156,6 @@ index 95db04dc83..eaa043f926 100644
          Check if a part is connected to the ground through joints.
          Returns: True if part is connected to ground.
          """
-         ...
  
 +    @constmethod
 +    def exportIdentityGraphDot(self) -> str:
@@ -9166,7 +9165,6 @@ index 95db04dc83..eaa043f926 100644
 +
 +        Returns: DOT source, e.g. to render with `dot -Tsvg` or an online Graphviz viewer.
 +        """
-+        ...
 +
 +    @constmethod
 +    def verifyIdentityGraphAgainstAsmt(self) -> str:
@@ -9180,7 +9178,6 @@ index 95db04dc83..eaa043f926 100644
 +
 +        Returns: human-readable report text.
 +        """
-+        ...
 +
 +    @constmethod
 +    def verifyIdentityGraphHandleConsistency(self) -> list[str]:
@@ -9191,14 +9188,13 @@ index 95db04dc83..eaa043f926 100644
 +        Returns: one "SPLIT ..." line per body that is represented by more than one handle
 +        (empty list = consistent).
 +        """
-+        ...
 +
      @constmethod
      def isJointConnectingPartToGround(self, joint: DocumentObject, prop_name: str, /) -> Any:
          """
-@@ -143,6 +178,20 @@ class AssemblyObject(Part):
+@@ -130,6 +162,19 @@ class AssemblyObject(Part):
+         Returns: True if part has grounded joint.
          """
-         ...
  
 +    @constmethod
 +    def verifyIdentityGraphEquivalence(self) -> Any:
@@ -9212,14 +9208,13 @@ index 95db04dc83..eaa043f926 100644
 +        Returns: Liste von Strings, je Zeile "MATCH ...", "DIVERGENCE (by design, dupliziert) ..."
 +        (erwartete Abweichung bei Instanz-Duplikation) oder "MISMATCH ..." (unerwartete Abweichung).
 +        """
-+        ...
 +
      @constmethod
      def exportAsASMT(self, file_name: str, /) -> None:
          """
-@@ -153,9 +202,74 @@ class AssemblyObject(Part):
+@@ -139,9 +184,67 @@ class AssemblyObject(Part):
+         - fileName: The name of the file where the ASMT will be exported.
          """
-         ...
  
 +    @constmethod
 +    def getJointInstances(self) -> list[tuple]:
@@ -9229,7 +9224,6 @@ index 95db04dc83..eaa043f926 100644
 +        different prefixes (e.g. "SubLink001."); joints directly in this assembly have prefix "".
 +        Used by the simulation to address a motion to one instance (Motion.Joint subname).
 +        """
-+        ...
 +
 +    @constmethod
 +    def getJointOfPartConnectingToGround(self, part: DocumentObject, /) -> tuple:
@@ -9237,7 +9231,6 @@ index 95db04dc83..eaa043f926 100644
 +        Diagnostic: the joint that connects part towards ground (as used by the GUI drag-mode
 +        search), as (joint or None, reference property name, nesting prefix).
 +        """
-+        ...
 +
 +    @constmethod
 +    def getUpstreamMovingPart(self, part: DocumentObject, /) -> tuple:
@@ -9245,7 +9238,6 @@ index 95db04dc83..eaa043f926 100644
 +        Diagnostic: follows fixed joints from part towards ground until a non-fixed joint is found
 +        (as ViewProviderAssembly::findDragMode() does), as (part or None, joint or None, name).
 +        """
-+        ...
 +
 +    @constmethod
 +    def getRedundancyStates(self) -> list[str]:
@@ -9253,7 +9245,6 @@ index 95db04dc83..eaa043f926 100644
 +        FCProject: redundant (removed) constraints of the last solve, one line each:
 +        "<joint> [<index>]: Abweichung <value> mm|deg, geschluckt|Konflikt".
 +        """
-+        ...
 +
 +    @constmethod
 +    def getLimitViolations(self) -> list[str]:
@@ -9261,7 +9252,6 @@ index 95db04dc83..eaa043f926 100644
 +        FCProject: joint limits the last solve could not keep, one line per limit:
 +        "<joint>: <value> <unit>, erlaubt <min> .. <max> <unit>".
 +        """
-+        ...
 +
 +    @constmethod
 +    def getRedundancyGroups(self) -> list[str]:
@@ -9270,7 +9260,6 @@ index 95db04dc83..eaa043f926 100644
 +        "<culprit> (<type>), zusammen mit: <other joints>". The culprit is the most recently
 +        created joint of this assembly in the group.
 +        """
-+        ...
 +
 +    @constmethod
 +    def getDragJointOfPart(self, part: DocumentObject, /) -> tuple:
@@ -9280,7 +9269,6 @@ index 95db04dc83..eaa043f926 100644
 +        with the fewest degrees of freedom. Returns (part at that joint or None, joint or None,
 +        reference name, [other ground connections found]).
 +        """
-+        ...
 +
      @constmethod
      def getDownstreamParts(
@@ -9293,7 +9281,7 @@ index 95db04dc83..eaa043f926 100644
      ) -> list[DocumentObject]:
          """
          Finds all parts connected to a start_part that are not connected to ground
-@@ -168,10 +282,65 @@ class AssemblyObject(Part):
+@@ -154,9 +257,61 @@ class AssemblyObject(Part):
              start_part: The App.DocumentObject to begin the search from.
              joint_to_ignore: The App.DocumentObject (a joint) to temporarily
                               suppress during the connectivity check.
@@ -9303,7 +9291,6 @@ index 95db04dc83..eaa043f926 100644
          Returns:
              A list of App.DocumentObject instances representing the downstream parts.
          """
-         ...
 +
 +    @constmethod
 +    def preDrag(self, drag_parts: list[DocumentObject], /) -> None:
@@ -9329,7 +9316,6 @@ index 95db04dc83..eaa043f926 100644
 +        ViewProviderAssembly::tryMouseMove() does for a real mouse move) and call doDragStep()
 +        after each change; call postDrag() once at the end (mouse-up equivalent).
 +        """
-+        ...
 +
 +    @constmethod
 +    def doDragStep(self) -> None:
@@ -9347,7 +9333,6 @@ index 95db04dc83..eaa043f926 100644
 +        Must be called after preDrag(); has no effect (raises no error but does nothing useful)
 +        if preDrag() was never called or postDrag() already ended the drag.
 +        """
-+        ...
 +
 +    @constmethod
 +    def postDrag(self) -> None:
@@ -9356,7 +9341,6 @@ index 95db04dc83..eaa043f926 100644
 +        preDrag()/doDragStep(), see docs/ARCHITECTURE.md #2.2). Lets the MbD solver do its own
 +        post-drag bookkeeping and marks the object as touched.
 +        """
-+        ...
      Joints: Final[list]
      """A list of all joints this assembly has."""
 diff --git a/src/Mod/Assembly/App/AssemblyObjectPyImp.cpp b/src/Mod/Assembly/App/AssemblyObjectPyImp.cpp
@@ -10767,10 +10751,10 @@ index 3c89d4a40e..299dcf8ef5 100644
      # Taskbox keyboard event handler
      def eventFilter(self, watched, event):
 diff --git a/src/Mod/Assembly/CommandCreateView.py b/src/Mod/Assembly/CommandCreateView.py
-index 9ad65b6ca9..17aaa7e857 100644
+index 170b6a4d43..1124b5e062 100644
 --- a/src/Mod/Assembly/CommandCreateView.py
 +++ b/src/Mod/Assembly/CommandCreateView.py
-@@ -1352,8 +1352,8 @@ class TaskAssemblyCreateView(QtCore.QObject):
+@@ -1353,8 +1353,8 @@ class TaskAssemblyCreateView(QtCore.QObject):
          ref = UtilsAssembly.addVertexToReference(ref, vertex_name)
  
          plc = UtilsAssembly.findPlacement(ref)
@@ -13591,7 +13575,7 @@ index 841105d295..52a553489c 100644
          t = placement.Base
          self.transform.translation.setValue(t.x, t.y, t.z)
 diff --git a/src/Mod/Assembly/UtilsAssembly.py b/src/Mod/Assembly/UtilsAssembly.py
-index 20f0656b65..2eb2b8b95b 100644
+index f53a58fce9..2309607f51 100644
 --- a/src/Mod/Assembly/UtilsAssembly.py
 +++ b/src/Mod/Assembly/UtilsAssembly.py
 @@ -379,7 +379,12 @@ def getRootPath(obj, part):
@@ -13617,7 +13601,7 @@ index 20f0656b65..2eb2b8b95b 100644
      plc = global_plc.inverse() * plc  # We make it relative to obj Origin
      plc = obj.Placement * plc  # Make plc in the same lcs as obj
      mousePos = plc.Base
-@@ -654,6 +659,25 @@ def getJointsOfType(asm, jointTypes):
+@@ -658,6 +663,25 @@ def getJointsOfType(asm, jointTypes):
      return joints
  
  
@@ -13643,7 +13627,7 @@ index 20f0656b65..2eb2b8b95b 100644
  def getBomGroup(assembly):
      bom_group = None
  
-@@ -1177,7 +1201,11 @@ def findPlacement(ref, ignoreVertex=False):
+@@ -1181,7 +1205,11 @@ def findPlacement(ref, ignoreVertex=False):
              plc.Rotation = App.Rotation(surface.Rotation)
  
      if useLive:
@@ -13656,7 +13640,7 @@ index 20f0656b65..2eb2b8b95b 100644
      else:
          if hasattr(obj, "ExpandArray"):
              # For draft arrays, the Shape has both the array placement and the base placement.
-@@ -1355,6 +1383,22 @@ def getComponentReference(assembly, root_obj, sub_string):
+@@ -1359,6 +1387,22 @@ def getComponentReference(assembly, root_obj, sub_string):
              continue
          if obj.isDerivedFrom("Assembly::AssemblyLink"):
              if hasattr(obj, "Rigid") and not obj.Rigid:
