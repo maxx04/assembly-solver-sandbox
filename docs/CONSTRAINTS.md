@@ -77,6 +77,13 @@ Plan: `plans/2026-10-03-erdung-als-kontext-eigenschaft.md`.
 
 - Jede Änderung erhält die Kompatibilität der `.FCStd`-Dateien.
 - Keine neuen persistenten Properties ohne Rücksprache.
+- Ausnahme (Nutzerentscheidung 2026-11-15): Jede in der Sandbox gespeicherte Datei mit Baugruppe
+  enthält ein Hinweis-Objekt `SandboxAssemblyMarker` (App::FeaturePython, Beschriftung
+  „⚠ SANDBOX ASSEMBLY – compatibility issues with standard FreeCAD“). Normales FreeCAD lädt die
+  Datei weiter vollständig, zeigt den Hinweis aber im Baum und meldet im Ausgabefenster „module
+  not permitted: SandboxAssemblyMarker“. In der Sandbox ist der Hinweis im Baum ausgeblendet
+  (nicht gespeichert). „Für FreeCAD normalisieren“ entfernt ihn aus der Kopie. Grund: Nur die
+  Richtung Sandbox → normales FreeCAD ist problematisch (anders gelöste Gelenke); umgekehrt nicht.
 
 ## C5. Eingefügte Unterbaugruppe bleibt an ihrer Ablage-Position (2026-10-13)
 

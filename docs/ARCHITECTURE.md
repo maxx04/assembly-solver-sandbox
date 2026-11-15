@@ -373,6 +373,13 @@ Menü Assembly → Sandbox. Plan und Messbefunde: `plans/2026-11-05-datei-normal
   eine von Pixi/conda bereinigte Umgebung. Normales FreeCAD: Einstellung
   `SandboxCompatReferenceFreeCAD`, Standard Weekly-AppImage.
 - Test: `standalone-check/kinematic-tests/test_sandbox_compat`.
+- **Hinweis-Objekt (2026-11-15, Regel C4):** `SandboxAssemblyMarker.py`. `AssemblySandboxSaveCheck`
+  legt es in `slotStartSaveDocument` an, wenn das Dokument eine Baugruppe hat, und setzt
+  `ShowInTree` für die Dauer des Speicherns auf sichtbar; `slotFinishSaveDocument` blendet es wieder
+  aus und setzt `Modified` zurück. Nach dem Laden blendet die Ansichtsklasse es aus
+  (`finishRestoring`). Normales FreeCAD blockiert den Import des unbekannten Proxy-Moduls
+  („module not permitted“) – kein fremder Code läuft. Die Hilfsprozesse von Prüfen/Normalisieren
+  laufen mit `FC_SANDBOX_NO_MARKER=1`; `sandbox-solve` entfernt den Hinweis aus den Kopien.
 
 ### 2.3 Verschachteln: `AssemblyLink::updateContents()` (die Kopier-Pipeline)
 

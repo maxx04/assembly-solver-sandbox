@@ -35,6 +35,7 @@ set(Assembly_Scripts
     CommandSandboxCompat.py
     SandboxCompat.py
     SandboxCompatWorker.py
+    SandboxAssemblyMarker.py
     TestAssemblyWorkbench.py
     JointObject.py
     Preferences.py

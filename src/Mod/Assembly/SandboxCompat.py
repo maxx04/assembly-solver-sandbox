@@ -322,6 +322,8 @@ def runWorker(cmd, mode, files, foreign, extra=None, timeout=900, progress=None)
         # eigenes, leeres Profil: der Hilfsprozess soll weder Addons laden noch beim Beenden die
         # Einstellungen der laufenden Sitzung überschreiben
         env["FREECAD_USER_HOME"] = profile
+        # Kopien bekommen kein Sandbox-Hinweis-Objekt (SandboxAssemblyMarker.py)
+        env["FC_SANDBOX_NO_MARKER"] = "1"
         logPath = os.path.join(work, "log.txt")
         with open(logPath, "w", encoding="utf-8") as log:
             proc = subprocess.Popen(

@@ -24,6 +24,8 @@
 # kommt eine Warnung. Andere FreeCAD-Versionen uebergehen solche Gelenke beim Loesen still, der
 # Gelenk-Dialog bricht dort mit "'Tangent' is not in list" ab.
 
+import os
+
 import FreeCAD as App
 
 # Gelenktypen, die nur diese Sandbox kennt (am Ende von JointObject.JointTypes angehaengt).
@@ -61,6 +63,7 @@ class SandboxSaveCheck:
 
     def slotStartSaveDocument(self, doc, filename):
         self.restore()
+        self.markDocument(doc)
         joints = sandboxJoints(doc)
         if not joints:
             return
@@ -77,6 +80,37 @@ class SandboxSaveCheck:
 
     def slotFinishSaveDocument(self, doc, filename):
         self.restore()
+        self.hideMarkers(doc)
+
+    # FCPROJECT-PATCH (2026-11-15): Hinweis-Objekt fuer normales FreeCAD, siehe
+    # SandboxAssemblyMarker.py. FC_SANDBOX_NO_MARKER=1 schaltet es ab (Normalisieren-Kopien).
+    def markDocument(self, doc):
+        if os.environ.get("FC_SANDBOX_NO_MARKER"):
+            return
+        try:
+            import SandboxAssemblyMarker
+
+            SandboxAssemblyMarker.ensureMarker(doc)
+            # gespeichert wird "sichtbar", damit normales FreeCAD den Hinweis im Baum zeigt
+            SandboxAssemblyMarker.showMarkersInTree(doc, True)
+        except Exception as e:  # noqa: BLE001
+            App.Console.PrintWarning(f"Assembly: Sandbox-Hinweis nicht angelegt: {e}\n")
+
+    def hideMarkers(self, doc):
+        if not App.GuiUp:
+            return
+        try:
+            import FreeCADGui
+            import SandboxAssemblyMarker
+
+            if not SandboxAssemblyMarker.markers(doc):
+                return
+            SandboxAssemblyMarker.showMarkersInTree(doc, False)
+            guiDoc = FreeCADGui.getDocument(doc.Name)
+            if guiDoc is not None:
+                guiDoc.Modified = False  # nur die Baum-Sichtbarkeit hat sich geaendert
+        except Exception as e:  # noqa: BLE001
+            App.Console.PrintWarning(f"Assembly: Sandbox-Hinweis nicht ausgeblendet: {e}\n")
 
     def restore(self):
         if self.originalRevision is not None:

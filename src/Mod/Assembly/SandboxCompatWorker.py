@@ -138,6 +138,15 @@ def _sandboxSolve(job):
                     obj.Suppressed = True
                     done.append(obj.Label)
             entry["suppressed"] = done
+            # Kopie fuer normales FreeCAD: Sandbox-Hinweis-Objekt entfernen (nur in der Sandbox
+            # vorhanden, siehe SandboxAssemblyMarker.py; der Aufrufer setzt FC_SANDBOX_NO_MARKER,
+            # damit es beim Speichern nicht neu angelegt wird)
+            try:
+                import SandboxAssemblyMarker
+
+                SandboxAssemblyMarker.removeMarkers(doc)
+            except ImportError:
+                pass
             doc.recompute()
             doc.save()
         except Exception:  # noqa: BLE001
