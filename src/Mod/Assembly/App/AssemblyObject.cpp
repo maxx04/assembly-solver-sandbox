@@ -759,6 +759,21 @@ int AssemblyObject::solve(bool enableRedo)
             redundancyRetryDepth + 1,
             maxRedundancyRetries
         );
+        // FCPROJECT-PATCH (2026-11-17, Regel C7, Fall "zwei Drehgelenke auf parallelen Achsen"):
+        // welche Bedingungen redundant sind, entscheidet OndselSolver in der Lage, in der die Matrix
+        // singulaer wird - bei grossem Startfehler eine unfertige Zwischenlage. Dort kann gerade die
+        // Bedingung verworfen werden, die in der Endlage gebraucht wird (Drehung um die gemeinsame
+        // Achsrichtung blieb frei, BoxB um den Startanteil verdreht). Bleibt ein Widerspruch und hat
+        // sich etwas bewegt, die Auswahl deshalb in der neuen, naeheren Lage frisch treffen statt das
+        // Gedaechtnis wieder anzuwenden.
+        if (!lastConflictingJoints.empty()) {
+            Base::Console().log(
+                "Assembly: '{}' - Widerspruch nach Redundanzwahl in einer Zwischenlage, waehle in der "
+                "neuen Lage neu.\n",
+                getFullName()
+            );
+            currentRedundancyCache() = RedundancyCache();
+        }
         ++redundancyRetryDepth;
         int rc = solve(false);
         --redundancyRetryDepth;

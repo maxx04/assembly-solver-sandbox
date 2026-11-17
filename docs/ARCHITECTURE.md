@@ -750,6 +750,18 @@ in `RedundantConstraint` und löst ohne sie weiter.
 - Die interne Einheit muss 1 sein (`ASMTAssembly`, `mbdUnits`), sonst stimmen die mm-Werte
   nicht.
 
+**Nachtrag 2026-11-17 – Auswahl in einer Zwischenlage:** OndselSolver entscheidet, welche
+Bedingungen redundant sind, in der Lage, in der die Matrix singulär wird. Bei großem Startfehler
+ist das eine unfertige Zwischenlage. Beispiel: zwei Drehgelenke auf parallelen Achsen, BoxB schräg
+verdreht gestartet – im ersten Schritt blieb vom zweiten Gelenk ausgerechnet die x-Komponente des
+Punkts übrig (nur in der Schräglage unabhängig), die in der Endlage benötigte Komponente war schon
+verworfen; im nächsten Schritt fiel auch die x-Komponente weg, die Drehung um die Achse blieb frei,
+und das Gedächtnis hielt die Auswahl fest. Korrektur in solve(): bleibt nach dem Nachmessen ein
+Widerspruch und hat sich etwas bewegt, wird das Gedächtnis vor dem Nachlösen verworfen, die Auswahl
+fällt in der neuen, näheren Lage neu. Test: `test_two_revolutes_flat` (Weekly scheitert dort an 5
+von 6 Fällen). Anlass: FreeCAD#32302 (dessen Fix `isFixed=true` ist falsch, schiebt das geerdete
+Teil in den Ursprung).
+
 ### 3.2e Konvergenzprüfung der Lageloesung (2026-10-17, uncommittet)
 
 **Befund:** `NewtonRaphson::isConvergedToNumericalLimit()` (Upstream) enthält zwei Fehler:
