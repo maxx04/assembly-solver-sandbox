@@ -162,5 +162,20 @@ Projekt die bündigen Gelenke der übliche Fall sind.)
 - Der Solver soll nicht je nach Startlage zwischen „gleich“ und „entgegengesetzt“ wählen
   (Rest der 180°-Mehrdeutigkeit, #32477).
 - Umsetzung: beim Anlegen klappt FreeCAD das bewegliche Teil auf die gleichsinnige Seite
-  (`JointObject.preSolveFlush()`); das Parallel-Gelenk ist im Solver eindeutig, das
-  Planar-Gelenk noch nicht (docs/ARCHITECTURE.md §2.1d).
+  (`JointObject.preSolveFlush()`); Parallel- und Planar-Gelenk (seit 2026-11-21) sind im Solver
+  eindeutig (docs/ARCHITECTURE.md §2.1d).
+
+
+## C9. Punkt auf Kurve: was als Bahn taugt (2026-11-21)
+
+Abstand-Gelenk Punkt–Kurve mit Abstand 0 hält den Punkt auf der Bahn (docs/ARCHITECTURE.md §2.1e).
+Bahnen dürfen räumlich sein (3D-B-Spline, schräger Kreisbogen, Helix). Zwei Einschränkungen
+hängen nicht an „3D“, sondern an der Herkunft der Kurve:
+
+1. **Ketten nur aus Drähten.** Eine Kette (mehrere Kanten als eine Bahn) wird nur erkannt, wenn
+   die gewählte Kante in genau einem Draht liegt: Skizze, Part::Wire, Draft-Linie/-B-Spline (auch
+   räumlich). Eine Kante eines Volumenkörpers gehört zu zwei Flächen - dort gilt nur die gewählte
+   Kante allein. Für eine Bahn über mehrere Körperkanten eine Skizze bzw. einen Draht anlegen.
+2. **Übergänge in der Kette tangential stetig.** An einem scharfen Knick springt die Tangente; der
+   Punkt kann dort hängen bleiben oder springen. Bahnen werden verrundet (Gerade – tangentialer
+   Bogen – Gerade wie im Beispiel `PROJ_test_schlitten`).
