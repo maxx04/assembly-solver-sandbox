@@ -161,6 +161,35 @@ def side_of(ground, point):
     return 1 if (point - curve.value(t)).dot(in_plane) > 0 else -1
 
 
+def wheel_distance(ground, wheel):
+    """Kleinster Abstand Rad-Geometrie. Gegen eine Flaeche ueber Projektion (Abtastung +
+    Verfeinerung): OCCs distToShape rechnet Kante gegen Flaeche nur auf ~1e-7..1e-4 genau
+    (2026-11-21 nachgemessen - das war die vermeintliche Ungenauigkeit unter der Beule)."""
+    shape = ground_shape(ground)
+    if not isinstance(shape, Part.Face):
+        return shape.distToShape(wheel.Shape)[0]
+    edge = wheel.Shape.Edges[0]
+    surface = shape.Surface
+
+    def g(t):
+        p = edge.valueAt(t)
+        u, v = surface.parameter(p)
+        return (p - surface.value(u, v)).Length
+
+    a, b = edge.ParameterRange
+    n = 720
+    ts = [a + (b - a) * i / n for i in range(n + 1)]
+    k = min(range(len(ts)), key=lambda i: g(ts[i]))
+    lo, hi = ts[max(k - 1, 0)], ts[min(k + 1, n)]
+    for _ in range(80):
+        m1, m2 = lo + (hi - lo) / 3, hi - (hi - lo) / 3
+        if g(m1) < g(m2):
+            hi = m2
+        else:
+            lo = m1
+    return g((lo + hi) / 2)
+
+
 def wheel_center(wheel):
     return wheel.Placement.Base
 
@@ -180,7 +209,7 @@ def run_case(name, out_path, ground_name, mover_kind, start, swap_refs=False):
         ok = d < TOL_CONTACT
         print(f"[{name}] Abstand Vertex-Flaeche: {d:.3e} -> {'OK' if ok else 'FEHLER'}")
     else:
-        d = shape.distToShape(mover.Shape)[0]
+        d = wheel_distance(ground, mover)
         ok_touch = d < TOL_CONTACT
         end_side = side_of(ground, wheel_center(mover))
         ok_side = end_side == start_side
@@ -227,6 +256,27 @@ def main():
     results.append(ok)
     App.closeDocument(doc.Name)
 
+    # "Umkehren" im Gelenk-Dialog (2026-11-21): einseitiger Kontakt wechselt die Seite und
+    # beruehrt danach weiterhin - Kante an Flaeche (Bump, Plate) und Kante an Kante (Track).
+    for name, ground_name, start in (
+        ("Umkehren Rad/Bump", "Bump", world(App.Vector(-15, 10, 30), angle=70)),
+        ("Umkehren Rad/Plate", "Plate", world(App.Vector(5, 8, 20), angle=80)),
+        ("Umkehren Rad/Track", "Track", world(App.Vector(-5, 20, 0), angle=0)),
+    ):
+        ok, doc = run_case(name, path("flip_" + ground_name.lower()), ground_name, "wheel", start)
+        ground = jtu.get_by_label(doc, ground_name)
+        wheel = jtu.get_by_label(doc, "Wheel")
+        joint = next(o for o in doc.Objects if getattr(o, "JointType", "") == "Tangent")
+        before = side_of(ground, wheel_center(wheel))
+        flipped = joint.Proxy.flipTangentSide(joint)
+        doc.recompute()
+        after = side_of(ground, wheel_center(wheel))
+        d = wheel_distance(ground, wheel)
+        ok_flip = flipped and after == -before and d < TOL_CONTACT
+        print(f"[{name}] Seite {before:+d} -> {after:+d}, Abstand {d:.3e} -> {'OK' if ok_flip else 'FEHLER'}")
+        results.append(ok and ok_flip)
+        App.closeDocument(doc.Name)
+
     ok, doc = run_case("vor dem Speichern", out_path, "Bump", "wheel", world(App.Vector(-15, 10, 30), angle=70))
     results.append(ok)
     doc2, wheel2, exc = jtu.save_close_reopen_recompute(doc, out_path, box_b_name="Wheel")
@@ -234,7 +284,7 @@ def main():
         print(f"RESULT: FAIL (Exception beim Neuladen+Recompute: {exc!r})")
         return 1
     bump2 = jtu.get_by_label(doc2, "Bump")
-    d_reload = ground_shape(bump2).distToShape(wheel2.Shape)[0]
+    d_reload = wheel_distance(bump2, wheel2)
     ok_reload = d_reload < TOL_CONTACT and side_of(bump2, wheel_center(wheel2)) == 1
     print(f"[nach Neuladen] kleinster Abstand Rad-Bump: {d_reload:.3e} -> {'OK' if ok_reload else 'FEHLER'}")
     results.append(ok_reload)

@@ -1061,20 +1061,6 @@ int AssemblyObject::generateSimulation(App::DocumentObject* sim)
 
     removeUnconnectedJoints(jointRefs, groundedObjs);
 
-    // FCPROJECT-PATCH (2026-10-16, Tangent-Gelenk, Nutzerentscheidung): Tangent wirkt vorerst
-    // nur bei Solve und Ziehen. Fuer die Simulation fehlen im Solver noch die
-    // Beschleunigungsterme (Kruemmung der Kurve), deshalb hier ablehnen statt falsch rechnen.
-    for (auto* jt : extractJointObjects(jointRefs)) {
-        if (getJointType(jt) == JointType::Tangent) {
-            Base::Console().error(
-                "Assembly: Simulation nicht moeglich - Tangent-Gelenk '{}' wird in der Simulation "
-                "noch nicht unterstuetzt.\n",
-                getJointContextName(jt)
-            );
-            return -1;
-        }
-    }
-
     jointParts(jointRefs);
 
     create_mbdSimulationParameters(sim);

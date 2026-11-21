@@ -86,6 +86,38 @@ JointTypes = [
 # nicht zwei Vertices und nicht zwei Flaechen.
 JointTangentElementTypes = ["Vertex", "Edge", "Face"]
 
+
+def tangentElementType(reference):
+    """Elementtyp einer Tangent-Referenz: Vertex/Edge/Face; ein Bezugspunkt (App::Point) ohne
+    Unterelement zaehlt als Vertex, sonst "" (2026-11-21)."""
+    if not reference or len(reference) < 2 or not reference[1]:
+        return ""
+    elt_type, _ = UtilsAssembly.extract_type_and_number(
+        UtilsAssembly.getElementName(reference[1][0])
+    )
+    if elt_type:
+        return elt_type
+    obj = UtilsAssembly.getObject(reference)
+    if obj is not None and obj.isDerivedFrom("App::Point"):
+        return "Vertex"
+    return ""
+
+
+# FCPROJECT-PATCH (2026-11-21, Nutzer): Anzeige im Gelenk-Dialog. Schluessel = sortiertes Paar.
+TangentPairTexts = {
+    ("Edge", "Vertex"): "Punkt gleitet auf der Kurve (am offenen Kurvenende Anschlag).",
+    ("Face", "Vertex"): "Punkt gleitet auf der Fläche.",
+    ("Edge", "Face"): "Kante berührt die Fläche von einer Seite und kann abrollen und gleiten.",
+    ("Edge", "Edge"): "Kante berührt die andere Kante von einer Seite.",
+}
+# Einseitiger Kontakt: hier waehlt "Umkehren" die andere Seite.
+TangentOneSidedPairs = (("Edge", "Face"), ("Edge", "Edge"))
+
+
+def tangentPairKey(refs):
+    types = [tangentElementType(r) for r in refs]
+    return tuple(sorted(types)) if len(types) == 2 and all(types) else None
+
 JointUsingAngle = [
     "Angle",
 ]
@@ -971,6 +1003,61 @@ class Joint:
 
     def flipOnePart(self, joint):
         self.matchJCS(joint, False, True)
+
+    def flipTangentSide(self, joint):
+        """FCPROJECT-PATCH (2026-11-21): Tangent mit einseitigem Kontakt (Kante an Flaeche, Kante
+        an Kante) auf die andere Seite legen. Der Solver nimmt die Seite, auf der das Teil beim
+        Loesen liegt - deshalb das bewegliche Teil um 180 Grad um die Tangente der Kante am
+        Beruehrpunkt drehen: der Beruehrpunkt bleibt, die Kante liegt danach gespiegelt auf der
+        anderen Seite. Keine neue Eigenschaft, die Datei bleibt kompatibel."""
+        import Part
+
+        refs = [joint.Reference1, joint.Reference2]
+        if tangentPairKey(refs) not in TangentOneSidedPairs:
+            return False
+        types = [tangentElementType(r) for r in refs]
+        rank = {"Vertex": 1, "Edge": 2, "Face": 3}
+        # Seite J (wie makeMbdJointTangent): die niedrigere Geometrie, bei Gleichstand Referenz 2.
+        j_index = 0 if rank[types[0]] < rank[types[1]] else 1
+        i_index = 1 - j_index
+
+        def globalShape(ref):
+            root, sub = ref[0], ref[1][0]
+            parents = root.Parents
+            if parents is not None and len(parents) == 1 and len(parents[0]) == 2:
+                root, sub = parents[0][0], parents[0][1] + sub
+            return Part.getShape(root, sub, needSubElement=True)
+
+        try:
+            shape_j = globalShape(refs[j_index])
+            shape_i = globalShape(refs[i_index])
+            _d, pairs, _info = shape_j.distToShape(shape_i)
+            contact = pairs[0][0]
+            edge = shape_j.Edges[0]
+            tangent = edge.tangentAt(edge.Curve.parameter(contact))
+        except Exception as e:  # noqa: BLE001
+            App.Console.PrintWarning(f"Tangent-Gelenk: Seite nicht umkehrbar ({e}).\n")
+            return False
+
+        assembly = self.getAssembly(joint)
+        parts = [UtilsAssembly.getMovingPart(refs[j_index]), UtilsAssembly.getMovingPart(refs[i_index])]
+        moving = next(
+            (p for p in parts if p is not None and not (assembly and assembly.isPartGrounded(p))),
+            None,
+        )
+        if moving is None:
+            return False
+        to_move = [moving]
+        if assembly is not None:
+            to_move += assembly.getDownstreamParts(moving, joint)
+        turn = App.Placement(App.Vector(), App.Rotation(tangent, 180), contact)
+        for part in to_move:
+            part.Placement = turn * part.Placement
+        # Ausdruecklicher Klick: immer loesen (nicht von "SolveInJointCreation" abhaengig), die
+        # Kurve liegt nach der Drehung nur tangential an, die Kruemmung passt noch nicht.
+        if assembly is not None:
+            assembly.solve()
+        return True
 
     def preSolve(self, joint, savePlc=True):
         # The goal of this is to put the part in the correct position to avoid wrong placement by the solve.
@@ -1928,6 +2015,25 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
             self.jForm.jointType.hide()
             self.jForm.isolateType.hide()
 
+        # FCPROJECT-PATCH (2026-11-21): Hinweiszeile fuer das Tangent-Gelenk unter der
+        # Auswahlliste (Zelle der Liste durch Liste + Zeile ersetzen).
+        self.tangentInfoLabel = QtWidgets.QLabel()
+        self.tangentInfoLabel.setWordWrap(True)
+        self.tangentInfoLabel.setVisible(False)
+        grid = self.jForm.layout()
+        list_index = grid.indexOf(self.jForm.featureList) if grid is not None else -1
+        if list_index >= 0 and hasattr(grid, "getItemPosition"):
+            row, col, rspan, cspan = grid.getItemPosition(list_index)
+            grid.removeWidget(self.jForm.featureList)
+            box = QtWidgets.QWidget()
+            box_layout = QtWidgets.QVBoxLayout(box)
+            box_layout.setContentsMargins(0, 0, 0, 0)
+            box_layout.addWidget(self.jForm.featureList)
+            box_layout.addWidget(self.tangentInfoLabel)
+            grid.addWidget(box, row, col, rspan, cspan)
+        else:
+            layout.addWidget(self.tangentInfoLabel)
+
         self.jForm.jointType.addItems(TranslatedJointTypes)
 
         self.jForm.jointType.setCurrentIndex(jointTypeIndex)
@@ -2266,6 +2372,9 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
             self.joint.AngleMax = self.jForm.limitRotMaxSpinbox.property("rawValue")
 
     def onReverseClicked(self):
+        if self.jType == "Tangent":
+            self.joint.Proxy.flipTangentSide(self.joint)
+            return
         self.joint.Proxy.flipOnePart(self.joint)
 
     def onRotate90Clicked(self):
@@ -2338,6 +2447,7 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
 
         self.jForm.PushButtonReverse.setVisible(jType in JointUsingReverse)
         self.jForm.PushButtonRotate90.setVisible(jType in JointUsingReverse)
+        self.updateTangentInfo()
 
         needLengthLimits = jType in JointUsingLimitLength
         needAngleLimits = jType in JointUsingLimitAngle
@@ -2489,6 +2599,39 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
         self.joint.Proxy.setJointConnectors(self.joint, self.refs)
 
         self.updateIsolation()
+        self.updateTangentInfo()
+
+    def updateTangentInfo(self):
+        """FCPROJECT-PATCH (2026-11-21, Nutzer): Tangent-Gelenk - erkannte Paarung bzw. was noch zu
+        waehlen ist direkt unter der Auswahlliste; "Umkehren" nur bei einseitigem Kontakt."""
+        label = getattr(self, "tangentInfoLabel", None)
+        if label is None:
+            return
+        if self.jType != "Tangent":
+            label.setVisible(False)
+            return
+        names = {"Vertex": "Punkt", "Edge": "Kante", "Face": "Fläche"}
+        key = tangentPairKey(self.refs)
+        if key in TangentPairTexts:
+            text = TangentPairTexts[key]
+            if key in TangentOneSidedPairs:
+                text += " \"Umkehren\" legt das Teil auf die andere Seite."
+        elif len(self.refs) == 1:
+            first = names.get(tangentElementType(self.refs[0]), "?")
+            allowed = {
+                "Punkt": "eine Kante oder Fläche",
+                "Kante": "einen Punkt, eine Kante oder eine Fläche",
+                "Fläche": "einen Punkt oder eine Kante",
+            }.get(first, "ein zweites Element")
+            text = f"Gewählt: {first}. Jetzt {allowed} am anderen Teil wählen."
+        else:
+            text = (
+                "Punkt oder Kante an einem Teil und Kante oder Fläche am anderen Teil wählen "
+                "(direkt in der 3D-Ansicht)."
+            )
+        label.setText(text)
+        label.setVisible(True)
+        self.jForm.PushButtonReverse.setVisible(key in TangentOneSidedPairs)
 
     def updateJointList(self):
         self.jForm.featureList.clear()
@@ -2711,21 +2854,8 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
         self.joint.ViewObject.Proxy.showPreviewJCS(False)
 
     def isTangentSelectionAcceptable(self, ref):
-        def elementType(reference):
-            elt_type, _ = UtilsAssembly.extract_type_and_number(
-                UtilsAssembly.getElementName(reference[1][0])
-            )
-            if elt_type:
-                return elt_type
-            # Ganzes Objekt ohne Unterelement (2026-11-21): ein Bezugspunkt (App::Point, z.B.
-            # Ursprung von Body oder LCS) zaehlt als Vertex, alles andere hat keinen Typ ("").
-            obj = UtilsAssembly.getObject(reference)
-            if obj is not None and obj.isDerivedFrom("App::Point"):
-                return "Vertex"
-            return ""
-
-        new_type = elementType(ref)
-        taken = [elementType(reference) for reference in self.refs]
+        new_type = tangentElementType(ref)
+        taken = [tangentElementType(reference) for reference in self.refs]
         pair = sorted(taken + [new_type])
         valid_pairs = (["Edge", "Vertex"], ["Face", "Vertex"], ["Edge", "Edge"], ["Edge", "Face"])
         if (
@@ -2737,20 +2867,20 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
 
         # Hinweis: was angeklickt wurde und was erlaubt ist (Nutzer 2026-11-21: "Hinweis ist
         # unklar").
-        names = {"Vertex": "Punkt", "Edge": "Kante", "Face": "Flaeche"}
+        names = {"Vertex": "Punkt", "Edge": "Kante", "Face": "Fläche"}
         if not new_type:
             obj = UtilsAssembly.getObject(ref)
             label = obj.Label if obj is not None else "?"
-            what = f"das ganze Objekt '{label}' (kein Punkt, keine Kante, keine Flaeche)"
+            what = f"das ganze Objekt '{label}' (kein Punkt, keine Kante, keine Fläche)"
         else:
             what = f"eine {names.get(new_type, new_type)}"
         if taken:
             already = " + ".join(names.get(t, t or "?") for t in taken)
-            what += f" - schon gewaehlt: {already}"
+            what += f" - schon gewählt: {already}"
         App.Console.PrintWarning(
             f"Tangent-Gelenk: angeklickt wurde {what}. Erlaubt sind Punkt + Kante, Punkt + "
-            "Flaeche, Kante + Kante oder Kante + Flaeche. Bitte direkt in der 3D-Ansicht auf den "
-            "Punkt bzw. die Kante oder Flaeche klicken.\n"
+            "Fläche, Kante + Kante oder Kante + Fläche. Bitte direkt in der 3D-Ansicht auf den "
+            "Punkt bzw. die Kante oder Fläche klicken.\n"
         )
         return False
 

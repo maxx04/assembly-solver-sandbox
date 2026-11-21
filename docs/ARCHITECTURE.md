@@ -139,9 +139,19 @@ Kurvengeometrie (`ASMTRefCurve` ist ein leerer Platzhalter), deshalb ein eigener
 - **Kurvenende:** an offenen Kurven zwei `TranslationLimitIJ` (Ebene durch den Endpunkt senkrecht
   zur Endtangente, "=>" 0). Sie stehen nur im MbD-System, nicht in `mbdAssembly->limits` -
   `solve()` macht den Grenz-Durchgang deshalb auch bei `hasCurveEndStops` (§3.2c).
-- **Grenzen:** nur Lage (Solve, Ziehen); für die Simulation fehlen die Krümmungsterme der
-  Beschleunigung, `generateSimulation()` lehnt Tangent ab. Konvergenz ohne Krümmungsterm im
-  Hesse-Anteil linear statt quadratisch (in den Tests 3-20 Iterationen).
+- **Simulation (seit 2026-11-21):** `generateSimulation()` nimmt Tangent an. Die Kinematik löst
+  die Lage je Bild neu (PosKine-Newton mit Fußpunkt-Nachführung je Iteration); Geschwindigkeit
+  und Beschleunigung dienen nur als Vorhersage, fehlende Krümmungsterme kosten dort höchstens
+  Iterationen. Test `test_tangent_simulation_flat` (Kurvenscheibe mit Rolle, Spitze, Rolle auf
+  Fläche): Abstand je Bild ≤ 1e-14 mm. Konvergenz ohne Krümmungsterm im Hesse-Anteil linear statt
+  quadratisch (in den Tests 3-20 Iterationen).
+- **Messfalle:** OCCs `distToShape` Kante gegen Fläche ist nur auf ~1e-7..1e-3 genau; Tests
+  messen per Projektion auf die Fläche (`wheel_distance()`), Kante–Kante ist exakt.
+- **Gelenk-Dialog (2026-11-21):** Zeile unter der Auswahlliste zeigt die erkannte Paarung bzw.
+  was noch fehlt (`updateTangentInfo()`); „Umkehren“ nur bei einseitigem Kontakt
+  (`Joint.flipTangentSide()`): dreht das bewegliche Teil um 180° um die Tangente der Kante am
+  Berührpunkt und löst - der Solver nimmt die Seite, auf der das Teil beim Lösen liegt, keine
+  neue Eigenschaft.
 
 ### 1.3 Tangent-Gelenk: Flächen und Kurvenkontakt (2026-10-18)
 

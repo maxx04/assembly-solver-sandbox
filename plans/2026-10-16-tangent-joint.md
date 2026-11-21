@@ -219,8 +219,10 @@ Rand stehen.
   Referenzen vertauscht, Speichern/Laden), gemessen per OCC `distToShape` und Seitenprüfung.
 
 **Offen:**
-- Simulation lehnt Tangent weiterhin ab (Krümmungsterme für Geschwindigkeit/Beschleunigung
-  fehlen).
+- ~~Simulation lehnt Tangent ab~~ - seit 2026-11-21 zugelassen, Lage je Bild exakt
+  (`test_tangent_simulation_flat`).
+- Abstand-Feld (Berührung im Abstand d) und Grenzen entlang der Kurve: Nutzer 2026-11-21 ins
+  TODO gestellt.
 - Getrimmte Flächen (Löcher, Ränder) und Flächen aus mehreren Patches: nur die eine Fläche,
   UV-Rechteck.
 - Fläche an Fläche (Nocken mit Flächenkontakt) und Kontakt an mehreren Stellen gleichzeitig.
