@@ -12336,7 +12336,7 @@ index e2ac92c0eb..59fd3d7d57 100644
      def Activated(self):
          # update the translation engine
 diff --git a/src/Mod/Assembly/JointObject.py b/src/Mod/Assembly/JointObject.py
-index e25c44893f..9bab044684 100644
+index aa338781fe..cc34acd9e7 100644
 --- a/src/Mod/Assembly/JointObject.py
 +++ b/src/Mod/Assembly/JointObject.py
 @@ -143,21 +143,51 @@ JointParallelForbidden = [
@@ -12576,7 +12576,7 @@ index e25c44893f..9bab044684 100644
              return
  
          part1 = UtilsAssembly.getMovingPart(joint.Reference1)
-@@ -1712,7 +1838,15 @@ class MakeJointSelGate:
+@@ -1714,7 +1840,15 @@ class MakeJointSelGate:
                  if parent.isDerivedFrom("App::LocalCoordinateSystem"):
                      datum = parent
  
@@ -12593,7 +12593,7 @@ index e25c44893f..9bab044684 100644
                  # accept only datum that are not attached
                  return datum.MapMode == "Deactivated"
  
-@@ -1807,11 +1941,18 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -1809,11 +1943,18 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
              self.createJointObject()
              self.visibilityBackup = False
  
@@ -12617,7 +12617,7 @@ index e25c44893f..9bab044684 100644
          bind = Gui.ExpressionBinding(self.jForm.angleSpinbox).bind(self.joint, "Angle")
          bind = Gui.ExpressionBinding(self.jForm.distanceSpinbox).bind(self.joint, "Distance")
          bind = Gui.ExpressionBinding(self.jForm.distanceSpinbox2).bind(self.joint, "Distance2")
-@@ -1835,10 +1976,12 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -1837,10 +1978,12 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
          self.jForm.limitCheckbox3.stateChanged.connect(self.adaptUi)
          self.jForm.limitCheckbox4.stateChanged.connect(self.adaptUi)
  
@@ -12634,7 +12634,7 @@ index e25c44893f..9bab044684 100644
          bind = Gui.ExpressionBinding(self.jForm.limitLenMinSpinbox).bind(self.joint, "LengthMin")
          bind = Gui.ExpressionBinding(self.jForm.limitLenMaxSpinbox).bind(self.joint, "LengthMax")
          bind = Gui.ExpressionBinding(self.jForm.limitRotMinSpinbox).bind(self.joint, "AngleMin")
-@@ -1888,13 +2031,65 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -1890,13 +2033,65 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
  
          self.assembly.recompute(True)
  
@@ -12700,7 +12700,7 @@ index e25c44893f..9bab044684 100644
          return True
  
      def autoClosedOnTransactionChange(self):
-@@ -1917,6 +2112,25 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -1919,6 +2114,25 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
              self.assembly.ViewObject.MoveOnlyPreselected = False
              self.assembly.ViewObject.MoveInCommand = True
  
@@ -12726,7 +12726,7 @@ index e25c44893f..9bab044684 100644
          Gui.Selection.removeSelectionGate()
          Gui.Selection.removeObserver(self)
          Gui.Selection.setSelectionStyle(Gui.Selection.SelectionStyle.NormalSelection)
-@@ -2152,9 +2366,22 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -2154,9 +2368,22 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
  
          self.blockOffsetRotation = True
          self.jForm.offsetSpinbox.setProperty("rawValue", pos.z)
@@ -12752,7 +12752,7 @@ index e25c44893f..9bab044684 100644
          self.blockOffsetRotation = False
  
      def advancedOffsetToggled(self, on):
-@@ -2248,6 +2475,7 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -2250,6 +2477,7 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
      def updateJointList(self):
          self.jForm.featureList.clear()
          simplified_names = []
@@ -12760,7 +12760,7 @@ index e25c44893f..9bab044684 100644
          for ref in self.refs:
  
              sname = UtilsAssembly.getObject(ref).Label
-@@ -2256,7 +2484,24 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -2258,7 +2486,24 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
              if element_name != "":
                  sname = sname + "." + element_name
              simplified_names.append(sname)
@@ -12785,7 +12785,7 @@ index e25c44893f..9bab044684 100644
  
      def updateLimits(self):
          needLengthLimits = self.jType in JointUsingLimitLength
-@@ -2481,5 +2726,19 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -2483,5 +2728,19 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
          self.presel_ref = [comp, [new_sub]]
  
      def clearSelection(self, doc_name):
