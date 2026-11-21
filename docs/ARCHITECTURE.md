@@ -349,11 +349,16 @@ Statt Bündeln (§2.1c) wird die Mehrdeutigkeit dort beseitigt, wo sie entsteht:
     die nähere Seite (die Kippwinkel konvergieren nur, solange die Ziellage weniger als 90 Grad
     entfernt ist). Ausnahme Winkelgelenk mit 0 Grad (auch als ParallelAxes gebaut): gleiche
     Richtung, kein Drehen von J.
-  - `PlanarJoint` (Abstand Ebene-Ebene) behält im Solver die alten Richtungskosinusse: mit den
-    Kippwinkeln divergierte es je nach Seitenreihenfolge (Referenzen A,B scheiterten aus 100-150
-    Grad, B,A nicht; Dreh-/Zylinder-/Parallelgelenk aus allen Winkeln stabil). Ursache nicht
-    gefunden, vermutlich im Zusammenspiel der Abstandsbedingung (`TranslationConstraintIqcJqc`,
-    K = I) mit den Winkel-Ableitungen - offen.
+  - `PlanarJoint` (Abstand Ebene-Ebene, seit 2026-11-21) ebenfalls mit Kippwinkeln
+    (`AxisAngleConstraintIqcJqc`/`IqctJqc::TiltZAboutX/Y` statt Richtungskosinus) und
+    `jointVariant(..., zSignOnly)`: nur das Vorzeichen von zJ wird an die nähere Seite angepasst,
+    die Drehung um z bleibt frei. Der frühere Abbruch je nach Seitenreihenfolge lag nicht an den
+    Kippwinkeln selbst: die atan2-Bedingungen hängen nicht vom Betrag der Euler-Parameter |e| ab,
+    die Ebenen-Bedingung (A(e) quadratisch in e) aber schon - Newton blähte |e|² bis ~1200 auf,
+    divergierte und speicherte dabei eine falsche Redundanzauswahl. Abhilfe in `PartFrame::setqsu()`
+    / `setqsulam()`: Euler-Parameter nach jedem Newton-Schritt auf |e| = 1 projizieren (wirkt in
+    jedem Solve, Testreihe unverändert grün). Test `test_planar_parallel_sweep_flat`: 4 Achsen ×
+    11 Winkel × Seitenreihenfolge × {Abstand, Parallel} = 176 Fälle, vorher 37 Fehler, jetzt 0.
   - C8 setzt das Anlegen durch: `JointObject.preSolveFlush()` (in `setJointConnectors()` für
     Abstand Ebene-Ebene und Parallel) klappt das bewegliche Teil um 180 Grad um die X-Achse
     seiner JCS, wenn es auf der Gegenseite, aber nicht sauber gegeneinander (über 10 Grad) steht -
@@ -367,10 +372,31 @@ Abstand Punkt–Kurve mit Abstand 0 rechnet nicht mehr „Punkt in der Ebene der
 den Punkt genau auf der Kurve bzw. Kurvenkette (kein neuer Gelenktyp, Dateiformat unverändert):
 OndselSolver `PointOnCurveJoint` (Fußpunkt-Verfahren, zwei Gleichungen senkrecht zur Tangente als
 Linearkombination der drei Achs-Abstände `DispCompIeqcJeqcKeqc`), FreeCAD
-`makeCurveFootFunction()` (Kante bzw. Draht aus der Referenz, `Extrema_ExtPC`). Über ein offenes
-Ende hinaus folgt der Punkt der Tangenten-Verlängerung (kein Anschlag). Gewählte Gerade bleibt
-„Punkt auf Gerade“. Plan, Grenzen und offene Punkte: `plans/2026-11-01-punkt-auf-kurve.md`; Tests
-`standalone-check/solver-tests/` und `test_point_on_curve_flat`.
+`makeCurveFootFunction()` (Kante bzw. Draht aus der Referenz, `Extrema_ExtPC`). Plan, Grenzen und
+offene Punkte: `plans/2026-11-01-punkt-auf-kurve.md`; Tests `standalone-check/solver-tests/` und
+`test_point_on_curve_flat`.
+
+Seit 2026-11-21 (`AssemblyObject::makePointOnPathJoint()`):
+- **Anschlag an offenen Bahnenden:** `makeCurveFootFunction()` liefert zusätzlich `CurvePathInfo`
+  (Kantenzahl, offen/geschlossen, Endpunkte und nach innen zeigende Tangenten in JCS-Koordinaten,
+  Kantenreihenfolge über `BRepTools_WireExplorer`). Bei offener Bahn legt
+  `ASMTPointOnCurveJoint::createMbD()` an jedem Ende einen Rahmen (`EndFrameqcOffset`, z entlang der
+  Tangente nach innen) und eine `TranslationLimitIJ` „=> 0“ (`-PathStart`/`-PathEnd`) an; das
+  Gelenk setzt `hasCurveEndStops`, damit das System mit Grenzen gelöst wird. Vorher lief der Punkt
+  entlang der Tangenten-Verlängerung weiter (beim Ziehen 130-150 mm über das Ende hinaus). Die
+  Endpunkte werden nicht ins ASMT geschrieben, sie entstehen bei jedem Aufbau neu aus der Geometrie.
+- **Gerade in einer Kette:** ist die gewählte Gerade Teil eines Drahts mit mehreren Kanten, von
+  denen mindestens eine gekrümmt ist (z.B. Bahn Gerade–Bogen–Gerade in einer Skizze), ist die ganze
+  Kette die Bahn. Einzelne Gerade und reine Vieleck-Konturen (Rechteck-Skizze) bleiben „Punkt auf
+  Gerade“ - bestehende Modelle mit Punkt auf einer Rechteckseite ändern sich nicht.
+  `SandboxCompat._lineInChain()` meldet die Ketten-Fälle beim Prüfen/Normalisieren.
+- **Punkt auf Gerade mit Abstand 0:** `ASMTPointInLineJoint` (x = y = 0 im JCS der Geraden) statt
+  `ASMTCylSphJoint` mit Radius 0. Dessen `sqrt(x² + y²) = 0` hat an der Lösung keine Ableitung,
+  Newton divergierte und der Punkt blieb stehen - auch in der Weekly-Vanilla (Abstand 0 und 1e-6
+  bewegen nichts, Abstand 1 schon). Abstand > 0 bleibt CylSph; sehr kleine Abstände (1e-6) bleiben
+  wie in Vanilla schlecht konditioniert.
+- Beispiel: FCProject-Projekt `PROJ_test_schlitten` (Schlitten auf Gerade-Bogen-Gerade, zwei Ecken
+  auf der Bahn, dritte auf der Platte).
 
 ### 2.2 Interaktives Ziehen - warum nur die äußerste Baugruppe löst
 

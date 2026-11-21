@@ -235,6 +235,12 @@ public:
     std::shared_ptr<MbD::ASMTJoint> makeMbdJointDistance(App::DocumentObject* joint, bool& swapSides);
     // FCPROJECT-PATCH (2026-10-16, plans/2026-10-16-tangent-joint.md): Tangent, erster Schritt
     // "Vertex auf Kurve" (OndselSolver PointOnCurveJoint).
+    std::shared_ptr<MbD::ASMTJoint> makePointOnPathJoint(
+        App::DocumentObject* joint,
+        const char* refName,
+        bool swapSides,
+        bool fromLine
+    );
     std::shared_ptr<MbD::ASMTJoint> makeMbdJointTangent(App::DocumentObject* joint, bool& swapSides);
     // jcsTurn: zusaetzliche Drehung des JCS im Marker (Variante eines Fixed-Gelenks, siehe
     // jointVariant()).
@@ -267,7 +273,12 @@ public:
     );
     // Variante eines Fixed-/Slider-/Dreh-/Zylindergelenks fuer den Solver (diese verlangen seit
     // 2026-10-28 eindeutige Lagen, #32477): Drehung, um die der Marker J gedreht wird.
-    Base::Rotation jointVariant(App::DocumentObject* joint, JointType jointType, const std::string& nestingPrefix);
+    Base::Rotation jointVariant(
+        App::DocumentObject* joint,
+        JointType jointType,
+        const std::string& nestingPrefix,
+        bool zSignOnly = false  // nur Vorzeichen der z-Achse (Parallel, Planar)
+    );
     void getRackPinionMarkers(
         App::DocumentObject* joint,
         std::string& markerNameI,

@@ -228,11 +228,38 @@ def _distanceValue(joint):
     return getattr(d, "Value", d)
 
 
+def _lineInChain(ref):
+    """Gerade als Teil einer Kette mit gekruemmten Kanten (Kante in genau einem Draht mit mehreren
+    Kanten, mindestens eine davon keine Gerade, z.B. Bahn Gerade-Bogen-Gerade in einer Skizze) - die
+    Sandbox nimmt dann die ganze Kette als Bahn (wie AssemblyObject.cpp makePointOnPathJoint)."""
+    try:
+        import Part
+
+        obj, sub = ref[0], ref[1][0]
+        prefix = sub[: sub.rfind(".") + 1] if "." in sub else ""
+        owner = Part.getShape(obj, prefix, needSubElement=False, transform=False) if prefix else obj.Shape
+        edge = _subShape(obj, sub)
+        if edge is None:
+            return False
+        wires = [w for w in owner.Wires if any(e.isSame(edge) for e in w.Edges)]
+        if len(wires) != 1 or len(wires[0].Edges) < 2:
+            return False
+        return any(not isinstance(e.Curve, Part.Line) for e in wires[0].Edges)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def isPointOnCurve(joint):
     if getattr(joint, "JointType", "") != "Distance" or abs(_distanceValue(joint)) > 1e-9:
         return False
-    kinds = {_refKind(getattr(joint, "Reference1", None)), _refKind(getattr(joint, "Reference2", None))}
-    return kinds == {"vertex", "curve"}
+    refs = [getattr(joint, "Reference1", None), getattr(joint, "Reference2", None)]
+    kinds = [_refKind(r) for r in refs]
+    if set(kinds) == {"vertex", "curve"}:
+        return True
+    # 2026-11-21: Gerade in einer Kette gilt in der Sandbox als Bahn (normales FreeCAD: Gerade)
+    if set(kinds) == {"vertex", "line"}:
+        return _lineInChain(refs[kinds.index("line")])
+    return False
 
 
 def _hasLimits(joint):

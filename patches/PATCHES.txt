@@ -174,6 +174,10 @@
 # belegt), Flaechen- und Kurvenkontakt (NurbsSurface, EndFrameqcFoot/Surface, TangentContact,
 # TangentJoints, ASMTTangentJoint). Ausserdem Leserfehler upstream: ASMTRefItem::readMarkers()
 # und Zeilen-Lesen innerhalb von assert() in ASMTAssembly::assemblyFromFile()/ASMTLimit.
+# Seit 2026-11-21 abends: PlanarJoint eindeutig (Kippwinkel wie ParallelAxesJoint, Regel C8);
+# PartFrame::setqsu()/setqsulam() projizieren die Euler-Parameter nach jedem Newton-Schritt auf
+# |e| = 1 (Planar divergierte, weil die Kippwinkel |e| nicht festlegen); ASMTPointOnCurveJoint mit
+# Anschlag an offenen Bahnenden (hasEnds, zwei TranslationLimitIJ "=> 0" in createMbD()).
 2026.10.11-ondselsolver-redundancy-groups.patch
 
 # Build-Baum-Patches aus dem Dev-Build (/home/maxx/freecad/freecad-source), seit 2026-10-27 aktiv

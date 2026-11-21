@@ -55,9 +55,9 @@ Eine Bahn besteht oft aus mehreren Kanten (Gerade – Bogen – Gerade, Skizzen-
      Für echte Mechanismen sind solche Bahnen ohnehin verrundet - Hinweis an den Nutzer, ggf.
      Warnung bei Knick.
    - Offene Kette/Kurve: Über ein Ende hinaus ist der nächste Kurvenpunkt der Endpunkt; die zwei
-     Gleichungen halten den Punkt dann auf der **Verlängerung der Tangente** fest, nicht am Ende
-     (kein Anschlag). Ein echter Anschlag bräuchte eine Grenze auf dem Kurvenparameter (wie die
-     Längengrenze beim Slider) - offen.
+     Gleichungen allein halten den Punkt dann auf der **Verlängerung der Tangente** fest. Seit
+     2026-11-21 gibt es einen Anschlag: an jedem offenen Ende eine einseitige Grenze entlang der
+     nach innen zeigenden Endtangente (`TranslationLimitIJ` „=> 0“, siehe unten).
 2. **Umwandeln in eine Spline (Alternative):** FreeCAD kann eine Kette zu einer Kurve machen, z.B.
    Draft „Wire to B-spline“ (interpoliert durch die Ecken, verändert die Form leicht) oder die
    Curves-Werkbank „Join curves“ (verbindet Kanten zu einer B-Spline). Dann reicht eine Kante.
@@ -75,12 +75,30 @@ dokumentieren.
   Flächenrändern) nur die Kante. Fußpunkt per `Extrema_ExtPC` (Toleranz 1e-10) plus Kantenenden.
 - Regel: gewählt werden muss eine **gekrümmte** Kante der Kette. Ist die gewählte Kante eine Gerade,
   bleibt es „Punkt auf (unendlicher) Gerade“ wie bisher (`PointLine`) - bestehende Modelle mit
-  Punkt–Gerade in Rechteck-Skizzen ändern sich so nicht. Offen: auch bei gewählter Geraden die
-  Kette nehmen, wenn der Draht gekrümmte Kanten hat (Verhaltensänderung, mit Nutzer klären).
+  Punkt–Gerade in Rechteck-Skizzen ändern sich so nicht. Seit 2026-11-21 (Nutzerauftrag „Gerade
+  in der Kette“): auch bei gewählter Gerade gilt die Kette, wenn der Draht mindestens eine
+  gekrümmte Kante hat; reine Vieleck-Konturen bleiben „Punkt auf Gerade“.
 - Test `test_point_on_curve_flat`: 3D-B-Spline, schräger Kreisbogen, Kette Gerade–Bogen–Gerade
   (Start an jeder der drei Kanten), Bahn verschoben/gedreht, Placement1 schief - Punkt ≤ 2e-14 mm
   auf der Bahn. Weekly-Vanilla: 7-40 mm daneben (FAIL).
 - Redundanzprüfung (Regel C7): die zwei Gleichungen sind Längen in mm, gegen die Längentoleranz.
+
+## Folgeschritte umgesetzt (2026-11-21)
+
+- **Anschlag an den Bahnenden:** `makeCurveFootFunction()` liefert die Endpunkte und nach innen
+  zeigenden Endtangenten der offenen Bahn (Kantenfolge per `BRepTools_WireExplorer`).
+  `ASMTPointOnCurveJoint::createMbD()` legt je Ende einen Rahmen (z = Tangente nach innen) und eine
+  `TranslationLimitIJ` „=> 0“ an; das Gelenk löst dann mit Grenzen. Geschlossene Bahnen ohne
+  Anschlag. Die Endpunkte stehen nicht im ASMT, sie entstehen beim Aufbau aus der Geometrie.
+- **Gerade in der Kette:** siehe Regel oben (`makePointOnPathJoint(..., fromLine)`).
+- **Punkt auf Gerade, Abstand 0:** `PointInLineJoint` statt CylSph mit Radius 0 (Vanilla-Fehler:
+  der Punkt bewegte sich nicht).
+- **Schlitten-Beispiel:** FCProject-Projekt `PROJ_test_schlitten` im CAD_Workspace (Schiene mit
+  Bahn Gerade–Bogen–Gerade, Schlitten 24×16×6 mit zwei Ecken auf der Bahn und der dritten auf der
+  Plattenoberseite, genau ein Freiheitsgrad). Beim Ziehen weit über beide Enden bleibt er genau
+  am Ende stehen (alte Version: 130-380 mm daneben).
+- Tests: `test_point_on_curve_flat` um „Gerade gewählt“, „hinter dem Ende/vor dem Anfang“
+  (Solve und Ziehen) und „Rechteck-Kontur“ erweitert.
 
 ## Nächste Schritte
 

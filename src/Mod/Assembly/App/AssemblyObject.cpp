@@ -52,6 +52,11 @@
 #include <Mod/Part/App/TopoShape.h>
 #include <Mod/Part/App/PartFeature.h>
 #include <BRepAdaptor_Curve.hxx>
+#include <BRepTools_WireExplorer.hxx>
+#include <BRep_Tool.hxx>
+#include <TopExp.hxx>
+#include <TopoDS_Vertex.hxx>
+#include <TopoDS_Wire.hxx>
 #include <Extrema_ExtPC.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
@@ -3945,10 +3950,21 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointOfType(
 // Kontur einer Skizze), gilt der ganze Draht als Bahn (Kurven-/Linienkette); bei Koerpern gehoert
 // jede Kante zu zwei Flaechenraendern, dort bleibt es bei der Kante. Fusspunkt per Extrema_ExtPC
 // (Toleranz 1e-10, weit unter der Solver-Toleranz) plus Kantenenden.
+// Bahn hinter der Fusspunkt-Funktion (2026-11-21): Anzahl Kanten, offen/geschlossen und an
+// offenen Enden Endpunkt + nach innen zeigende Tangente, in Koordinaten des Markers (JCS).
+struct CurvePathInfo
+{
+    size_t edgeCount = 0;
+    bool curved = false;  // mindestens eine Kante ist keine Gerade
+    bool open = false;
+    Base::Vector3d startPoint, startInward, endPoint, endInward;
+};
+
 static MbD::CurveFootFunction makeCurveFootFunction(
     App::DocumentObject* joint,
     const char* refName,
-    const char* plcName
+    const char* plcName,
+    CurvePathInfo* info = nullptr
 )
 {
     auto* prop = joint->getPropertyByName<App::PropertyXLinkSub>(refName);
@@ -3991,6 +4007,47 @@ static MbD::CurveFootFunction makeCurveFootFunction(
     }
     const Base::Placement jcs = App::GeoFeature::getPlacementFromProp(joint, plcName);
     const Base::Placement jcsInv = jcs.inverse();
+    if (info) {
+        // Kanten in Laufrichtung der Bahn (Draht geordnet), Enden mit Laufrichtungs-Tangente.
+        std::vector<TopoDS_Edge> ordered;
+        if (path.ShapeType() == TopAbs_WIRE) {
+            for (BRepTools_WireExplorer we(TopoDS::Wire(path)); we.More(); we.Next()) {
+                ordered.push_back(we.Current());
+            }
+        }
+        if (ordered.empty()) {
+            ordered = edges;
+        }
+        info->edgeCount = edges.size();
+        info->curved = std::any_of(edges.begin(), edges.end(), [](const TopoDS_Edge& edge) {
+            return BRepAdaptor_Curve(edge).GetType() != GeomAbs_Line;
+        });
+        auto endOf = [](const TopoDS_Edge& edge, bool atStart, gp_Pnt& point, gp_Vec& travel) {
+            BRepAdaptor_Curve curve(edge);
+            const bool reversed = edge.Orientation() == TopAbs_REVERSED;
+            const double u = (atStart != reversed) ? curve.FirstParameter() : curve.LastParameter();
+            curve.D1(u, point, travel);
+            if (reversed) {
+                travel.Reverse();
+            }
+        };
+        gp_Pnt p0, p1;
+        gp_Vec v0, v1;
+        if (!ordered.empty()) {
+            endOf(ordered.front(), true, p0, v0);
+            endOf(ordered.back(), false, p1, v1);
+            info->open = p0.Distance(p1) > 1e-7 && v0.Magnitude() > gp::Resolution()
+                && v1.Magnitude() > gp::Resolution();
+        }
+        if (info->open) {
+            v0.Normalize();
+            v1.Normalize();
+            jcsInv.multVec(Base::Vector3d(p0.X(), p0.Y(), p0.Z()), info->startPoint);
+            jcsInv.multVec(Base::Vector3d(p1.X(), p1.Y(), p1.Z()), info->endPoint);
+            jcsInv.getRotation().multVec(Base::Vector3d(v0.X(), v0.Y(), v0.Z()), info->startInward);
+            jcsInv.getRotation().multVec(Base::Vector3d(-v1.X(), -v1.Y(), -v1.Z()), info->endInward);
+        }
+    }
     return [edges, jcs, jcsInv](const std::array<double, 3>& p, std::array<double, 3>& c, std::array<double, 3>& t) {
         Base::Vector3d pObj;
         jcs.multVec(Base::Vector3d(p[0], p[1], p[2]), pObj);
@@ -4027,6 +4084,34 @@ static MbD::CurveFootFunction makeCurveFootFunction(
         c = {footLocal.x, footLocal.y, footLocal.z};
         t = {tangentLocal.x, tangentLocal.y, tangentLocal.z};
     };
+}
+
+// FCPROJECT-PATCH (2026-11-21): Punkt auf Bahn (Kurve, Kette) mit Anschlag an offenen Enden.
+// fromLine: die gewaehlte Kante ist eine Gerade - nur bauen, wenn sie in einer Kette mit
+// mindestens einer gekruemmten Kante liegt (reine Vieleck-Konturen bleiben "Punkt auf Gerade").
+std::shared_ptr<ASMTJoint> AssemblyObject::makePointOnPathJoint(
+    App::DocumentObject* joint,
+    const char* refName,
+    bool swapSides,
+    bool fromLine
+)
+{
+    CurvePathInfo info;
+    auto foot = makeCurveFootFunction(joint, refName, swapSides ? "Placement2" : "Placement1", &info);
+    if (!foot || (fromLine && (info.edgeCount < 2 || !info.curved))) {
+        return nullptr;
+    }
+    auto mbdJoint = ASMTPointOnCurveJoint::With();
+    mbdJoint->curve = foot;
+    if (info.open) {
+        mbdJoint->hasEnds = true;
+        mbdJoint->startPoint = {info.startPoint.x, info.startPoint.y, info.startPoint.z};
+        mbdJoint->startInward = {info.startInward.x, info.startInward.y, info.startInward.z};
+        mbdJoint->endPoint = {info.endPoint.x, info.endPoint.y, info.endPoint.z};
+        mbdJoint->endInward = {info.endInward.x, info.endInward.y, info.endInward.z};
+        hasCurveEndStops = true;  // Grenz-Durchgang in solve() (wie Tangent)
+    }
+    return mbdJoint;
 }
 
 std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointDistance(App::DocumentObject* joint, bool& swapSides)
@@ -4167,6 +4252,20 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointDistance(App::DocumentObj
 
         // Point - Edge cases
         case DistanceType::PointLine: {
+            // FCPROJECT-PATCH (2026-11-21): eine Gerade, die Teil einer Kette mit gekruemmten Kanten
+            // ist (z.B. Bahn Gerade-Bogen-Gerade in einer Skizze), steht fuer die ganze Kette -
+            // Punkt auf der Bahn wie bei PointCurve. Einzelne Gerade und reine Vieleck-Konturen
+            // (Rechteck-Skizze) bleiben die unendliche Gerade (wie Vanilla).
+            if (std::abs(getJointDistance(joint)) < Precision::Confusion()) {
+                if (auto mbdJoint = makePointOnPathJoint(joint, refName1, swapSides, true)) {
+                    return mbdJoint;
+                }
+                // FCPROJECT-PATCH (2026-11-21): Abstand 0 als "Punkt auf Gerade" (x = y = 0 im
+                // JCS der Geraden) statt CylSph mit Radius 0 - dessen sqrt(x^2 + y^2) = 0 hat an
+                // der Loesung keine Ableitung, Newton divergierte und der Punkt blieb stehen (auch
+                // Weekly-Vanilla: Abstand 0 und 1e-6 bewegen nichts, Abstand 1 schon).
+                return CREATE<ASMTPointInLineJoint>::With();
+            }
             auto mbdJoint = CREATE<ASMTCylSphJoint>::With();
             mbdJoint->distanceIJ = getJointDistance(joint);
             return mbdJoint;
@@ -4176,9 +4275,7 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointDistance(App::DocumentObj
             // FCPROJECT-PATCH (2026-11-01): Abstand 0 = Punkt genau auf der Kurve bzw. Kette
             // (Punkt-auf-Kurve, Fusspunkt-Verfahren). Abstand != 0 wie bisher.
             if (std::abs(getJointDistance(joint)) < Precision::Confusion()) {
-                if (auto foot = makeCurveFootFunction(joint, refName1, swapSides ? "Placement2" : "Placement1")) {
-                    auto mbdJoint = ASMTPointOnCurveJoint::With();
-                    mbdJoint->curve = foot;
+                if (auto mbdJoint = makePointOnPathJoint(joint, refName1, swapSides, false)) {
                     return mbdJoint;
                 }
             }
@@ -4362,8 +4459,11 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(
         // Richtungskosinusse - mit den Kippwinkeln divergierte es je nach Seitenreihenfolge.
         const bool opposite = std::dynamic_pointer_cast<ASMTParallelAxesJoint>(mbdJoint)
             && jointType != JointType::Angle;
-        if (hasVariant || opposite) {
-            turnJ = jointVariant(joint, jointType, nestingPrefix);
+        // Planar (Abstand Ebene-Ebene u.a., 2026-11-21): wie Parallel nur das Vorzeichen der
+        // z-Achse, die naehere Seite (Kippwinkel-Bedingungen im Solver, PlanarJoint.cpp).
+        const bool planar = std::dynamic_pointer_cast<ASMTPlanarJoint>(mbdJoint) != nullptr;
+        if (hasVariant || opposite || planar) {
+            turnJ = jointVariant(joint, jointType, nestingPrefix, planar || opposite);
         }
         fullMarkerNameI = handleOneSideOfJoint(joint, refI, plcI, std::string(), nestingPrefix);
         fullMarkerNameJ = handleOneSideOfJoint(joint, refJ, plcJ, std::string(), nestingPrefix, turnJ);
@@ -4736,7 +4836,8 @@ Base::Placement AssemblyObject::fixedJointRelationInOwnDocument(
 Base::Rotation AssemblyObject::jointVariant(
     App::DocumentObject* joint,
     JointType jointType,
-    const std::string& nestingPrefix
+    const std::string& nestingPrefix,
+    bool zSignOnly
 )
 {
     auto* part1 = resolvePartForMbD(joint, "Reference1", nestingPrefix);
@@ -4760,7 +4861,7 @@ Base::Rotation AssemblyObject::jointVariant(
     // (buendig, docs/CONSTRAINTS.md) setzt das Anlegen des Gelenks durch (JointObject.py
     // preSolveFlush(): Teil vorher auf die gleichsinnige Seite klappen); hier bleibt, was steht -
     // bestehende gegeneinander stehende Gelenke und "Ausrichtung wechseln" eingeschlossen.
-    if (jointType == JointType::Parallel) {
+    if (jointType == JointType::Parallel || zSignOnly) {
         const double zz = relation.getRotation().multVec(Base::Vector3d(0, 0, 1)).z;
         return zz > 0.0 ? Base::Rotation() : flipped;
     }
