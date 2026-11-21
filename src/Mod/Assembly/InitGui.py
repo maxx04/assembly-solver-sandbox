@@ -122,6 +122,7 @@ class AssemblyWorkbench(Workbench):
             "Assembly_CreateJointParallel",
             "Assembly_CreateJointPerpendicular",
             "Assembly_CreateJointAngle",
+            "Assembly_CreateJointTangent",
             "Separator",
             "Assembly_CreateJointRackPinion",
             "Assembly_CreateJointScrew",
@@ -267,6 +268,8 @@ class AssemblyWorkbench(Workbench):
                     "Assembly_CreateJointParallel",
                     "Assembly_CreateJointPerpendicular",
                     "Assembly_CreateJointAngle",
+                    # FCPROJECT-PATCH (2026-11-21, Nutzer): Tangent auch im Aufgabenfenster.
+                    "Assembly_CreateJointTangent",
                 ]
                 self.title = translate("Assembly", "Constraints")
 

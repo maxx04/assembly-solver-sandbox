@@ -24,6 +24,8 @@
 
 #pragma once
 
+#include <vector>
+
 #include <GeomAbs_CurveType.hxx>
 #include <GeomAbs_SurfaceType.hxx>
 
@@ -64,6 +66,9 @@ enum class JointType
     Screw,
     Gears,
     Belt,
+    // FCPROJECT-PATCH (2026-10-16, plans/2026-10-16-tangent-joint.md): erster Schritt "Vertex
+    // auf Kurve". Am Ende angehaengt, damit die Indizes bestehender Dateien gleich bleiben (C4).
+    Tangent,
 };
 
 enum class GeometryType
@@ -149,6 +154,50 @@ AssemblyExport bool isFaceType(
 );
 AssemblyExport double getFaceRadius(const App::DocumentObject* obj, const std::string& elName);
 AssemblyExport double getEdgeRadius(const App::DocumentObject* obj, const std::string& elName);
+
+// FCPROJECT-PATCH (2026-10-16, Tangent-Gelenk): die Kante von propRefName als (rationale)
+// B-Spline in den Koordinaten des JCS propPlcName, also des Solver-Markers dieser Seite.
+// poles: x, y, z je Pol hintereinander; knots: volle Knotenfolge. false, wenn die Referenz keine
+// Kante ist oder sich nicht umwandeln laesst.
+struct EdgeBSpline
+{
+    int degree = 0;
+    std::vector<double> knots;
+    std::vector<double> weights;
+    std::vector<double> poles;
+    bool closed = false;
+};
+AssemblyExport bool getEdgeBSplineInJcs(
+    const App::DocumentObject* joint,
+    const char* propRefName,
+    const char* propPlcName,
+    EdgeBSpline& out
+);
+
+// FCPROJECT-PATCH (2026-10-18, Tangent-Gelenk an Flaechen): die Flaeche von propRefName als
+// (rationale) B-Spline-Flaeche in den Koordinaten des JCS propPlcName, beschnitten auf die
+// UV-Grenzen der Flaeche (Loecher und krumme Raender bleiben unberuecksichtigt). poles: x, y, z
+// je Pol, Pol (i, j) an Stelle i * nPolesV + j. false, wenn die Referenz keine Flaeche ist oder
+// sich nicht umwandeln laesst.
+struct FaceBSpline
+{
+    int degreeU = 0;
+    int degreeV = 0;
+    int nPolesU = 0;
+    int nPolesV = 0;
+    std::vector<double> knotsU;
+    std::vector<double> knotsV;
+    std::vector<double> weights;
+    std::vector<double> poles;
+    bool closedU = false;
+    bool closedV = false;
+};
+AssemblyExport bool getFaceBSplineInJcs(
+    const App::DocumentObject* joint,
+    const char* propRefName,
+    const char* propPlcName,
+    FaceBSpline& out
+);
 
 // swapSides (optional): true, wenn der Solver Referenz 2 als erste Seite (Marker I) nehmen
 // muss. Das Gelenk selbst wird nicht veraendert.

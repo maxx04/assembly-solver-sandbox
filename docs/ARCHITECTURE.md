@@ -114,6 +114,65 @@ instanziiert:
 | RackPinion | `ASMTRackPinionJoint` | koppelt Rotation eines Revolute/Cylindrical mit Translation eines Sliders über `pitchRadius` |
 | Screw | `ASMTScrewJoint` | koppelt Rotation+Translation am selben Teil über `pitch` (braucht einen zugehörigen Slider) |
 | Gears / Belt | `ASMTGearJoint` (`radiusJ` bei Belt negiert) | koppelt zwei Rotations-DoF verschiedener Wellen |
+| Tangent (2026-10-16, eigener Typ, am Enum-Ende) | `ASMTPointOnCurveJoint` bzw. `ASMTTangentJoint` (eigene Solver-Erweiterung, s. §1.2/§1.3) | Vertex auf Kante (Punkt gleitet, stoppt am offenen Ende), Vertex auf Fläche, Kante an Fläche und Kante an Kante (einseitiger Kontakt, Abrollen/Gleiten); Drehung frei, soweit der Kontakt sie nicht bindet |
+
+### 1.2 Tangent-Gelenk: Punkt auf Kurve im Solver (2026-10-16)
+
+Plan und Entscheidungen: `plans/2026-10-16-tangent-joint.md`. OndselSolver kannte keine
+Kurvengeometrie (`ASMTRefCurve` ist ein leerer Platzhalter), deshalb ein eigener Solver-Patch
+(`patches/2026.10.16-ondselsolver-point-on-curve.patch`):
+
+- **FreeCAD-Seite** (`AssemblyObject::makeMbdJointTangent()`): Kante muss Reference1 sein
+  (sonst `swapJCS()`, wie bei Distance), `getEdgeBSplineInJcs()` wandelt die Kante per
+  `GeomConvert` in eine B-Spline und rechnet die Pole in die Koordinaten von Placement1, also
+  des Solver-Markers I (Shape-Koordinaten -> `obj.Placement^-1` -> `Placement1^-1`, dieselbe
+  Kette wie `UtilsAssembly.findPlacement()`). Marker J ist der Vertex.
+- **Solver-Seite:** `EndFrameqcCurve` ist ein zusätzlicher End-Frame am Marker I, der in jeder
+  Newton-Iteration auf den Fußpunkt (nächster Kurvenpunkt zum Vertex, `NurbsCurve::project()`)
+  wandert, z-Achse = Tangente. `PointOnCurveJoint` sind zwei gewöhnliche
+  Translations-Bedingungen entlang x/y dieses Frames ("Punkt auf der Tangente"). Weil sich der
+  Fußpunkt in erster Ordnung nur entlang der Tangente bewegt, ist der Gradient exakt; es gibt
+  keine zusätzliche Unbekannte. Die Aktualisierung hängt an
+  `DispCompIeqcJeqcKeqcCurve::calcPostDynCorrectorIteration()` - Teile (und damit alle
+  Marker) werden vor den Gelenken aktualisiert, der Vertex ist dort also schon auf dem Stand
+  der Iteration.
+- **Kurvenende:** an offenen Kurven zwei `TranslationLimitIJ` (Ebene durch den Endpunkt senkrecht
+  zur Endtangente, "=>" 0). Sie stehen nur im MbD-System, nicht in `mbdAssembly->limits` -
+  `solve()` macht den Grenz-Durchgang deshalb auch bei `hasCurveEndStops` (§3.2c).
+- **Grenzen:** nur Lage (Solve, Ziehen); für die Simulation fehlen die Krümmungsterme der
+  Beschleunigung, `generateSimulation()` lehnt Tangent ab. Konvergenz ohne Krümmungsterm im
+  Hesse-Anteil linear statt quadratisch (in den Tests 3-20 Iterationen).
+
+### 1.3 Tangent-Gelenk: Flächen und Kurvenkontakt (2026-10-18)
+
+Plan: `plans/2026-10-16-tangent-joint.md`, Abschnitt „Zweiter Schritt“. Solver-Teile (alle in
+`src/3rdParty/OndselSolver/OndselSolver`, OndselSolver-Patch):
+
+- `NurbsSurface`: rationale Tensorprodukt-B-Spline (Auswertung mit Ableitungen bis 2. Ordnung,
+  Projektion: Abtastung + gedämpftes Newton). `ASMTTangentJoint` trägt Art („PointOnSurface“,
+  „CurveOnSurface“, „CurveOnCurve“) und Geometrie, ASMT-Name `TangentJoint`.
+- `EndFrameqcFoot` ist die gemeinsame Basis der mitwandernden End-Frames (`EndFrameqcCurve`,
+  `EndFrameqcSurface`): `setFoot()` legt Ursprung und z-Achse, x bleibt nahe der vorigen
+  Richtung. `DispCompIeqcJeqcKeqcCurve` ruft vor jeder Auswertung `updateFor()` auf.
+- `TangentContact` (gehört zu frmI): Kontakt zwischen I (Fläche oder Kurve) und Kurve J. Der
+  Kontaktpunkt auf J minimiert den orientierten Abstand (Flächennormale bzw. Normale in der Ebene
+  einer ebenen Kurve I, Seite einmal beim ersten Auswerten per Median bestimmt). Gleichungen:
+  `CurveOnSurfaceJoint` z = 0, `CurveOnCurveJoint` x = 0 (Abstand in der Ebene) und y = 0 (aus
+  der Ebene), jeweils `PointOnCurveConstraintIqcJqc` entlang einer Achse von frmI.
+- **Zweite Ableitungen:** `PointOnCurveConstraintIqcJqc::fillPosICJacob()` ergänzt für die
+  Abstandsgleichung eines Kontakts die Hüllkurven- und Krümmungsterme (Formel im Plan). Ohne
+  sie ist das Drehen der Kurve um sich selbst / das Abrollen für Newton künstlich steif.
+- **Aufsetzen:** `CurveOnSurfaceJoint`/`CurveOnCurveJoint::prePosIC()` verschieben ein Teil, das
+  nur an diesem Kontakt hängt, vor dem Lagelösen entlang der Normalen auf die Berührung, und zwar
+  *vor* `Joint::prePosIC()`, sonst rechnet die erste Iteration mit den alten Gleichungswerten.
+- FreeCAD: `getFaceBSplineInJcs()` (Fläche als B-Spline in JCS-Koordinaten, auf die UV-Grenzen
+  beschnitten), `makeMbdJointTangent()` ordnet die Paarung zu (höhere Geometrie = Reference1).
+- Nebenbei behoben (OndselSolver-Leser, upstream): `ASMTAssembly::assemblyFromFile()` las die
+  Zeile „Assembly“ nur innerhalb eines `assert` (Release-Builds lasen die ganze Datei um eine
+  Zeile versetzt, gleiches Muster viermal in `ASMTLimit`), und `ASMTRefItem::readMarkers()`
+  begrenzte die Marker über die nächste „RefPoint“-Zeile (bei Markern auf Baugruppenebene der
+  Rest der Datei). Seitdem lassen sich FreeCAD-ASMT-Dateien eigenständig nachrechnen (bis auf den
+  bekannten Typnamen „dJointE“ unter GCC).
 
 `GroundedJoint`/`RigidGroupJoint` sind **keine** `JointType`-Varianten - sie haben kein
 `Reference1`/`Reference2` und tauchen deshalb in `AssemblyObject::getJoints()` gar nicht auf

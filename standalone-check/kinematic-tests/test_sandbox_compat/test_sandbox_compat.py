@@ -130,6 +130,31 @@ def main():
     expect(not joint.Suppressed, "Original-Gelenk bleibt aktiv")
     _closeAll()
 
+    # ---- 3. Tangent-Gelenk (gibt es nur in der Sandbox): dasselbe Modell, Gelenktyp Tangent
+    tan = build_point_on_curve(os.path.join(out, "tangent"))
+    doc = App.openDocument(tan)
+    joint = [o for o in doc.Objects if hasattr(o, "JointType")][0]
+    joint.Proxy.setJointType(joint, "Tangent")
+    doc.recompute()
+    doc.save()
+    _closeAll()
+    doc = App.openDocument(tan)
+    report = SC.checkProject(doc, reference)
+    kinds = [f["kind"] for f in report.static]
+    expect("sandboxJointType" in kinds, f"Tangent statisch erkannt {kinds}")
+    target = os.path.join(out, "tangent_FreeCAD")
+    report = SC.normalizeProject(doc, target, reference, True)
+    expect(not report.errors, f"Tangent normalisieren ohne Fehler {report.errors}")
+    _closeAll()
+    doc = App.openDocument(os.path.join(target, os.path.basename(tan)))
+    joint = [o for o in doc.Objects if hasattr(o, "JointType")][0]
+    expect(joint.Suppressed, "Tangent-Gelenk in der Kopie deaktiviert")
+    _closeAll()
+    doc = App.openDocument(tan)
+    joint = [o for o in doc.Objects if hasattr(o, "JointType")][0]
+    expect(not joint.Suppressed and joint.JointType == "Tangent", "Original-Tangent-Gelenk bleibt aktiv")
+    _closeAll()
+
     print("RESULT: PASS" if ok else "RESULT: FAIL (siehe Ausgabe oben)")
     return 0 if ok else 1
 

@@ -77,6 +77,8 @@
 #include <OndselSolver/ASMTPointInPlaneJoint.h>
 #include <OndselSolver/ASMTPointOnCurveJoint.h>
 #include <OndselSolver/ASMTPointInLineJoint.h>
+#include <OndselSolver/ASMTNurbsPointOnCurveJoint.h>
+#include <OndselSolver/ASMTTangentJoint.h>
 #include <OndselSolver/ASMTLineInPlaneJoint.h>
 #include <OndselSolver/ASMTPlanarJoint.h>
 #include <OndselSolver/ASMTRevCylJoint.h>
@@ -619,7 +621,9 @@ int AssemblyObject::solve(bool enableRedo)
         // Grenzen werden aktiviert und nachgeloest. Lassen sie sich nicht erfuellen, setzt
         // runDragStep() selbst auf das Ergebnis von runPreDrag() zurueck. Upstream identisch
         // ohne diesen Durchgang.
-        if (!mbdAssembly->limits->empty()) {
+        // Tangent-Gelenk an offener Kurve: Endanschlaege liegen nur im MbD-System (siehe
+        // hasCurveEndStops).
+        if (!mbdAssembly->limits->empty() || hasCurveEndStops) {
             mbdAssembly->runDragStep(std::make_shared<std::vector<std::shared_ptr<ASMTPart>>>());
         }
         reportUnsatisfiedLimits();
@@ -1056,6 +1060,20 @@ int AssemblyObject::generateSimulation(App::DocumentObject* sim)
     auto jointRefs = getJoints();
 
     removeUnconnectedJoints(jointRefs, groundedObjs);
+
+    // FCPROJECT-PATCH (2026-10-16, Tangent-Gelenk, Nutzerentscheidung): Tangent wirkt vorerst
+    // nur bei Solve und Ziehen. Fuer die Simulation fehlen im Solver noch die
+    // Beschleunigungsterme (Kruemmung der Kurve), deshalb hier ablehnen statt falsch rechnen.
+    for (auto* jt : extractJointObjects(jointRefs)) {
+        if (getJointType(jt) == JointType::Tangent) {
+            Base::Console().error(
+                "Assembly: Simulation nicht moeglich - Tangent-Gelenk '{}' wird in der Simulation "
+                "noch nicht unterstuetzt.\n",
+                getJointContextName(jt)
+            );
+            return -1;
+        }
+    }
 
     jointParts(jointRefs);
 
@@ -2276,6 +2294,7 @@ void AssemblyObject::reportUnsatisfiedLimits()
 std::shared_ptr<ASMTAssembly> AssemblyObject::makeMbdAssembly()
 {
     activeLimits.clear();
+    hasCurveEndStops = false;
     auto assembly = CREATE<ASMTAssembly>::With();
     assembly->externalSystem->freecadAssemblyObject = this;
     assembly->setName("OndselAssembly");
@@ -3925,6 +3944,9 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointOfType(
             return mbdJoint;
         }
 
+        case JointType::Tangent:
+            return makeMbdJointTangent(joint, swapSides);
+
         default:
             return nullptr;
     }
@@ -4190,6 +4212,128 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointDistance(App::DocumentObj
             return mbdJoint;
         }
     }
+}
+
+std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointTangent(App::DocumentObject* joint, bool& swapSides)
+{
+    // FCPROJECT-PATCH (2026-10-16/18, plans/2026-10-16-tangent-joint.md): Tangent zwischen
+    // Vertex, Kante (Kurve) und Flaeche. Die hoehere Geometrie (Flaeche > Kante > Vertex) wird
+    // Referenz 1 (Marker I, wie bei Distance PointCurve), beide gehen als B-Spline in den
+    // Koordinaten ihres JCS an den Solver:
+    // - Vertex auf Kante: der Punkt gleitet an der Kurve entlang (NurbsPointOnCurveJoint); an einer
+    //   offenen Kurve bleibt er am Ende stehen (Endanschlaege im Solver).
+    // - Vertex auf Flaeche: der Punkt gleitet auf der Flaeche (ASMTTangentJoint).
+    // - Kante an Flaeche / Kante an Kante: die Kurve beruehrt die Flaeche bzw. die andere Kurve
+    //   von der Seite, auf der sie beim ersten Loesen liegt, und kann an ihr abrollen und
+    //   gleiten (einseitiger Kontakt, ASMTTangentJoint).
+    // Die Drehung bleibt jeweils frei, soweit der Kontakt sie nicht bindet.
+    // Bezugspunkt (App::Point, z.B. Ursprung von Body oder LCS) ohne Unterelement zaehlt als
+    // Vertex: sein JCS ist der Punkt selbst (2026-11-21, Klick auf einen Ursprungspunkt, der mit
+    // dem Skizzenpunkt zusammenfiel).
+    auto elementType = [&](const char* ref) {
+        std::string type = getElementTypeFromProp(joint, ref);
+        if (type.empty()) {
+            auto* obj = getObjFromJointRef(joint, ref);
+            if (obj && obj->isDerivedFrom<App::Point>()) {
+                type = "Vertex";
+            }
+        }
+        return type;
+    };
+    std::string type1 = elementType("Reference1");
+    std::string type2 = elementType("Reference2");
+    auto rank = [](const std::string& type) {
+        return type == "Face" ? 3 : type == "Edge" ? 2 : type == "Vertex" ? 1 : 0;
+    };
+    // Das Gelenkobjekt wird nicht umgeschrieben (Plan Phase 2): swapSides meldet dem Aufrufer,
+    // dass Referenz 2 Marker I ist.
+    swapSides = rank(type1) < rank(type2);
+    if (swapSides) {
+        std::swap(type1, type2);
+    }
+    const char* refI = swapSides ? "Reference2" : "Reference1";
+    const char* plcI = swapSides ? "Placement2" : "Placement1";
+    const char* refJ = swapSides ? "Reference1" : "Reference2";
+    const char* plcJ = swapSides ? "Placement1" : "Placement2";
+    auto ignored = [&](const char* why) {
+        Base::Console().warning(
+            "Assembly: Tangent-Gelenk '{}' ignoriert - {} (gewaehlt: {} und {}).\n",
+            getJointContextName(joint),
+            why,
+            type1.empty() ? "?" : type1,
+            type2.empty() ? "?" : type2
+        );
+        return nullptr;
+    };
+    if (rank(type1) < 2 || rank(type2) < 1 || type2 == "Face") {
+        return ignored("unterstuetzt werden Vertex oder Kante an einer Kante oder Flaeche");
+    }
+
+    auto curveOf = [&](const char* ref, const char* plc, MbD::ASMTTangentJoint::Curve& out) {
+        EdgeBSpline edge;
+        if (!getEdgeBSplineInJcs(joint, ref, plc, edge)) {
+            return false;
+        }
+        out.degree = edge.degree;
+        out.knots = edge.knots;
+        out.weights = edge.weights;
+        out.poles = edge.poles;
+        out.closed = edge.closed;
+        return true;
+    };
+    auto surfaceOf = [&](MbD::ASMTTangentJoint::Surface& out) {
+        FaceBSpline face;
+        if (!getFaceBSplineInJcs(joint, refI, plcI, face)) {
+            return false;
+        }
+        out.degreeU = face.degreeU;
+        out.degreeV = face.degreeV;
+        out.nPolesU = face.nPolesU;
+        out.nPolesV = face.nPolesV;
+        out.knotsU = face.knotsU;
+        out.knotsV = face.knotsV;
+        out.weights = face.weights;
+        out.poles = face.poles;
+        out.closedU = face.closedU;
+        out.closedV = face.closedV;
+        return true;
+    };
+
+    if (type1 == "Edge" && type2 == "Vertex") {
+        EdgeBSpline curve;
+        if (!getEdgeBSplineInJcs(joint, refI, plcI, curve)) {
+            return ignored("die Kante laesst sich nicht als Kurve auslesen");
+        }
+        auto mbdJoint = CREATE<ASMTNurbsPointOnCurveJoint>::With();
+        mbdJoint->setCurve(curve.degree, curve.knots, curve.weights, curve.poles, curve.closed);
+        if (!curve.closed) {
+            hasCurveEndStops = true;
+        }
+        return mbdJoint;
+    }
+
+    auto mbdJoint = CREATE<ASMTTangentJoint>::With();
+    MbD::ASMTTangentJoint::Surface surfaceI;
+    MbD::ASMTTangentJoint::Curve curveI, curveJ;
+    if (type1 == "Face" && !surfaceOf(surfaceI)) {
+        return ignored("die Flaeche laesst sich nicht als B-Spline-Flaeche auslesen");
+    }
+    if (type1 == "Edge" && !curveOf(refI, plcI, curveI)) {
+        return ignored("die Kante laesst sich nicht als Kurve auslesen");
+    }
+    if (type2 == "Edge" && !curveOf(refJ, plcJ, curveJ)) {
+        return ignored("die Kante laesst sich nicht als Kurve auslesen");
+    }
+    if (type1 == "Face" && type2 == "Vertex") {
+        mbdJoint->setPointOnSurface(surfaceI);
+    }
+    else if (type1 == "Face") {
+        mbdJoint->setCurveOnSurface(surfaceI, curveJ);
+    }
+    else {
+        mbdJoint->setCurveOnCurve(curveI, curveJ);
+    }
+    return mbdJoint;
 }
 
 std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(

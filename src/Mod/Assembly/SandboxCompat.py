@@ -218,6 +218,11 @@ def _refKind(ref):
     return None
 
 
+# Gelenktypen, die normales FreeCAD nicht kennt (am Ende der Typliste angehaengt, siehe
+# JointObject.JointTypes und AssemblySandboxSaveCheck.SANDBOX_JOINT_TYPES).
+SANDBOX_ONLY_JOINT_TYPES = ("Tangent",)
+
+
 def _distanceValue(joint):
     d = getattr(joint, "Distance", 0.0)
     return getattr(d, "Value", d)
@@ -255,6 +260,18 @@ def staticFindings(project):
                             kind="pointOnCurve",
                             text="Punkt auf Kurve (Abstand 0): normales FreeCAD kennt das nicht "
                             "und löst es als gewöhnliches Abstandsgelenk - das Teil springt.",
+                        )
+                    )
+                if getattr(obj, "JointType", "") in SANDBOX_ONLY_JOINT_TYPES:
+                    findings.append(
+                        dict(
+                            file=path,
+                            name=obj.Name,
+                            label=obj.Label,
+                            level=LEVEL_RED,
+                            kind="sandboxJointType",
+                            text=f"Gelenktyp {obj.JointType}: gibt es nur in der Sandbox - normales "
+                            "FreeCAD übergeht das Gelenk beim Lösen, sein Dialog bricht ab.",
                         )
                     )
                 if _hasLimits(obj):
@@ -466,7 +483,7 @@ def normalizeProject(doc, target, reference, suppressUnsupported, progress=None)
     suppress = []
     if suppressUnsupported:
         for f in report.static:
-            if f["kind"] == "pointOnCurve" and f["file"] in mapping:
+            if f["kind"] in ("pointOnCurve", "sandboxJointType") and f["file"] in mapping:
                 suppress.append([mapping[f["file"]], f["name"]])
                 f["text"] += " In der Kopie deaktiviert."
                 f["level"] = LEVEL_YELLOW

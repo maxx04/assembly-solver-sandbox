@@ -683,8 +683,12 @@ class TaskAssemblyInsertLink(QtCore.QObject):
         self.buildPartList()
 
     def getTranslationVec(self, part):
-        bb = part.Shape.BoundBox
-        if bb:
+        # FCPROJECT-PATCH (2026-11-21, auch in Vanilla-Weekly): ein Link auf einen Body ohne
+        # Volumenkoerper (nur Skizzen) hat gar kein Attribut "Shape" - das Einfuegen des zweiten
+        # Teils brach dann mit AttributeError ab, OK danach mit KeyError 'translation'.
+        shape = getattr(part, "Shape", None)
+        bb = shape.BoundBox if shape is not None and not shape.isNull() else None
+        if bb is not None and bb.isValid():
             translation = (bb.XMax + bb.YMax + bb.ZMax) * 0.15
         else:
             translation = 10

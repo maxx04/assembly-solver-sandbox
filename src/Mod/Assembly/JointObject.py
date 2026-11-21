@@ -60,6 +60,7 @@ TranslatedJointTypes = [
     translate("Assembly", "Screw"),
     translate("Assembly", "Gears"),
     translate("Assembly", "Belt"),
+    translate("Assembly", "Tangent"),
 ]
 
 JointTypes = [
@@ -76,7 +77,14 @@ JointTypes = [
     "Screw",
     "Gears",
     "Belt",
+    # FCPROJECT-PATCH (2026-10-16, plans/2026-10-16-tangent-joint.md): am Ende angehaengt, damit
+    # die Indizes bestehender Dateien gleich bleiben (muss zu JointType in AssemblyUtils.h passen).
+    "Tangent",
 ]
+
+# FCPROJECT-PATCH (2026-10-16/18): Tangent - Vertex oder Kante an einer Kante oder Flaeche, also
+# nicht zwei Vertices und nicht zwei Flaechen.
+JointTangentElementTypes = ["Vertex", "Edge", "Face"]
 
 JointUsingAngle = [
     "Angle",
@@ -790,6 +798,12 @@ class Joint:
     def setJointType(self, joint, newType):
         oldType = joint.JointType
         if newType != oldType:
+            # FCPROJECT-PATCH (2026-10-16, Tangent-Gelenk): Joints aus aelteren Dateien tragen die
+            # Typliste ihres Erstellungsstands, ohne die spaeter angehaengten Typen. Liste erst
+            # erneuern, die bestehenden Indizes bleiben dabei gleich.
+            if newType not in joint.getEnumerationsOfProperty("JointType"):
+                joint.JointType = JointTypes
+                joint.JointType = oldType
             joint.JointType = newType
 
     def onChanged(self, joint, prop):
@@ -1339,6 +1353,8 @@ class ViewProviderJoint:
             return ":/icons/Assembly_CreateJointGears.svg"
         elif self.app_obj.JointType == "Belt":
             return ":/icons/Assembly_CreateJointPulleys.svg"
+        elif self.app_obj.JointType == "Tangent":
+            return ":/icons/Assembly_CreateJointTangent.svg"
 
         return ":/icons/Assembly_CreateJoint.svg"
 
@@ -2671,6 +2687,10 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
                 # Can't join a solid to itself. So the user need to select 2 different parts.
                 acceptable = False
 
+        # FCPROJECT-PATCH (2026-10-16/18, Tangent-Gelenk): Vertex oder Kante an Kante oder Flaeche.
+        if acceptable and self.jType == "Tangent":
+            acceptable = self.isTangentSelectionAcceptable(ref)
+
         if not acceptable:
             self.addition_rejected = True
             Gui.Selection.removeSelection(doc_name, obj_name, sub_name)
@@ -2689,6 +2709,50 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
 
         # We hide the preview JCS if we just added to the selection
         self.joint.ViewObject.Proxy.showPreviewJCS(False)
+
+    def isTangentSelectionAcceptable(self, ref):
+        def elementType(reference):
+            elt_type, _ = UtilsAssembly.extract_type_and_number(
+                UtilsAssembly.getElementName(reference[1][0])
+            )
+            if elt_type:
+                return elt_type
+            # Ganzes Objekt ohne Unterelement (2026-11-21): ein Bezugspunkt (App::Point, z.B.
+            # Ursprung von Body oder LCS) zaehlt als Vertex, alles andere hat keinen Typ ("").
+            obj = UtilsAssembly.getObject(reference)
+            if obj is not None and obj.isDerivedFrom("App::Point"):
+                return "Vertex"
+            return ""
+
+        new_type = elementType(ref)
+        taken = [elementType(reference) for reference in self.refs]
+        pair = sorted(taken + [new_type])
+        valid_pairs = (["Edge", "Vertex"], ["Face", "Vertex"], ["Edge", "Edge"], ["Edge", "Face"])
+        if (
+            new_type in JointTangentElementTypes
+            and len(pair) <= 2
+            and (len(pair) < 2 or pair in valid_pairs)
+        ):
+            return True
+
+        # Hinweis: was angeklickt wurde und was erlaubt ist (Nutzer 2026-11-21: "Hinweis ist
+        # unklar").
+        names = {"Vertex": "Punkt", "Edge": "Kante", "Face": "Flaeche"}
+        if not new_type:
+            obj = UtilsAssembly.getObject(ref)
+            label = obj.Label if obj is not None else "?"
+            what = f"das ganze Objekt '{label}' (kein Punkt, keine Kante, keine Flaeche)"
+        else:
+            what = f"eine {names.get(new_type, new_type)}"
+        if taken:
+            already = " + ".join(names.get(t, t or "?") for t in taken)
+            what += f" - schon gewaehlt: {already}"
+        App.Console.PrintWarning(
+            f"Tangent-Gelenk: angeklickt wurde {what}. Erlaubt sind Punkt + Kante, Punkt + "
+            "Flaeche, Kante + Kante oder Kante + Flaeche. Bitte direkt in der 3D-Ansicht auf den "
+            "Punkt bzw. die Kante oder Flaeche klicken.\n"
+        )
+        return False
 
     def removeSelection(self, doc_name, obj_name, sub_name, mousePos=None):
         if self.addition_rejected:

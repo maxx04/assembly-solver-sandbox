@@ -379,6 +379,32 @@ class CommandCreateJointBelt:
         activateJoint(12)
 
 
+class CommandCreateJointTangent:
+    # FCPROJECT-PATCH (2026-10-16/18, plans/2026-10-16-tangent-joint.md): Tangent - Vertex oder
+    # Kante an Kante oder Flaeche.
+    def __init__(self):
+        pass
+
+    def GetResources(self):
+        return {
+            "Pixmap": "Assembly_CreateJointTangent",
+            "MenuText": QT_TRANSLATE_NOOP("Assembly_CreateJointTangent", "Tangent Joint"),
+            "Accel": "K",
+            "ToolTip": QT_TRANSLATE_NOOP(
+                "Assembly_CreateJointTangent",
+                "<p>Creates a tangent joint. A vertex stays on a curve (spline, arc, line) or on a face and slides along it; on an open curve it stops at the ends. A curve touches a face or another curve from the side it starts on and can roll and slide along it. The rotation stays free as far as the contact allows.</p>"
+                "<p>Select a vertex or an edge, and an edge or a face.</p>",
+            ),
+            "CmdType": "ForEdit",
+        }
+
+    def IsActive(self):
+        return isCreateJointActive()
+
+    def Activated(self):
+        activateJoint(13)
+
+
 class CommandGroupGearBelt:
     def GetCommands(self):
         return ("Assembly_CreateJointGears", "Assembly_CreateJointBelt")
@@ -590,4 +616,5 @@ if App.GuiUp:
     Gui.addCommand("Assembly_CreateJointGears", CommandCreateJointGears())
     Gui.addCommand("Assembly_CreateJointBelt", CommandCreateJointBelt())
     Gui.addCommand("Assembly_CreateJointGearBelt", CommandGroupGearBelt())
+    Gui.addCommand("Assembly_CreateJointTangent", CommandCreateJointTangent())
     Gui.addCommand("Assembly_CreateJointRigidGroup", CommandCreateJointRigidGroup())

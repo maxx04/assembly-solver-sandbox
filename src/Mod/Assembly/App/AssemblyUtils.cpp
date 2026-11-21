@@ -23,6 +23,17 @@
 
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
+#include <BRep_Tool.hxx>
+#include <GeomConvert.hxx>
+#include <BRepTools.hxx>
+#include <Geom_BSplineCurve.hxx>
+#include <Geom_BSplineSurface.hxx>
+#include <Geom_RectangularTrimmedSurface.hxx>
+#include <Geom_TrimmedCurve.hxx>
+#include <Precision.hxx>
+#include <Standard_Failure.hxx>
+#include <TColStd_Array1OfReal.hxx>
+#include <gp_Pnt.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Face.hxx>
 #include <gp_Circ.hxx>
@@ -37,6 +48,7 @@
 #include <App/PropertyStandard.h>
 #include <App/Link.h>
 
+#include <Base/Exception.h>
 #include <Base/Placement.h>
 #include <Base/Tools.h>
 #include <Base/Interpreter.h>
@@ -159,6 +171,182 @@ double getEdgeRadius(const App::DocumentObject* obj, const std::string& elt)
     BRepAdaptor_Curve sf(edge);
 
     return sf.GetType() == GeomAbs_Circle ? sf.Circle().Radius() : 0.0;
+}
+
+bool getEdgeBSplineInJcs(
+    const App::DocumentObject* joint,
+    const char* propRefName,
+    const char* propPlcName,
+    EdgeBSpline& out
+)
+{
+    // Wie UtilsAssembly.findPlacement(): die Elemente von obj.Shape liegen in den Koordinaten
+    // MIT obj.Placement, das JCS (Placement1/2) ist relativ zu obj. Ein App::Link hat selbst
+    // keine Shape; dann Shape und Placement des verlinkten Objekts (dessen lokale Koordinaten
+    // sind die des Links).
+    // Dasselbe Objekt wie handleOneSideOfJoint()/getEdgeRadius() (Elementname relativ dazu).
+    auto* obj = getObjFromJointRef(joint, propRefName);
+    auto* base = dynamic_cast<const PartApp::Feature*>(obj);
+    if (!base && obj) {
+        base = dynamic_cast<const PartApp::Feature*>(obj->getLinkedObject(true));
+    }
+    if (!base) {
+        return false;
+    }
+    const std::string elt = getElementFromProp(joint, propRefName);
+    if (elt.rfind("Edge", 0) != 0) {
+        return false;
+    }
+
+    try {
+        const TopoDS_Shape sub = base->Shape.getShape().getSubShape(elt.c_str());
+        if (sub.IsNull() || sub.ShapeType() != TopAbs_EDGE) {
+            return false;
+        }
+        const TopoDS_Edge edge = TopoDS::Edge(sub);
+        double first = 0.0;
+        double last = 0.0;
+        // Mit Location der Kante angewendet.
+        Handle(Geom_Curve) curve = BRep_Tool::Curve(edge, first, last);
+        if (curve.IsNull()) {
+            return false;
+        }
+        Handle(Geom_TrimmedCurve) trimmed = new Geom_TrimmedCurve(curve, first, last);
+        Handle(Geom_BSplineCurve) bspline = GeomConvert::CurveToBSplineCurve(trimmed);
+        if (bspline.IsNull()) {
+            return false;
+        }
+        out.closed = bspline->IsClosed()
+            || bspline->StartPoint().Distance(bspline->EndPoint()) < Precision::Confusion();
+        if (bspline->IsPeriodic()) {
+            bspline->SetNotPeriodic();
+        }
+
+        const auto* jcsProp = joint->getPropertyByName<App::PropertyPlacement>(propPlcName);
+        if (!jcsProp) {
+            return false;
+        }
+        const Base::Placement toJcs
+            = jcsProp->getValue().inverse() * base->Placement.getValue().inverse();
+
+        out.degree = bspline->Degree();
+        TColStd_Array1OfReal knotSequence(1, bspline->NbPoles() + bspline->Degree() + 1);
+        bspline->KnotSequence(knotSequence);
+        out.knots.clear();
+        for (int i = knotSequence.Lower(); i <= knotSequence.Upper(); i++) {
+            out.knots.push_back(knotSequence(i));
+        }
+        out.weights.clear();
+        out.poles.clear();
+        for (int i = 1; i <= bspline->NbPoles(); i++) {
+            const gp_Pnt pole = bspline->Pole(i);
+            Base::Vector3d v(pole.X(), pole.Y(), pole.Z());
+            toJcs.multVec(v, v);
+            out.poles.insert(out.poles.end(), {v.x, v.y, v.z});
+            out.weights.push_back(bspline->Weight(i));
+        }
+    }
+    catch (const Standard_Failure&) {
+        return false;
+    }
+    catch (const Base::Exception&) {
+        return false;
+    }
+    return true;
+}
+
+bool getFaceBSplineInJcs(
+    const App::DocumentObject* joint,
+    const char* propRefName,
+    const char* propPlcName,
+    FaceBSpline& out
+)
+{
+    // Objekt, Koordinaten und JCS wie getEdgeBSplineInJcs().
+    auto* obj = getObjFromJointRef(joint, propRefName);
+    auto* base = dynamic_cast<const PartApp::Feature*>(obj);
+    if (!base && obj) {
+        base = dynamic_cast<const PartApp::Feature*>(obj->getLinkedObject(true));
+    }
+    if (!base) {
+        return false;
+    }
+    const std::string elt = getElementFromProp(joint, propRefName);
+    if (elt.rfind("Face", 0) != 0) {
+        return false;
+    }
+
+    try {
+        const TopoDS_Shape sub = base->Shape.getShape().getSubShape(elt.c_str());
+        if (sub.IsNull() || sub.ShapeType() != TopAbs_FACE) {
+            return false;
+        }
+        const TopoDS_Face face = TopoDS::Face(sub);
+        // Mit Location der Flaeche angewendet. Ebenen und Zylinder sind unendlich: auf die
+        // UV-Grenzen der Flaeche beschneiden.
+        Handle(Geom_Surface) surface = BRep_Tool::Surface(face);
+        if (surface.IsNull()) {
+            return false;
+        }
+        double u1 = 0.0, u2 = 0.0, v1 = 0.0, v2 = 0.0;
+        BRepTools::UVBounds(face, u1, u2, v1, v2);
+        Handle(Geom_RectangularTrimmedSurface) trimmed
+            = new Geom_RectangularTrimmedSurface(surface, u1, u2, v1, v2);
+        Handle(Geom_BSplineSurface) bspline = GeomConvert::SurfaceToBSplineSurface(trimmed);
+        if (bspline.IsNull()) {
+            return false;
+        }
+        out.closedU = bspline->IsUClosed();
+        out.closedV = bspline->IsVClosed();
+        if (bspline->IsUPeriodic()) {
+            bspline->SetUNotPeriodic();
+        }
+        if (bspline->IsVPeriodic()) {
+            bspline->SetVNotPeriodic();
+        }
+
+        const auto* jcsProp = joint->getPropertyByName<App::PropertyPlacement>(propPlcName);
+        if (!jcsProp) {
+            return false;
+        }
+        const Base::Placement toJcs
+            = jcsProp->getValue().inverse() * base->Placement.getValue().inverse();
+
+        out.degreeU = bspline->UDegree();
+        out.degreeV = bspline->VDegree();
+        out.nPolesU = bspline->NbUPoles();
+        out.nPolesV = bspline->NbVPoles();
+        TColStd_Array1OfReal knotsU(1, out.nPolesU + out.degreeU + 1);
+        bspline->UKnotSequence(knotsU);
+        TColStd_Array1OfReal knotsV(1, out.nPolesV + out.degreeV + 1);
+        bspline->VKnotSequence(knotsV);
+        out.knotsU.clear();
+        for (int i = knotsU.Lower(); i <= knotsU.Upper(); i++) {
+            out.knotsU.push_back(knotsU(i));
+        }
+        out.knotsV.clear();
+        for (int i = knotsV.Lower(); i <= knotsV.Upper(); i++) {
+            out.knotsV.push_back(knotsV(i));
+        }
+        out.weights.clear();
+        out.poles.clear();
+        for (int i = 1; i <= out.nPolesU; i++) {
+            for (int j = 1; j <= out.nPolesV; j++) {
+                const gp_Pnt pole = bspline->Pole(i, j);
+                Base::Vector3d v(pole.X(), pole.Y(), pole.Z());
+                toJcs.multVec(v, v);
+                out.poles.insert(out.poles.end(), {v.x, v.y, v.z});
+                out.weights.push_back(bspline->Weight(i, j));
+            }
+        }
+    }
+    catch (const Standard_Failure&) {
+        return false;
+    }
+    catch (const Base::Exception&) {
+        return false;
+    }
+    return true;
 }
 
 // FCPROJECT-PATCH (2026-10-27, Plan Phase 2): tauscht NICHT mehr im Gelenkobjekt (swapJCS()),

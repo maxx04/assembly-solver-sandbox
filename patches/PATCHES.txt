@@ -168,6 +168,12 @@
 # Seit 2026-11-01: Punkt-auf-Kurve (DispCompAlongCurveIeqcJeqc, PointOnCurveConstraintIqcJqc,
 # PointOnCurveJoint, ASMTPointOnCurveJoint); redundantConstraintStates() meldet isRadians fuer
 # AngleZ*/AxisAngle*-Bedingungen.
+# Seit 2026-11-21 (Zweig tangent-joint uebernommen): Tangent-Gelenk - Punkt auf B-Spline-Kurve
+# mit Endanschlag (NurbsCurve, EndFrameqcCurve/Offset, NurbsPointOnCurve*,
+# ASMTNurbsPointOnCurveJoint; Nurbs-Praefix, weil der Punkt-auf-Kurve oben dieselben Namen
+# belegt), Flaechen- und Kurvenkontakt (NurbsSurface, EndFrameqcFoot/Surface, TangentContact,
+# TangentJoints, ASMTTangentJoint). Ausserdem Leserfehler upstream: ASMTRefItem::readMarkers()
+# und Zeilen-Lesen innerhalb von assert() in ASMTAssembly::assemblyFromFile()/ASMTLimit.
 2026.10.11-ondselsolver-redundancy-groups.patch
 
 # Build-Baum-Patches aus dem Dev-Build (/home/maxx/freecad/freecad-source), seit 2026-10-27 aktiv
