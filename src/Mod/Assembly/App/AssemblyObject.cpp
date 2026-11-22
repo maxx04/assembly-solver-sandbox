@@ -4389,7 +4389,24 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointTangent(App::DocumentObje
         }
         auto mbdJoint = CREATE<ASMTNurbsPointOnCurveJoint>::With();
         mbdJoint->setCurve(curve.degree, curve.knots, curve.weights, curve.poles, curve.closed);
-        if (!curve.closed) {
+        // FCPROJECT-PATCH (2026-11-22, TODO Tangent 3+4): Abstand des Punkts von der Kurve (ebene
+        // Kurve: in der Ebene, auf der Seite des Punkts; Raumkurve: Rohr) und Grenzen des Wegs
+        // entlang der Kurve als Bogenlaenge ab dem Kurvenanfang - vorhandene Eigenschaften
+        // Distance, LengthMin/Max, EnableLengthMin/Max (keine neue Eigenschaft, C4).
+        mbdJoint->offset = getJointDistance(joint);
+        auto boolProp = [&](const char* name) {
+            auto* prop = dynamic_cast<App::PropertyBool*>(joint->getPropertyByName(name));
+            return prop && prop->getValue();
+        };
+        auto floatProp = [&](const char* name) {
+            auto* prop = dynamic_cast<App::PropertyFloat*>(joint->getPropertyByName(name));
+            return prop ? prop->getValue() : 0.0;
+        };
+        mbdJoint->hasLengthMin = boolProp("EnableLengthMin");
+        mbdJoint->hasLengthMax = boolProp("EnableLengthMax");
+        mbdJoint->lengthMin = floatProp("LengthMin");
+        mbdJoint->lengthMax = floatProp("LengthMax");
+        if (!curve.closed || mbdJoint->hasLengthMin || mbdJoint->hasLengthMax) {
             hasCurveEndStops = true;
         }
         return mbdJoint;
@@ -4407,6 +4424,8 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointTangent(App::DocumentObje
     if (type2 == "Edge" && !curveOf(refJ, plcJ, curveJ)) {
         return ignored("die Kante laesst sich nicht als Kurve auslesen");
     }
+    // FCPROJECT-PATCH (2026-11-22): Abstand der Beruehrung (Distance), siehe ASMTTangentJoint.
+    mbdJoint->offset = getJointDistance(joint);
     if (type1 == "Face" && type2 == "Vertex") {
         mbdJoint->setPointOnSurface(surfaceI);
     }

@@ -105,7 +105,8 @@ def tangentElementType(reference):
 
 # FCPROJECT-PATCH (2026-11-21, Nutzer): Anzeige im Gelenk-Dialog. Schluessel = sortiertes Paar.
 TangentPairTexts = {
-    ("Edge", "Vertex"): "Punkt gleitet auf der Kurve (am offenen Kurvenende Anschlag).",
+    ("Edge", "Vertex"): "Punkt gleitet auf der Kurve (am offenen Kurvenende Anschlag). Grenzen: "
+    "Weg entlang der Kurve ab dem Kurvenanfang.",
     ("Face", "Vertex"): "Punkt gleitet auf der Fläche.",
     ("Edge", "Face"): "Kante berührt die Fläche von einer Seite und kann abrollen und gleiten.",
     ("Edge", "Edge"): "Kante berührt die andere Kante von einer Seite.",
@@ -118,6 +119,36 @@ def tangentPairKey(refs):
     types = [tangentElementType(r) for r in refs]
     return tuple(sorted(types)) if len(types) == 2 and all(types) else None
 
+
+def tangentGlobalShape(ref):
+    """Unterelement einer Tangent-Referenz in Weltkoordinaten (ueber die Baugruppe)."""
+    import Part
+
+    root, sub = ref[0], ref[1][0]
+    parents = root.Parents
+    if parents is not None and len(parents) == 1 and len(parents[0]) == 2:
+        root, sub = parents[0][0], parents[0][1] + sub
+    return Part.getShape(root, sub, needSubElement=True)
+
+
+def tangentArcPosition(refs):
+    """FCPROJECT-PATCH (2026-11-22): Punkt auf Kurve - Weg des Punkts entlang der Kurve als
+    Bogenlaenge ab dem Kurvenanfang (wie die Grenzen LengthMin/LengthMax im Solver,
+    ASMTNurbsPointOnCurveJoint). None, wenn die Auswahl nicht Punkt + Kante ist."""
+    if tangentPairKey(refs) != ("Edge", "Vertex"):
+        return None
+    try:
+        edge_ref = next(r for r in refs if tangentElementType(r) == "Edge")
+        point_ref = next(r for r in refs if r is not edge_ref)
+        edge = tangentGlobalShape(edge_ref).Edges[0]
+        point = tangentGlobalShape(point_ref)
+        point = point.Vertexes[0].Point if point.Vertexes else point.BoundBox.Center
+        u0, u1 = edge.FirstParameter, edge.LastParameter
+        u = min(max(edge.Curve.parameter(point), u0), u1)
+        return edge.Curve.length(u0, u) if u > u0 else 0.0
+    except Exception:  # noqa: BLE001
+        return None
+
 JointUsingAngle = [
     "Angle",
 ]
@@ -128,6 +159,8 @@ JointUsingDistance = [
     "Screw",
     "Gears",
     "Belt",
+    # FCPROJECT-PATCH (2026-11-22): Abstand der Beruehrung beim Tangent-Gelenk.
+    "Tangent",
 ]
 
 JointUsingDistance2 = [
@@ -1021,16 +1054,9 @@ class Joint:
         j_index = 0 if rank[types[0]] < rank[types[1]] else 1
         i_index = 1 - j_index
 
-        def globalShape(ref):
-            root, sub = ref[0], ref[1][0]
-            parents = root.Parents
-            if parents is not None and len(parents) == 1 and len(parents[0]) == 2:
-                root, sub = parents[0][0], parents[0][1] + sub
-            return Part.getShape(root, sub, needSubElement=True)
-
         try:
-            shape_j = globalShape(refs[j_index])
-            shape_i = globalShape(refs[i_index])
+            shape_j = tangentGlobalShape(refs[j_index])
+            shape_i = tangentGlobalShape(refs[i_index])
             _d, pairs, _info = shape_j.distToShape(shape_i)
             contact = pairs[0][0]
             edge = shape_j.Edges[0]
@@ -2405,7 +2431,7 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
         self.jForm.distanceLabel.setVisible(needDistance)
         self.jForm.distanceSpinbox.setVisible(needDistance)
         if needDistance:
-            if jType == "Distance":
+            if jType == "Distance" or jType == "Tangent":
                 self.jForm.distanceLabel.setText(translate("Assembly", "Distance"))
             elif jType == "Gears" or jType == "Belt":
                 self.jForm.distanceLabel.setText(translate("Assembly", "Radius 1"))
@@ -2449,7 +2475,7 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
         self.jForm.PushButtonRotate90.setVisible(jType in JointUsingReverse)
         self.updateTangentInfo()
 
-        needLengthLimits = jType in JointUsingLimitLength
+        needLengthLimits = self.usesLengthLimits()
         needAngleLimits = jType in JointUsingLimitAngle
         needLimits = needLengthLimits or needAngleLimits
         self.jForm.groupBox_limits.setVisible(needLimits)
@@ -2599,7 +2625,12 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
         self.joint.Proxy.setJointConnectors(self.joint, self.refs)
 
         self.updateIsolation()
-        self.updateTangentInfo()
+        if self.jType == "Tangent":
+            # Grenzen nur bei Punkt + Kante: Sichtbarkeit haengt an der Auswahl.
+            self.adaptUi()
+            self.updateLimits()
+        else:
+            self.updateTangentInfo()
 
     def updateTangentInfo(self):
         """FCPROJECT-PATCH (2026-11-21, Nutzer): Tangent-Gelenk - erkannte Paarung bzw. was noch zu
@@ -2664,11 +2695,21 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
         for i, tooltip in enumerate(tooltips):
             self.jForm.featureList.item(i).setToolTip(tooltip)
 
+    def usesLengthLimits(self):
+        """Laengengrenzen: Slider/Zylinder; FCPROJECT-PATCH (2026-11-22) auch Tangent mit Punkt +
+        Kante (Weg entlang der Kurve ab dem Kurvenanfang)."""
+        if self.jType in JointUsingLimitLength:
+            return True
+        return self.jType == "Tangent" and tangentPairKey(self.refs) == ("Edge", "Vertex")
+
     def updateLimits(self):
-        needLengthLimits = self.jType in JointUsingLimitLength
+        needLengthLimits = self.usesLengthLimits()
         needAngleLimits = self.jType in JointUsingLimitAngle
         if needLengthLimits:
-            distance = UtilsAssembly.getJointDistance(self.joint)
+            if self.jType == "Tangent":
+                distance = tangentArcPosition(self.refs) or 0.0
+            else:
+                distance = UtilsAssembly.getJointDistance(self.joint)
             if (
                 not self.jForm.limitCheckbox1.isChecked()
                 and self.jForm.limitLenMinSpinbox.property("expression") == ""

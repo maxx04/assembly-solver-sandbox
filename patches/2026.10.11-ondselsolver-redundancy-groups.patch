@@ -156,10 +156,10 @@ index 5952c92..54bf36a 100644
  
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/ASMTNurbsPointOnCurveJoint.cpp b/src/3rdParty/OndselSolver/OndselSolver/ASMTNurbsPointOnCurveJoint.cpp
 new file mode 100644
-index 0000000..523bdd1
+index 0000000..7e409a0
 --- /dev/null
 +++ b/src/3rdParty/OndselSolver/OndselSolver/ASMTNurbsPointOnCurveJoint.cpp
-@@ -0,0 +1,192 @@
+@@ -0,0 +1,244 @@
 +/***************************************************************************
 + *   Copyright (c) 2023 Ondsel, Inc.                                       *
 + *                                                                         *
@@ -274,6 +274,19 @@ index 0000000..523bdd1
 +	readRow("knots", knots);
 +	readRow("weights", weights);
 +	readRow("poles", poles);
++	// Sandbox (2026-11-22), optional: offset, lengthMin, lengthMax (fehlen in aelteren Dateien).
++	auto readValue = [&](const std::string& label, double& value) {
++		if (!lines.empty() && lines[0].find(label) != std::string::npos) {
++			lines.erase(lines.begin());
++			value = readDouble(lines[0]);
++			lines.erase(lines.begin());
++			return true;
++		}
++		return false;
++	};
++	readValue("offset", offset);
++	hasLengthMin = readValue("lengthMin", lengthMin);
++	hasLengthMax = readValue("lengthMax", lengthMax);
 +}
 +
 +void MbD::ASMTNurbsPointOnCurveJoint::createMbD(std::shared_ptr<System> mbdSys, std::shared_ptr<Units> mbdUnits)
@@ -298,17 +311,25 @@ index 0000000..523bdd1
 +	markerFrameI->addEndFrame(curveFrm);
 +	curveFrm->curve = curve;
 +	mbdJt->connectsItoJ(curveFrm, mrkJ);
-+
-+	if (curve->isClosed()) {
-+		return;
++	if (offset != 0.0) {
++		mbdJt->offset = offset / mbdUnits->length;
++		NurbsCurve::Vec3 normal;
++		if (NurbsCurve::planeNormalOfPoles(curve->poles, normal)) {
++			curveFrm->planeNormal = normal;
++		}
++		else {
++			curveFrm->radial = true;
++			mbdJt->tube = true;
++		}
 +	}
-+	// End stops: at each end the point may not pass the plane through the end point that is
-+	// perpendicular to the end tangent ("=>" 0 along the inward tangent).
-+	for (int end = 0; end < 2; end++) {
-+		double u = end == 0 ? curve->firstParameter() : curve->lastParameter();
++
++	// Stop: the point may not pass the plane through the curve point at parameter u that is
++	// perpendicular to the tangent there ("=>" 0 along the tangent, inward = towards the
++	// allowed part of the curve).
++	auto addStop = [&](double u, bool inwardAlongCurve, const std::string& suffix) {
 +		auto c = curve->value(u);
 +		auto t = curve->tangent(u);
-+		if (end == 1) {
++		if (!inwardAlongCurve) {
 +			for (auto& ti : t) {
 +				ti = -ti;
 +			}
@@ -320,13 +341,32 @@ index 0000000..523bdd1
 +		}
 +		setFrameAlong(endFrm->aAme, t);
 +		auto limit = TranslationLimitIJ::With();
-+		limit->name = mbdJt->name + (end == 0 ? "-CurveStart" : "-CurveEnd");
++		limit->name = mbdJt->name + suffix;
 +		limit->connectsItoJ(endFrm, mrkJ);
 +		limit->type = "=>";
 +		limit->limit = 0.0;
 +		limit->tol = 1.0e-9;
 +		mbdSys->addLimit(limit);
++	};
++	// Limits along the curve (arc length from the start, Sandbox 2026-11-22).
++	double sMin = lengthMin / mbdUnits->length;
++	double sMax = lengthMax / mbdUnits->length;
++	if (hasLengthMin && hasLengthMax && sMin > sMax) {
++		std::swap(sMin, sMax);
 +	}
++	if (hasLengthMin) {
++		addStop(curve->parameterAtLength(sMin), true, "-LimitLenMin");
++	}
++	if (hasLengthMax) {
++		addStop(curve->parameterAtLength(sMax), false, "-LimitLenMax");
++	}
++
++	if (curve->isClosed()) {
++		return;
++	}
++	// End stops at both ends of an open curve.
++	addStop(curve->firstParameter(), true, "-CurveStart");
++	addStop(curve->lastParameter(), false, "-CurveEnd");
 +}
 +
 +void MbD::ASMTNurbsPointOnCurveJoint::storeOnLevel(std::ofstream& os, size_t level)
@@ -345,6 +385,18 @@ index 0000000..523bdd1
 +	storeOnLevelDoubles(os, level + 2, weights);
 +	storeOnLevelString(os, level + 1, "poles");
 +	storeOnLevelDoubles(os, level + 2, poles);
++	if (offset != 0.0) {
++		storeOnLevelString(os, level + 1, "offset");
++		storeOnLevelDouble(os, level + 2, offset);
++	}
++	if (hasLengthMin) {
++		storeOnLevelString(os, level + 1, "lengthMin");
++		storeOnLevelDouble(os, level + 2, lengthMin);
++	}
++	if (hasLengthMax) {
++		storeOnLevelString(os, level + 1, "lengthMax");
++		storeOnLevelDouble(os, level + 2, lengthMax);
++	}
 +}
 +
 +void MbD::ASMTNurbsPointOnCurveJoint::storeOnTimeSeries(std::ofstream& os)
@@ -354,10 +406,10 @@ index 0000000..523bdd1
 +}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/ASMTNurbsPointOnCurveJoint.h b/src/3rdParty/OndselSolver/OndselSolver/ASMTNurbsPointOnCurveJoint.h
 new file mode 100644
-index 0000000..88e21c3
+index 0000000..cf527e3
 --- /dev/null
 +++ b/src/3rdParty/OndselSolver/OndselSolver/ASMTNurbsPointOnCurveJoint.h
-@@ -0,0 +1,36 @@
+@@ -0,0 +1,43 @@
 +/***************************************************************************
 + *   Copyright (c) 2023 Ondsel, Inc.                                       *
 + *                                                                         *
@@ -392,6 +444,13 @@ index 0000000..88e21c3
 +		size_t degree = 0;
 +		std::vector<double> knots, weights, poles;
 +		bool closed = false;
++		// Sandbox (2026-11-22): Abstand des Punkts von der Kurve (ebene Kurve: in der Ebene, auf
++		// der Seite des Punkts; Raumkurve: Rohr) und Grenzen des Wegs entlang der Kurve, als
++		// Bogenlaenge ab dem Kurvenanfang (wie die Endanschlaege: einseitige Grenzen entlang der
++		// Tangente an den Punkten bei lengthMin bzw. lengthMax). Laengen in Modelleinheiten.
++		double offset = 0.0;
++		bool hasLengthMin = false, hasLengthMax = false;
++		double lengthMin = 0.0, lengthMax = 0.0;
 +	};
 +}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/ASMTPointOnCurveJoint.cpp b/src/3rdParty/OndselSolver/OndselSolver/ASMTPointOnCurveJoint.cpp
@@ -560,10 +619,10 @@ index 0367e7b..02922d1 100644
  	while (!markersLines.empty()) {
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/ASMTTangentJoint.cpp b/src/3rdParty/OndselSolver/OndselSolver/ASMTTangentJoint.cpp
 new file mode 100644
-index 0000000..4de3176
+index 0000000..b4d3ba6
 --- /dev/null
 +++ b/src/3rdParty/OndselSolver/OndselSolver/ASMTTangentJoint.cpp
-@@ -0,0 +1,265 @@
+@@ -0,0 +1,275 @@
 +/***************************************************************************
 + *   Copyright (c) 2023 Ondsel, Inc.                                       *
 + *                                                                         *
@@ -707,9 +766,13 @@ index 0000000..4de3176
 +		contact->frmI = frmI.get();
 +		contact->frmJ = frmJCurve.get();
 +		frmI->contact = contact;
++		contact->target = offset / mbdUnits->length;
 +		mbdJt->connectsItoJ(frmI, frmJCurve);
 +	}
 +	else {
++		if (auto pointJt = std::dynamic_pointer_cast<PointOnSurfaceJoint>(mbdJt)) {
++			pointJt->offset = offset / mbdUnits->length;
++		}
 +		mbdJt->connectsItoJ(frmI, mrkJ);
 +	}
 +}
@@ -772,6 +835,8 @@ index 0000000..4de3176
 +	if (kind != "PointOnSurface") {
 +		takeCurve("curveJ", curveJ);
 +	}
++	row = take("offset");  // Sandbox 2026-11-22, optional
++	offset = row.empty() ? 0.0 : readDouble(row);
 +}
 +
 +void MbD::ASMTTangentJoint::storeOnLevel(std::ofstream& os, size_t level)
@@ -822,6 +887,10 @@ index 0000000..4de3176
 +	if (kind != "PointOnSurface") {
 +		storeCurve("curveJ", curveJ);
 +	}
++	if (offset != 0.0) {
++		storeOnLevelString(os, level + 1, "offset");
++		storeOnLevelDouble(os, level + 2, offset);
++	}
 +}
 +
 +void MbD::ASMTTangentJoint::storeOnTimeSeries(std::ofstream& os)
@@ -831,10 +900,10 @@ index 0000000..4de3176
 +}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/ASMTTangentJoint.h b/src/3rdParty/OndselSolver/OndselSolver/ASMTTangentJoint.h
 new file mode 100644
-index 0000000..030455b
+index 0000000..0ac1266
 --- /dev/null
 +++ b/src/3rdParty/OndselSolver/OndselSolver/ASMTTangentJoint.h
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,56 @@
 +/***************************************************************************
 + *   Copyright (c) 2023 Ondsel, Inc.                                       *
 + *                                                                         *
@@ -884,6 +953,11 @@ index 0000000..030455b
 +		std::string kind;  // "PointOnSurface", "CurveOnSurface" or "CurveOnCurve"
 +		Curve curveI, curveJ;
 +		Surface surfaceI;
++		// Sandbox (2026-11-22): Abstand der Beruehrung (Modelleinheiten). PointOnSurface: entlang
++		// der Normalen auf der Seite des Punkts; CurveOnSurface und CurveOnCurve mit ebener
++		// Kurve: Luecke auf der Kontaktseite (< 0 Ueberdeckung). Zwei Raumkurven: nicht
++		// unterstuetzt (bleibt 0).
++		double offset = 0.0;
 +	};
 +}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/AnyPosICNewtonRaphson.cpp b/src/3rdParty/OndselSolver/OndselSolver/AnyPosICNewtonRaphson.cpp
@@ -1675,10 +1749,10 @@ index a365064..b2848c0 100644
  		}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/EndFrameqcCurve.cpp b/src/3rdParty/OndselSolver/OndselSolver/EndFrameqcCurve.cpp
 new file mode 100644
-index 0000000..3156a87
+index 0000000..2ee778f
 --- /dev/null
 +++ b/src/3rdParty/OndselSolver/OndselSolver/EndFrameqcCurve.cpp
-@@ -0,0 +1,35 @@
+@@ -0,0 +1,64 @@
 +/***************************************************************************
 + *   Copyright (c) 2023 Ondsel, Inc.                                       *
 + *                                                                         *
@@ -1686,6 +1760,8 @@ index 0000000..3156a87
 + *                                                                         *
 + *   See LICENSE file for details about copyright.                         *
 + ***************************************************************************/
++
++#include <cmath>
 +
 +#include "EndFrameqcCurve.h"
 +
@@ -1707,6 +1783,33 @@ index 0000000..3156a87
 +	u = curve->project(p, u);
 +	Vec3 c, d1, d2;
 +	curve->evaluate(u, c, d1, d2);
++	// x normalized before setFootFrame(): it treats a short x (< 0.1) as degenerate.
++	auto unit = [](Vec3& v, double minLength) {
++		double len = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
++		if (!(len > minLength)) {
++			return false;
++		}
++		for (auto& x : v) {
++			x /= len;
++		}
++		return true;
++	};
++	if (planeNormal[0] != 0.0 || planeNormal[1] != 0.0 || planeNormal[2] != 0.0) {
++		const Vec3& n = planeNormal;
++		Vec3 x = { n[1] * d1[2] - n[2] * d1[1], n[2] * d1[0] - n[0] * d1[2], n[0] * d1[1] - n[1] * d1[0] };
++		if (unit(x, 1.0e-300)) {
++			setFootFrame(c, x, d1);
++			return;
++		}
++	}
++	if (radial) {
++		Vec3 x = { p[0] - c[0], p[1] - c[1], p[2] - c[2] };
++		double scale = std::fabs(c[0]) + std::fabs(c[1]) + std::fabs(c[2]) + 1.0;
++		if (unit(x, 1.0e-12 * scale)) {
++			setFootFrame(c, x, d1);
++			return;
++		}
++	}
 +	setFoot(c, d1);
 +}
 +
@@ -1716,10 +1819,10 @@ index 0000000..3156a87
 +}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/EndFrameqcCurve.h b/src/3rdParty/OndselSolver/OndselSolver/EndFrameqcCurve.h
 new file mode 100644
-index 0000000..c938ca9
+index 0000000..13cf57f
 --- /dev/null
 +++ b/src/3rdParty/OndselSolver/OndselSolver/EndFrameqcCurve.h
-@@ -0,0 +1,33 @@
+@@ -0,0 +1,39 @@
 +/***************************************************************************
 + *   Copyright (c) 2023 Ondsel, Inc.                                       *
 + *                                                                         *
@@ -1751,6 +1854,12 @@ index 0000000..c938ca9
 +		void resetFootPoint() override;
 +		std::shared_ptr<NurbsCurve> curve;
 +		double u = std::numeric_limits<double>::quiet_NaN();
++		// Sandbox (2026-11-22, Abstand Punkt-Kurve): Lage der x-Achse am Fusspunkt.
++		// planeNormal != 0 (Markerkoordinaten): x = planeNormal x Tangente (Normale in der Ebene
++		// der Kurve), y = planeNormal. radial: x zeigt vom Fusspunkt zum Punkt (Rohr um eine
++		// Raumkurve). Sonst bleibt x moeglichst nah am letzten x.
++		Vec3 planeNormal = { 0.0, 0.0, 0.0 };
++		bool radial = false;
 +	};
 +}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/EndFrameqcFoot.cpp b/src/3rdParty/OndselSolver/OndselSolver/EndFrameqcFoot.cpp
@@ -2250,10 +2359,10 @@ index f73c55f..53428c5 100644
  			stillConverging = true;
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/NurbsCurve.cpp b/src/3rdParty/OndselSolver/OndselSolver/NurbsCurve.cpp
 new file mode 100644
-index 0000000..fefb86b
+index 0000000..4020c06
 --- /dev/null
 +++ b/src/3rdParty/OndselSolver/OndselSolver/NurbsCurve.cpp
-@@ -0,0 +1,287 @@
+@@ -0,0 +1,402 @@
 +/***************************************************************************
 + *   Copyright (c) 2023 Ondsel, Inc.                                       *
 + *                                                                         *
@@ -2541,12 +2650,127 @@ index 0000000..fefb86b
 +		}
 +	}
 +}
++
++double NurbsCurve::arcLength(double u0, double u1) const
++{
++	// 8-Punkt-Gauss-Legendre in jedem Knotenintervall zwischen u0 und u1.
++	static const double xs[8] = { -0.9602898564975363, -0.7966664774136267, -0.5255324099163290,
++		-0.1834346424956498, 0.1834346424956498, 0.5255324099163290, 0.7966664774136267,
++		0.9602898564975363 };
++	static const double ws[8] = { 0.1012285362903763, 0.2223810344533745, 0.3137066458778873,
++		0.3626837833783620, 0.3626837833783620, 0.3137066458778873, 0.2223810344533745,
++		0.1012285362903763 };
++	double sign = 1.0;
++	if (u1 < u0) {
++		std::swap(u0, u1);
++		sign = -1.0;
++	}
++	std::vector<double> breaks = { u0 };
++	for (double k : knots) {
++		if (k > u0 && k < u1 && k > breaks.back()) {
++			breaks.push_back(k);
++		}
++	}
++	breaks.push_back(u1);
++	double length = 0.0;
++	for (size_t i = 0; i + 1 < breaks.size(); i++) {
++		double a = breaks[i];
++		double b = breaks[i + 1];
++		if (b <= a) {
++			continue;
++		}
++		double half = 0.5 * (b - a);
++		double mid = 0.5 * (a + b);
++		for (int g = 0; g < 8; g++) {
++			Vec3 c, d1, d2;
++			evaluate(mid + half * xs[g], c, d1, d2);
++			length += ws[g] * half * std::sqrt(d1[0] * d1[0] + d1[1] * d1[1] + d1[2] * d1[2]);
++		}
++	}
++	return sign * length;
++}
++
++double NurbsCurve::parameterAtLength(double s) const
++{
++	double a = firstParameter();
++	double b = lastParameter();
++	if (s <= 0.0) {
++		return a;
++	}
++	double total = arcLength(a, b);
++	if (s >= total) {
++		return b;
++	}
++	// Bisektion, dann Newton (ds/du = |C'(u)|).
++	double lo = a;
++	double hi = b;
++	for (int i = 0; i < 60 && hi - lo > 1.0e-12 * (b - a); i++) {
++		double m = 0.5 * (lo + hi);
++		if (arcLength(a, m) < s) {
++			lo = m;
++		}
++		else {
++			hi = m;
++		}
++	}
++	double u = 0.5 * (lo + hi);
++	for (int i = 0; i < 3; i++) {
++		Vec3 c, d1, d2;
++		evaluate(u, c, d1, d2);
++		double speed = std::sqrt(d1[0] * d1[0] + d1[1] * d1[1] + d1[2] * d1[2]);
++		if (speed < 1.0e-300) {
++			break;
++		}
++		u = std::clamp(u - (arcLength(a, u) - s) / speed, a, b);
++	}
++	return u;
++}
++
++bool NurbsCurve::planeNormalOfPoles(const std::vector<Vec3>& poles, Vec3& normal)
++{
++	if (poles.size() < 3) {
++		return false;
++	}
++	auto dot = [](const Vec3& x, const Vec3& y) { return x[0] * y[0] + x[1] * y[1] + x[2] * y[2]; };
++	Vec3 n = { 0.0, 0.0, 0.0 };
++	Vec3 centroid = { 0.0, 0.0, 0.0 };
++	for (size_t i = 0; i < poles.size(); i++) {
++		const auto& a = poles[i];
++		const auto& b = poles[(i + 1) % poles.size()];
++		n[0] += (a[1] - b[1]) * (a[2] + b[2]);
++		n[1] += (a[2] - b[2]) * (a[0] + b[0]);
++		n[2] += (a[0] - b[0]) * (a[1] + b[1]);
++		for (size_t k = 0; k < 3; k++) {
++			centroid[k] += a[k] / (double)poles.size();
++		}
++	}
++	double extent = 0.0;
++	for (const auto& p : poles) {
++		Vec3 d = { p[0] - centroid[0], p[1] - centroid[1], p[2] - centroid[2] };
++		extent = std::max(extent, std::sqrt(dot(d, d)));
++	}
++	double len = std::sqrt(dot(n, n));
++	if (extent <= 0.0 || len < 1.0e-9 * extent * extent) {
++		return false;
++	}
++	for (auto& x : n) {
++		x /= len;
++	}
++	for (const auto& p : poles) {
++		Vec3 d = { p[0] - centroid[0], p[1] - centroid[1], p[2] - centroid[2] };
++		if (std::fabs(dot(d, n)) > 1.0e-6 * extent) {
++			return false;
++		}
++	}
++	normal = n;
++	return true;
++}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/NurbsCurve.h b/src/3rdParty/OndselSolver/OndselSolver/NurbsCurve.h
 new file mode 100644
-index 0000000..103a6ac
+index 0000000..d1d18a0
 --- /dev/null
 +++ b/src/3rdParty/OndselSolver/OndselSolver/NurbsCurve.h
-@@ -0,0 +1,53 @@
+@@ -0,0 +1,61 @@
 +/***************************************************************************
 + *   Copyright (c) 2023 Ondsel, Inc.                                       *
 + *                                                                         *
@@ -2588,6 +2812,14 @@ index 0000000..103a6ac
 +		// coarse sampling of the whole curve gives the start.
 +		double project(const Vec3& p, double uGuess = std::numeric_limits<double>::quiet_NaN()) const;
 +		void scale(double factor);
++		// Sandbox (2026-11-22, Tangent-Grenzen entlang der Kurve): Bogenlaenge zwischen zwei
++		// Parametern (Gauss-Legendre je Knotenintervall) und der Parameter, der vom Kurvenanfang
++		// aus die Bogenlaenge s hat (auf die Kurve begrenzt).
++		double arcLength(double u0, double u1) const;
++		double parameterAtLength(double s) const;
++		// Normale der Ebene des Kontrollpolygons (Newell), false wenn die Pole nicht in einer
++		// Ebene oder alle auf einer Geraden liegen. Eine ebene B-Spline liegt in dieser Ebene.
++		static bool planeNormalOfPoles(const std::vector<Vec3>& poles, Vec3& normal);
 +
 +		size_t degree;
 +		std::vector<double> knots, weights;
@@ -2602,10 +2834,10 @@ index 0000000..103a6ac
 +}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/NurbsPointOnCurveConstraintIqcJqc.cpp b/src/3rdParty/OndselSolver/OndselSolver/NurbsPointOnCurveConstraintIqcJqc.cpp
 new file mode 100644
-index 0000000..952cfd8
+index 0000000..35c446c
 --- /dev/null
 +++ b/src/3rdParty/OndselSolver/OndselSolver/NurbsPointOnCurveConstraintIqcJqc.cpp
-@@ -0,0 +1,153 @@
+@@ -0,0 +1,172 @@
 +/***************************************************************************
 + *   Copyright (c) 2023 Ondsel, Inc.                                       *
 + *                                                                         *
@@ -2647,6 +2879,25 @@ index 0000000..952cfd8
 +void NurbsPointOnCurveConstraintIqcJqc::initriIeJeIe()
 +{
 +	riIeJeIe = CREATE<DispCompIeqcJeqcKeqcCurve>::With(frmI, frmJ, frmI, axisI);
++}
++
++void NurbsPointOnCurveConstraintIqcJqc::calcPostDynCorrectorIteration()
++{
++	// Base: moves the foot frame (riIeJeIe), then aG = component - aConstant.
++	TranslationConstraintIqcJqc::calcPostDynCorrectorIteration();
++	double wanted = 0.0;
++	auto footI = std::dynamic_pointer_cast<EndFrameqcFoot>(frmI);
++	if (footI && footI->contact) {
++		wanted = footI->contact->distanceAxis() == axisI ? footI->contact->target : 0.0;
++	}
++	else if (offset != 0.0) {
++		if (sided && side == 0.0) {
++			side = riIeJeIe->value() >= 0.0 ? 1.0 : -1.0;
++		}
++		wanted = sided ? side * offset : offset;
++	}
++	aG += aConstant - wanted;
++	aConstant = wanted;
 +}
 +
 +std::string NurbsPointOnCurveConstraintIqcJqc::constraintSpec()
@@ -2761,10 +3012,10 @@ index 0000000..952cfd8
 +}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/NurbsPointOnCurveConstraintIqcJqc.h b/src/3rdParty/OndselSolver/OndselSolver/NurbsPointOnCurveConstraintIqcJqc.h
 new file mode 100644
-index 0000000..c996e3c
+index 0000000..bdf65a5
 --- /dev/null
 +++ b/src/3rdParty/OndselSolver/OndselSolver/NurbsPointOnCurveConstraintIqcJqc.h
-@@ -0,0 +1,46 @@
+@@ -0,0 +1,53 @@
 +/***************************************************************************
 + *   Copyright (c) 2023 Ondsel, Inc.                                       *
 + *                                                                         *
@@ -2808,15 +3059,22 @@ index 0000000..c996e3c
 +		// spinning about its axis, rolling) looked stiff, times the multiplier, and the assembly
 +		// converged only by tiny drifts.
 +		void fillPosICJacob(SpMatDsptr mat) override;
++		// Sandbox (2026-11-22, Abstand-Feld): Zielwert der Komponente statt 0. Mit Kontakt
++		// (TangentContact) gilt dessen target auf der Abstandsachse. Ohne Kontakt gilt offset;
++		// sided: auf der Seite, auf der der Punkt beim ersten Auswerten liegt (side * offset).
++		void calcPostDynCorrectorIteration() override;
++		double offset = 0.0;
++		bool sided = false;
++		double side = 0.0;
 +	};
 +
 +}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/NurbsPointOnCurveJoint.cpp b/src/3rdParty/OndselSolver/OndselSolver/NurbsPointOnCurveJoint.cpp
 new file mode 100644
-index 0000000..eb5fc20
+index 0000000..6211e41
 --- /dev/null
 +++ b/src/3rdParty/OndselSolver/OndselSolver/NurbsPointOnCurveJoint.cpp
-@@ -0,0 +1,36 @@
+@@ -0,0 +1,43 @@
 +/***************************************************************************
 + *   Copyright (c) 2023 Ondsel, Inc.                                       *
 + *                                                                         *
@@ -2845,8 +3103,15 @@ index 0000000..eb5fc20
 +	if (constraints->empty())
 +	{
 +		// Not CREATE::ConstraintWith(): that only knows the standard constraint classes.
-+		addConstraint(CREATE<NurbsPointOnCurveConstraintIqcJqc>::With(frmI, frmJ, 0));
-+		addConstraint(CREATE<NurbsPointOnCurveConstraintIqcJqc>::With(frmI, frmJ, 1));
++		auto along0 = CREATE<NurbsPointOnCurveConstraintIqcJqc>::With(frmI, frmJ, 0);
++		if (offset != 0.0) {
++			along0->offset = offset;
++			along0->sided = !tube;
++		}
++		addConstraint(along0);
++		if (offset == 0.0 || !tube) {
++			addConstraint(CREATE<NurbsPointOnCurveConstraintIqcJqc>::With(frmI, frmJ, 1));
++		}
 +		this->root()->hasChanged = true;
 +	}
 +	else {
@@ -2855,10 +3120,10 @@ index 0000000..eb5fc20
 +}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/NurbsPointOnCurveJoint.h b/src/3rdParty/OndselSolver/OndselSolver/NurbsPointOnCurveJoint.h
 new file mode 100644
-index 0000000..0a4d013
+index 0000000..4f351fd
 --- /dev/null
 +++ b/src/3rdParty/OndselSolver/OndselSolver/NurbsPointOnCurveJoint.h
-@@ -0,0 +1,24 @@
+@@ -0,0 +1,29 @@
 +/***************************************************************************
 + *   Copyright (c) 2023 Ondsel, Inc.                                       *
 + *                                                                         *
@@ -2881,6 +3146,11 @@ index 0000000..0a4d013
 +		NurbsPointOnCurveJoint();
 +		NurbsPointOnCurveJoint(const std::string& str);
 +		void initializeGlobally() override;
++		// Sandbox (2026-11-22, Abstand-Feld): Abstand des Punkts von der Kurve. Ebene Kurve
++		// (Fusspunkt-Rahmen mit planeNormal): in der Kurvenebene auf der Seite, auf der der Punkt
++		// liegt (zwei Gleichungen). Raumkurve (tube): Rohr um die Kurve, eine Gleichung.
++		double offset = 0.0;
++		bool tube = false;
 +	};
 +}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/NurbsSurface.cpp b/src/3rdParty/OndselSolver/OndselSolver/NurbsSurface.cpp
@@ -4128,10 +4398,10 @@ index a6b740c..4d896c3 100644
  
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/TangentContact.cpp b/src/3rdParty/OndselSolver/OndselSolver/TangentContact.cpp
 new file mode 100644
-index 0000000..c1a7714
+index 0000000..d30adb9
 --- /dev/null
 +++ b/src/3rdParty/OndselSolver/OndselSolver/TangentContact.cpp
-@@ -0,0 +1,537 @@
+@@ -0,0 +1,508 @@
 +/***************************************************************************
 + *   Copyright (c) 2023 Ondsel, Inc.                                       *
 + *                                                                         *
@@ -4190,36 +4460,7 @@ index 0000000..c1a7714
 +	// or all on a line.
 +	bool planeNormal(const std::vector<Vec3>& poles, Vec3& normal)
 +	{
-+		if (poles.size() < 3) {
-+			return false;
-+		}
-+		Vec3 n = { 0.0, 0.0, 0.0 };
-+		Vec3 centroid = { 0.0, 0.0, 0.0 };
-+		for (size_t i = 0; i < poles.size(); i++) {
-+			const auto& a = poles[i];
-+			const auto& b = poles[(i + 1) % poles.size()];
-+			n[0] += (a[1] - b[1]) * (a[2] + b[2]);
-+			n[1] += (a[2] - b[2]) * (a[0] + b[0]);
-+			n[2] += (a[0] - b[0]) * (a[1] + b[1]);
-+			for (size_t k = 0; k < 3; k++) {
-+				centroid[k] += a[k] / (double)poles.size();
-+			}
-+		}
-+		double extent = 0.0;
-+		for (const auto& p : poles) {
-+			auto d = minus(p, centroid);
-+			extent = std::max(extent, std::sqrt(dot(d, d)));
-+		}
-+		if (extent <= 0.0 || std::sqrt(dot(n, n)) < 1.0e-9 * extent * extent || !normalize(n)) {
-+			return false;
-+		}
-+		for (const auto& p : poles) {
-+			if (std::fabs(dot(minus(p, centroid), n)) > 1.0e-6 * extent) {
-+				return false;
-+			}
-+		}
-+		normal = n;
-+		return true;
++		return NurbsCurve::planeNormalOfPoles(poles, normal);
 +	}
 +}
 +
@@ -4651,7 +4892,7 @@ index 0000000..c1a7714
 +	if (!(length > 0.0)) {
 +		return 1.0;
 +	}
-+	double ratio = distance / length;
++	double ratio = (distance - (distanceAxis() == SIZE_MAX ? 0.0 : target)) / length;
 +	return std::exp(-ratio * ratio);
 +}
 +
@@ -4665,16 +4906,16 @@ index 0000000..c1a7714
 +	auto pI = frmI->rOeO;
 +	size_t axis = distanceAxis();
 +	for (size_t k = 0; k < 3; k++) {
-+		offset[k] = axis == SIZE_MAX ? pJ->at(k) - pI->at(k) : distance * frmI->aAOe->at(k)->at(axis);
++		offset[k] = axis == SIZE_MAX ? pJ->at(k) - pI->at(k) : (distance - target) * frmI->aAOe->at(k)->at(axis);
 +	}
 +	return std::isfinite(offset[0]) && std::isfinite(offset[1]) && std::isfinite(offset[2]);
 +}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/TangentContact.h b/src/3rdParty/OndselSolver/OndselSolver/TangentContact.h
 new file mode 100644
-index 0000000..fed5709
+index 0000000..5614218
 --- /dev/null
 +++ b/src/3rdParty/OndselSolver/OndselSolver/TangentContact.h
-@@ -0,0 +1,87 @@
+@@ -0,0 +1,91 @@
 +/***************************************************************************
 + *   Copyright (c) 2023 Ondsel, Inc.                                       *
 + *                                                                         *
@@ -4735,6 +4976,10 @@ index 0000000..fed5709
 +		double exactSecondDerivativeWeight() const;
 +		EndFrameqcFoot* frmI = nullptr;
 +		EndFrameqcCurve* frmJ = nullptr;
++		// Sandbox (2026-11-22): Zielabstand der Beruehrung (Abstand-Feld des Tangent-Gelenks,
++		// Laengeneinheit des Solvers). 0 = beruehren; > 0 = Luecke auf der gewaehlten Seite,
++		// < 0 = Ueberdeckung. Die Gleichung auf distanceAxis() lautet dann Abstand = target.
++		double target = 0.0;
 +
 +	private:
 +		struct Foot
@@ -4764,10 +5009,10 @@ index 0000000..fed5709
 +}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/TangentJoints.cpp b/src/3rdParty/OndselSolver/OndselSolver/TangentJoints.cpp
 new file mode 100644
-index 0000000..105a465
+index 0000000..ad62b4b
 --- /dev/null
 +++ b/src/3rdParty/OndselSolver/OndselSolver/TangentJoints.cpp
-@@ -0,0 +1,155 @@
+@@ -0,0 +1,158 @@
 +/***************************************************************************
 + *   Copyright (c) 2023 Ondsel, Inc.                                       *
 + *                                                                         *
@@ -4863,7 +5108,10 @@ index 0000000..105a465
 +{
 +	if (constraints->empty())
 +	{
-+		addConstraint(CREATE<NurbsPointOnCurveConstraintIqcJqc>::With(frmI, frmJ, 2));
++		auto normal = CREATE<NurbsPointOnCurveConstraintIqcJqc>::With(frmI, frmJ, 2);
++		normal->offset = offset;
++		normal->sided = true;
++		addConstraint(normal);
 +		this->root()->hasChanged = true;
 +	}
 +	else {
@@ -4925,10 +5173,10 @@ index 0000000..105a465
 +}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/TangentJoints.h b/src/3rdParty/OndselSolver/OndselSolver/TangentJoints.h
 new file mode 100644
-index 0000000..fc98e77
+index 0000000..2e0a598
 --- /dev/null
 +++ b/src/3rdParty/OndselSolver/OndselSolver/TangentJoints.h
-@@ -0,0 +1,49 @@
+@@ -0,0 +1,52 @@
 +/***************************************************************************
 + *   Copyright (c) 2023 Ondsel, Inc.                                       *
 + *                                                                         *
@@ -4952,6 +5200,9 @@ index 0000000..fc98e77
 +		PointOnSurfaceJoint();
 +		PointOnSurfaceJoint(const std::string& str);
 +		void initializeGlobally() override;
++		// Sandbox (2026-11-22): Abstand entlang der Flaechennormalen, auf der Seite, auf der der
++		// Punkt beim ersten Auswerten liegt.
++		double offset = 0.0;
 +	};
 +
 +	// Curve J touches surface I from one side: the point of J with the smallest signed distance

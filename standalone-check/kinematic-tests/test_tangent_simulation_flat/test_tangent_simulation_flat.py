@@ -1,7 +1,8 @@
 """Tangent-Gelenk in der Simulation (Nutzerauftrag 2026-11-21): Kurvenscheibe mit Rolle.
 
-Drei Arten: "Rolle" (Kreis an Kurve), "Spitze" (Punkt auf Kurve), "Rolle auf Flaeche" (Kreis an
-der Flaeche, die aus der Kurve entlang Y extrudiert ist).
+Vier Arten: "Rolle" (Kreis an Kurve), "Spitze" (Punkt auf Kurve), "Rolle auf Flaeche" (Kreis an
+der Flaeche, die aus der Kurve entlang Y extrudiert ist), "Spitze mit Abstand" (Punkt mit
+Abstand R zur Kurve, 2026-11-22: muss genau wie die Rollenmitte laufen).
 
 Aufbau (alles in der XZ-Ebene):
   - Base (Quader), geerdet.
@@ -56,13 +57,13 @@ def cam_element(kind):
 
 
 def follower_shape(kind):
-    if kind == "Spitze":
+    if kind.startswith("Spitze"):
         return Part.Vertex(V(0, 0, 0))
     return Part.makeCircle(R, V(0, 0, 0), V(0, 1, 0))
 
 
 def follower_element(kind):
-    return "Vertex1" if kind == "Spitze" else "Edge1"
+    return "Vertex1" if kind.startswith("Spitze") else "Edge1"
 
 
 def add_joint(group, name, type_index, ref1, plc1, ref2, plc2):
@@ -119,11 +120,14 @@ def build(out_path, kind):
         (base, ["Face1", "Face1"]), base_origin,
         (roller, [follower_element(kind)] * 2), App.Placement(),
     )
-    add_joint(
+    contact = add_joint(
         group, "Contact", tangent,
         (cam, [cam_element(kind)] * 2), App.Placement(),
         (roller, [follower_element(kind)] * 2), App.Placement(),
     )
+    if kind == "Spitze mit Abstand":
+        # 2026-11-22: Punkt im Abstand R in der Kurvenebene = Bahn der Rollenmitte.
+        contact.Distance = R
     doc.recompute()
     return doc, assembly, cam, roller, cam_slide
 
@@ -160,7 +164,9 @@ def check_frame(cam, roller, kind):
     center = roller.Placement.Base
     contact = pairs[0][1]
     above = center.z > contact.z - TOL
-    if kind != "Spitze":
+    if kind == "Spitze mit Abstand":
+        d = abs(d - R)  # Abweichung vom Sollabstand
+    if not kind.startswith("Spitze"):
         to_center = cam.Shape.distToShape(Part.Vertex(center))[0]
         above = above and to_center > R - TOL
     return d, above, center
@@ -221,7 +227,7 @@ def main():
     )
     base = os.path.splitext(out_path)[0]
     results = []
-    for i, kind in enumerate(("Rolle", "Spitze", "Rolle auf Flaeche")):
+    for i, kind in enumerate(("Rolle", "Spitze", "Rolle auf Flaeche", "Spitze mit Abstand")):
         path = out_path if i == 0 else f"{base}_{i}.FCStd"
         results.append(run(kind, path))
     ok = all(results)

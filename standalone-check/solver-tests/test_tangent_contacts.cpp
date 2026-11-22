@@ -579,6 +579,7 @@ void roundTrip(const std::string& what, const std::shared_ptr<ASMTTangentJoint>&
     joint->setName("Tangent");
     joint->setMarkerI("/OndselAssembly/Ground/MarkerI");
     joint->setMarkerJ("/OndselAssembly/Mover/MarkerJ");
+    joint->offset = 1.5;  // Sandbox 2026-11-22: Abstand der Beruehrung
     std::string file = "tangent_roundtrip.asmt";
     {
         std::ofstream os(file);
@@ -618,8 +619,8 @@ void roundTrip(const std::string& what, const std::shared_ptr<ASMTTangentJoint>&
         && s1.closedV == s2.closedV;
     bool same = parsed->kind == joint->kind && sameSurface && sameCurve(parsed->curveI, joint->curveI)
         && sameCurve(parsed->curveJ, joint->curveJ) && parsed->markerI == joint->markerI
-        && parsed->markerJ == joint->markerJ;
-    check(same, "kind, geometry and markers survive bit-exact");
+        && parsed->markerJ == joint->markerJ && parsed->offset == joint->offset;
+    check(same, "kind, geometry, markers and offset survive bit-exact");
 }
 
 void testAsmtRoundTrip()

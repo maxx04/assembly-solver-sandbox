@@ -114,7 +114,7 @@ instanziiert:
 | RackPinion | `ASMTRackPinionJoint` | koppelt Rotation eines Revolute/Cylindrical mit Translation eines Sliders über `pitchRadius` |
 | Screw | `ASMTScrewJoint` | koppelt Rotation+Translation am selben Teil über `pitch` (braucht einen zugehörigen Slider) |
 | Gears / Belt | `ASMTGearJoint` (`radiusJ` bei Belt negiert) | koppelt zwei Rotations-DoF verschiedener Wellen |
-| Tangent (2026-10-16, eigener Typ, am Enum-Ende) | `ASMTPointOnCurveJoint` bzw. `ASMTTangentJoint` (eigene Solver-Erweiterung, s. §1.2/§1.3) | Vertex auf Kante (Punkt gleitet, stoppt am offenen Ende), Vertex auf Fläche, Kante an Fläche und Kante an Kante (einseitiger Kontakt, Abrollen/Gleiten); Drehung frei, soweit der Kontakt sie nicht bindet |
+| Tangent (2026-10-16, eigener Typ, am Enum-Ende) | `ASMTPointOnCurveJoint` bzw. `ASMTTangentJoint` (eigene Solver-Erweiterung, s. §1.2/§1.3) | Vertex auf Kante (Punkt gleitet, stoppt am offenen Ende), Vertex auf Fläche, Kante an Fläche und Kante an Kante (einseitiger Kontakt, Abrollen/Gleiten); Drehung frei, soweit der Kontakt sie nicht bindet; Abstand und Grenzen entlang der Kurve s. §1.4 |
 
 ### 1.2 Tangent-Gelenk: Punkt auf Kurve im Solver (2026-10-16)
 
@@ -183,6 +183,41 @@ Plan: `plans/2026-10-16-tangent-joint.md`, Abschnitt „Zweiter Schritt“. Solv
   begrenzte die Marker über die nächste „RefPoint“-Zeile (bei Markern auf Baugruppenebene der
   Rest der Datei). Seitdem lassen sich FreeCAD-ASMT-Dateien eigenständig nachrechnen (bis auf den
   bekannten Typnamen „dJointE“ unter GCC).
+
+### 1.4 Tangent-Gelenk: Abstand und Grenzen entlang der Kurve (2026-11-22)
+
+Vorhandene Eigenschaften, keine neue (C4): `Distance` für den Abstand, `LengthMin`/`LengthMax` mit
+`EnableLengthMin`/`EnableLengthMax` für die Grenzen. Der Dialog zeigt das Abstand-Feld bei jeder
+Paarung, die Grenzen nur bei Punkt + Kante (`TaskAssemblyCreateJoint.usesLengthLimits()`),
+vorbelegt mit dem aktuellen Weg (`tangentArcPosition()`).
+
+| Paarung | Abstand d | Umsetzung |
+|---|---|---|
+| Punkt + ebene Kurve | in der Kurvenebene, auf der Seite des Punkts (2 Gleichungen) | `EndFrameqcCurve::planeNormal`: x = Normale in der Ebene; Bedingung x = ±d, y = 0 |
+| Punkt + Raumkurve | Rohr um die Kurve (1 Gleichung) | `EndFrameqcCurve::radial`: x zeigt zum Punkt; nur x = d |
+| Punkt + Fläche | entlang der Normalen, Seite des Punkts | Bedingung z = ±d |
+| Kante + Fläche, Kante + ebene Kante | Lücke auf der Kontaktseite (< 0: Überdeckung) | `TangentContact::target`: Abstandsgleichung, Aufsetzen und Gewicht der exakten zweiten Ableitungen messen gegen d |
+| zwei Raumkurven | nicht unterstützt (bleibt Berührung) | nächstes Punktpaar, kein Abstandsbegriff |
+
+Die Seite („±“) legt `NurbsPointOnCurveConstraintIqcJqc` beim ersten Auswerten fest (`sided`), wie
+der einseitige Kontakt seine Seite. Zielwerte setzt die Bedingung in
+`calcPostDynCorrectorIteration()` (statt `aConstant` beim Aufbau), weil die Abstandsachse des
+Kontakts erst nach dessen erster Auswertung feststeht. Prüfung: eine Spitze mit d = R läuft in der
+Simulation exakt wie die Rollenmitte (`test_tangent_simulation_flat`, Hub und Startlage gleich).
+
+**Grenzen entlang der Kurve** (Punkt + Kante): Weg = Bogenlänge ab dem Kurvenanfang (Parameter
+`first` der Kante, `NurbsCurve::arcLength()`/`parameterAtLength()`, Gauss-Legendre je
+Knotenintervall). `ASMTNurbsPointOnCurveJoint::createMbD()` legt am Kurvenpunkt bei `lengthMin` und
+`lengthMax` je einen Rahmen mit z entlang der Tangente nach innen und eine `TranslationLimitIJ`
+„=> 0“ an - derselbe Mechanismus wie die Endanschläge (`addStop()`), also auch an geschlossenen
+Kurven. Grenze ist die Ebene senkrecht zur Tangente am Grenzpunkt: bei Kurven, die nahe dieser Ebene
+zurückkommen, wirkt sie dort ebenfalls (wie bei den Endanschlägen). `hasCurveEndStops` schaltet den
+Grenz-Durchgang ein. Im ASMT stehen `offset`, `lengthMin`, `lengthMax` als optionale Zeilen.
+
+Tests: `test_tangent_distance_limits_flat` (Abstand bei allen Paarungen, Grenzen per Solve und
+Ziehen, Neuladen), `test_tangent_simulation_flat` (Spitze mit Abstand), Solver-Tests (ASMT-Rundreise).
+Bekannt, nicht neu: Rad an Kurve divergiert, wenn es beim Anlegen die Kurve schneidet (Startlage
+mitten auf der Kurve); aus einer Lage daneben löst es.
 
 `GroundedJoint`/`RigidGroupJoint` sind **keine** `JointType`-Varianten - sie haben kein
 `Reference1`/`Reference2` und tauchen deshalb in `AssemblyObject::getJoints()` gar nicht auf

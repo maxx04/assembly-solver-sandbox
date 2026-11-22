@@ -373,6 +373,12 @@ void testAsmtRoundTrip(const CurveSetup& setup)
             joint = pc;
         }
     }
+    // Sandbox 2026-11-22: Abstand und Grenzen entlang der Kurve muessen mitkommen.
+    joint->offset = 2.5;
+    joint->hasLengthMin = true;
+    joint->lengthMin = 12.25;
+    joint->hasLengthMax = true;
+    joint->lengthMax = 40.5;
     std::string file = "point_on_curve_roundtrip.asmt";
     {
         std::ofstream os(file);
@@ -400,8 +406,10 @@ void testAsmtRoundTrip(const CurveSetup& setup)
     bool same = readBack->degree == joint->degree && readBack->closed == joint->closed
         && readBack->knots == joint->knots && readBack->weights == joint->weights
         && readBack->poles == joint->poles && readBack->markerI == joint->markerI
-        && readBack->markerJ == joint->markerJ;
-    check(same, "curve data and markers survive bit-exact");
+        && readBack->markerJ == joint->markerJ && readBack->offset == joint->offset
+        && readBack->hasLengthMin && readBack->lengthMin == joint->lengthMin
+        && readBack->hasLengthMax && readBack->lengthMax == joint->lengthMax;
+    check(same, "curve data, markers, offset and length limits survive bit-exact");
 }
 
 }  // namespace
