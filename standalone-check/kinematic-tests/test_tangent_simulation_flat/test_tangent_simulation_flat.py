@@ -2,7 +2,8 @@
 
 Vier Arten: "Rolle" (Kreis an Kurve), "Spitze" (Punkt auf Kurve), "Rolle auf Flaeche" (Kreis an
 der Flaeche, die aus der Kurve entlang Y extrudiert ist), "Spitze mit Abstand" (Punkt mit
-Abstand R zur Kurve, 2026-11-22: muss genau wie die Rollenmitte laufen).
+Abstand R zur Kurve, 2026-11-22: muss genau wie die Rollenmitte laufen). Dazu (2026-11-22) zwei
+Laeufe, die anhalten muessen: Grenzen entlang der Kurve (LengthMin/Max) und das Kurvenende.
 
 Aufbau (alles in der XZ-Ebene):
   - Base (Quader), geerdet.
@@ -221,6 +222,56 @@ def run(kind, out_path):
     return ok
 
 
+def arc_on_cam(cam, point):
+    """Weg des Kontaktpunkts auf der Nockenkurve ab deren Anfang (wie LengthMin/LengthMax)."""
+    edge = cam.Shape.Edges[0]
+    u0 = edge.FirstParameter
+    u = edge.Curve.parameter(point)
+    return edge.Curve.length(u0, u) if u > u0 else 0.0
+
+
+def run_stop(label, out_path, limits, shift):
+    """2026-11-22: die Simulation haelt an den Grenzen entlang der Kurve bzw. am Kurvenende an.
+    Spitze auf dem Nocken; ihr Weg auf der Kurve nimmt ab, waehrend der Nocken in +x faehrt."""
+    import CommandCreateSimulation as CCS
+    import UtilsAssembly
+
+    doc, assembly, cam, roller, cam_slide = build(out_path, "Spitze")
+    contact = next(o for o in doc.Objects if getattr(o, "JointType", "") == "Tangent")
+    assembly.solve()
+    doc.recompute()
+    s0 = arc_on_cam(cam, roller.Placement.Base)
+    lo = 0.0
+    if limits:
+        lo = s0 - limits
+        contact.EnableLengthMin = True
+        contact.EnableLengthMax = True
+        contact.LengthMin = lo
+        contact.LengthMax = s0 + limits
+        doc.recompute()
+    sim = UtilsAssembly.getSimulationGroup(assembly).newObject("App::FeaturePython", "Simulation")
+    CCS.Simulation(sim)
+    motion = assembly.newObject("App::FeaturePython", "Motion")
+    CCS.Motion(motion, "Linear", cam_slide, f"initialValue + {shift}*time")
+    sim.Group = [motion]
+    rc = assembly.generateSimulation(sim)
+    frames = assembly.numberOfFrames() if rc == 0 else 0
+    ss = []
+    for k in range(frames):
+        assembly.updateForFrame(k)
+        ss.append(arc_on_cam(cam, roller.Placement.Base))
+    App.closeDocument(doc.Name)
+    full = 102
+    step = shift / (full - 2)  # Weg je Bild etwa = Nockenweg je Bild (Kurve hier flach)
+    stopped = 2 <= frames < full
+    inside = bool(ss) and min(ss) >= lo - TOL
+    near = bool(ss) and min(ss) - lo < 3 * step
+    ok = rc == 0 and stopped and inside and near
+    print(f"[{label}] rc={rc}, Bilder={frames} (voll {full}), Weg {s0:.3f} -> {min(ss) if ss else 0:.3f}, "
+          f"Grenze {lo:.3f} -> {'OK' if ok else 'FEHLER'}")
+    return ok
+
+
 def main():
     out_path = os.environ.get(
         "KINEMATIC_TEST_OUTPUT_FCSTD", f"/tmp/kinematic-tests/{TEST_NAME}/{TEST_NAME}.FCStd"
@@ -230,6 +281,8 @@ def main():
     for i, kind in enumerate(("Rolle", "Spitze", "Rolle auf Flaeche", "Spitze mit Abstand")):
         path = out_path if i == 0 else f"{base}_{i}.FCStd"
         results.append(run(kind, path))
+    results.append(run_stop("Spitze, Grenzen entlang der Kurve", f"{base}_stop1.FCStd", 15.0, SHIFT))
+    results.append(run_stop("Spitze, ueber das Kurvenende", f"{base}_stop2.FCStd", None, 120.0))
     ok = all(results)
     print("RESULT: PASS" if ok else "RESULT: FAIL (Folger folgt der Kontur nicht, siehe oben)")
     return 0 if ok else 1
