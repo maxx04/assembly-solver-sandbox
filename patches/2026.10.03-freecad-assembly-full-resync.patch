@@ -1,6 +1,6 @@
 diff --git a/src/Mod/Assembly/App/AssemblyIdentityGraph.cpp b/src/Mod/Assembly/App/AssemblyIdentityGraph.cpp
 new file mode 100644
-index 0000000000..075acfc3c0
+index 00000000000..075acfc3c04
 --- /dev/null
 +++ b/src/Mod/Assembly/App/AssemblyIdentityGraph.cpp
 @@ -0,0 +1,2204 @@
@@ -2210,7 +2210,7 @@ index 0000000000..075acfc3c0
 +}  // namespace Assembly
 diff --git a/src/Mod/Assembly/App/AssemblyIdentityGraph.h b/src/Mod/Assembly/App/AssemblyIdentityGraph.h
 new file mode 100644
-index 0000000000..c44380d947
+index 00000000000..c44380d9475
 --- /dev/null
 +++ b/src/Mod/Assembly/App/AssemblyIdentityGraph.h
 @@ -0,0 +1,298 @@
@@ -2513,18 +2513,18 @@ index 0000000000..c44380d947
 +
 +}  // namespace Assembly
 diff --git a/src/Mod/Assembly/App/AssemblyLink.cpp b/src/Mod/Assembly/App/AssemblyLink.cpp
-index c4b69bde0a..b482491da9 100644
+index 3bd0aea7739..bbebe555a2e 100644
 --- a/src/Mod/Assembly/App/AssemblyLink.cpp
 +++ b/src/Mod/Assembly/App/AssemblyLink.cpp
-@@ -21,6 +21,7 @@
-  *                                                                          *
-  ***************************************************************************/
+@@ -19,6 +19,7 @@
+  *                                                                            *
+  ******************************************************************************/
  
 +#include <algorithm>
  #include <cmath>
  #include <vector>
  
-@@ -71,6 +72,8 @@ void syncSuppressedState(App::DocumentObject* source, App::DocumentObject* targe
+@@ -69,6 +70,8 @@ void syncSuppressedState(App::DocumentObject* source, App::DocumentObject* targe
  
  PROPERTY_SOURCE(Assembly::AssemblyLink, App::Part)
  
@@ -2533,7 +2533,7 @@ index c4b69bde0a..b482491da9 100644
  AssemblyLink::AssemblyLink()
  {
      ADD_PROPERTY_TYPE(
-@@ -109,6 +112,149 @@ App::DocumentObjectExecReturn* AssemblyLink::execute()
+@@ -107,6 +110,149 @@ App::DocumentObjectExecReturn* AssemblyLink::execute()
      return App::Part::execute();
  }
  
@@ -2683,7 +2683,7 @@ index c4b69bde0a..b482491da9 100644
  void AssemblyLink::onChanged(const App::Property* prop)
  {
      if (App::GetApplication().isRestoring()) {
-@@ -125,6 +271,17 @@ void AssemblyLink::onChanged(const App::Property* prop)
+@@ -123,6 +269,17 @@ void AssemblyLink::onChanged(const App::Property* prop)
      }
  
      if (prop == &Rigid) {
@@ -2701,7 +2701,7 @@ index c4b69bde0a..b482491da9 100644
          Base::Placement movePlc;
  
          // A flexible sub-assembly cannot be grounded.
-@@ -183,6 +340,15 @@ void AssemblyLink::onChanged(const App::Property* prop)
+@@ -181,6 +338,15 @@ void AssemblyLink::onChanged(const App::Property* prop)
          }
  
          updateContents();
@@ -2717,7 +2717,7 @@ index c4b69bde0a..b482491da9 100644
  
          auto* propPlc = dynamic_cast<App::PropertyPlacement*>(getPropertyByName("Placement"));
          if (!propPlc) {
-@@ -198,42 +364,34 @@ void AssemblyLink::onChanged(const App::Property* prop)
+@@ -196,42 +362,34 @@ void AssemblyLink::onChanged(const App::Property* prop)
  
                  // We need to apply the placement of the assembly link to the children or they will
                  // move.
@@ -2787,7 +2787,7 @@ index c4b69bde0a..b482491da9 100644
              }
          }
          else {
-@@ -263,7 +421,8 @@ void AssemblyLink::updateParentJoints()
+@@ -261,7 +419,8 @@ void AssemblyLink::updateParentJoints()
  
      bool rigid = Rigid.getValue();
      // Iterate joints in the immediate parent assembly only (recursive=false)
@@ -2797,7 +2797,7 @@ index c4b69bde0a..b482491da9 100644
          for (const char* refName : {"Reference1", "Reference2"}) {
              auto* prop = dynamic_cast<App::PropertyXLinkSub*>(joint->getPropertyByName(refName));
              if (!prop) {
-@@ -329,14 +488,31 @@ void AssemblyLink::updateParentJoints()
+@@ -327,14 +486,31 @@ void AssemblyLink::updateParentJoints()
  
  void AssemblyLink::updateContents()
  {
@@ -2835,7 +2835,7 @@ index c4b69bde0a..b482491da9 100644
      purgeTouched();
  }
  
-@@ -349,7 +525,25 @@ void AssemblyLink::synchronizeComponents()
+@@ -347,7 +523,25 @@ void AssemblyLink::synchronizeComponents()
          return;
      }
  
@@ -2861,7 +2861,7 @@ index c4b69bde0a..b482491da9 100644
      objSubPrefixMap.clear();
  
      std::vector<App::DocumentObject*> assemblyGroup = assembly->Group.getValues();
-@@ -389,6 +583,9 @@ void AssemblyLink::synchronizeComponents()
+@@ -387,6 +581,9 @@ void AssemblyLink::synchronizeComponents()
      );
  
      // We check if a component needs to be added to the AssemblyLink
@@ -2871,7 +2871,7 @@ index c4b69bde0a..b482491da9 100644
      for (auto* obj : topLevelComponents) {
          if (isSuppressedLinkElement(obj)) {
              continue;
-@@ -438,6 +635,7 @@ void AssemblyLink::synchronizeComponents()
+@@ -436,6 +633,7 @@ void AssemblyLink::synchronizeComponents()
                                  continue;
                              }
                              objLinkMap[srcElements[i]] = newElements[i];
@@ -2879,7 +2879,7 @@ index c4b69bde0a..b482491da9 100644
                          }
                          break;
                      }
-@@ -498,12 +696,13 @@ void AssemblyLink::synchronizeComponents()
+@@ -496,12 +694,13 @@ void AssemblyLink::synchronizeComponents()
                      }
  
                      syncSuppressedState(srcObj, newObj);
@@ -2894,7 +2894,7 @@ index c4b69bde0a..b482491da9 100644
                  }
  
                  link = newLink;
-@@ -516,9 +715,44 @@ void AssemblyLink::synchronizeComponents()
+@@ -514,9 +713,44 @@ void AssemblyLink::synchronizeComponents()
                  addObject(newLink);
                  link = newLink;
              }
@@ -2939,7 +2939,7 @@ index c4b69bde0a..b482491da9 100644
  
          if (auto* srcLinkArray = freecad_cast<PartApp::LinkArray*>(obj)) {
              if (srcLinkArray->ShowElement.getValue()) {
-@@ -533,10 +767,126 @@ void AssemblyLink::synchronizeComponents()
+@@ -531,10 +765,126 @@ void AssemblyLink::synchronizeComponents()
          }
      }
  
@@ -3068,7 +3068,7 @@ index c4b69bde0a..b482491da9 100644
          }
      }
  
-@@ -560,22 +910,14 @@ void AssemblyLink::synchronizeComponents()
+@@ -558,22 +908,14 @@ void AssemblyLink::synchronizeComponents()
      }
  }
  
@@ -3096,7 +3096,7 @@ index c4b69bde0a..b482491da9 100644
  [[maybe_unused]] std::string removeUpToName(const std::string& sub, const std::string& name)
  {
      size_t pos = sub.find(name);
-@@ -606,158 +948,6 @@ void copyPropertyIfDifferent(
+@@ -604,158 +946,6 @@ void copyPropertyIfDifferent(
  }
  };  // namespace
  
@@ -3256,10 +3256,10 @@ index c4b69bde0a..b482491da9 100644
  {
      // Make sure there is no joint group
 diff --git a/src/Mod/Assembly/App/AssemblyLink.h b/src/Mod/Assembly/App/AssemblyLink.h
-index 9309b26e5b..491532a52f 100644
+index a76ee39e5ce..0d16bbaed4c 100644
 --- a/src/Mod/Assembly/App/AssemblyLink.h
 +++ b/src/Mod/Assembly/App/AssemblyLink.h
-@@ -74,12 +74,12 @@ public:
+@@ -72,12 +72,12 @@ public:
      void updateParentJoints();
  
      void synchronizeComponents();
@@ -3278,7 +3278,7 @@ index 9309b26e5b..491532a52f 100644
      void ensureNoJointGroup();
      JointGroup* ensureJointGroup();
      std::vector<App::DocumentObject*> getJoints();
-@@ -94,13 +94,53 @@ public:
+@@ -92,13 +92,53 @@ public:
  
      std::unordered_map<App::DocumentObject*, App::DocumentObject*> objLinkMap;
  
@@ -3333,11 +3333,11 @@ index 9309b26e5b..491532a52f 100644
  
  
 diff --git a/src/Mod/Assembly/App/AssemblyLinkPyImp.cpp b/src/Mod/Assembly/App/AssemblyLinkPyImp.cpp
-index 7ca17b4e3b..6e38571c0c 100644
+index 3357ebb29ba..2d4fb182b87 100644
 --- a/src/Mod/Assembly/App/AssemblyLinkPyImp.cpp
 +++ b/src/Mod/Assembly/App/AssemblyLinkPyImp.cpp
-@@ -22,6 +22,8 @@
-  ***************************************************************************/
+@@ -20,6 +20,8 @@
+  ******************************************************************************/
  
  
 +#include "AssemblyObject.h"
@@ -3345,7 +3345,7 @@ index 7ca17b4e3b..6e38571c0c 100644
  // inclusion of the generated files (generated out of AssemblyLink.xml)
  #include "AssemblyLinkPy.h"
  #include "AssemblyLinkPy.cpp"
-@@ -47,10 +49,19 @@ int AssemblyLinkPy::setCustomAttributes(const char* /*attr*/, PyObject* /*obj*/)
+@@ -45,10 +47,19 @@ int AssemblyLinkPy::setCustomAttributes(const char* /*attr*/, PyObject* /*obj*/)
  Py::List AssemblyLinkPy::getJoints() const
  {
      Py::List ret;
@@ -3370,10 +3370,10 @@ index 7ca17b4e3b..6e38571c0c 100644
  
      return ret;
 diff --git a/src/Mod/Assembly/App/AssemblyObject.cpp b/src/Mod/Assembly/App/AssemblyObject.cpp
-index 2f5b06dacf..d6663a51f7 100644
+index 28fc35f9cd4..c724f0582a1 100644
 --- a/src/Mod/Assembly/App/AssemblyObject.cpp
 +++ b/src/Mod/Assembly/App/AssemblyObject.cpp
-@@ -24,6 +24,10 @@
+@@ -22,6 +22,10 @@
  #include <boost/core/ignore_unused.hpp>
  #include <algorithm>
  #include <cmath>
@@ -3384,7 +3384,7 @@ index 2f5b06dacf..d6663a51f7 100644
  #include <algorithm>
  #include <vector>
  #include <unordered_map>
-@@ -43,13 +47,26 @@
+@@ -41,13 +45,26 @@
  #include <Base/Rotation.h>
  #include <Base/Tools.h>
  #include <Base/Interpreter.h>
@@ -3411,7 +3411,7 @@ index 2f5b06dacf..d6663a51f7 100644
  #include <OndselSolver/ASMTMarker.h>
  #include <OndselSolver/ASMTPart.h>
  #include <OndselSolver/ASMTJoint.h>
-@@ -63,7 +80,10 @@
+@@ -61,7 +78,10 @@
  #include <OndselSolver/ASMTParallelAxesJoint.h>
  #include <OndselSolver/ASMTPerpendicularJoint.h>
  #include <OndselSolver/ASMTPointInPlaneJoint.h>
@@ -3422,7 +3422,7 @@ index 2f5b06dacf..d6663a51f7 100644
  #include <OndselSolver/ASMTLineInPlaneJoint.h>
  #include <OndselSolver/ASMTPlanarJoint.h>
  #include <OndselSolver/ASMTRevCylJoint.h>
-@@ -81,6 +101,7 @@
+@@ -79,6 +99,7 @@
  #include <OndselSolver/ExternalSystem.h>
  #include <OndselSolver/enum.h>
  
@@ -3430,7 +3430,7 @@ index 2f5b06dacf..d6663a51f7 100644
  #include "AssemblyLink.h"
  #include "AssemblyObject.h"
  #include "AssemblyObjectPy.h"
-@@ -98,13 +119,67 @@ namespace PartApp = Part;
+@@ -96,13 +117,67 @@ namespace PartApp = Part;
  namespace
  {
  
@@ -3498,7 +3498,7 @@ index 2f5b06dacf..d6663a51f7 100644
  Base::Placement getJointSideGlobalPlacement(
      App::DocumentObject* joint,
      const char* refName,
-@@ -120,8 +195,7 @@ Base::Placement getJointSideGlobalPlacement(
+@@ -118,8 +193,7 @@ Base::Placement getJointSideGlobalPlacement(
          return {};
      }
  
@@ -3508,7 +3508,7 @@ index 2f5b06dacf..d6663a51f7 100644
  }
  
  bool axesAreCoaxial(const Base::Placement& plc1, const Base::Placement& plc2)
-@@ -154,15 +228,21 @@ bool isRotationCarrierJoint(JointType type)
+@@ -152,15 +226,21 @@ bool isRotationCarrierJoint(JointType type)
      return type == JointType::Revolute || type == JointType::Cylindrical;
  }
  
@@ -3531,7 +3531,7 @@ index 2f5b06dacf..d6663a51f7 100644
      if (!gearPart) {
          return false;
      }
-@@ -171,7 +251,8 @@ bool findRotationCarrierForGearSide(
+@@ -169,7 +249,8 @@ bool findRotationCarrierForGearSide(
      bool foundCarrier = false;
      bool ambiguousCarrier = false;
  
@@ -3541,7 +3541,7 @@ index 2f5b06dacf..d6663a51f7 100644
          if (!joint || joint == gearJoint || !getJointActivated(joint)) {
              continue;
          }
-@@ -183,7 +264,7 @@ bool findRotationCarrierForGearSide(
+@@ -181,7 +262,7 @@ bool findRotationCarrierForGearSide(
                                 const char* movingPlcName,
                                 const char* carrierRefName,
                                 const char* carrierPlcName) {
@@ -3550,7 +3550,7 @@ index 2f5b06dacf..d6663a51f7 100644
                  return false;
              }
  
-@@ -198,6 +279,7 @@ bool findRotationCarrierForGearSide(
+@@ -196,6 +277,7 @@ bool findRotationCarrierForGearSide(
              }
              foundCarrier = true;
              carrierSide.joint = joint;
@@ -3558,7 +3558,7 @@ index 2f5b06dacf..d6663a51f7 100644
              carrierSide.carrierRefName = carrierRefName;
              carrierSide.carrierPlcName = carrierPlcName;
              return true;
-@@ -213,7 +295,8 @@ bool findRotationCarrierForGearSide(
+@@ -211,7 +293,8 @@ bool findRotationCarrierForGearSide(
  void setGearJointCarrierMarkerIfAvailable(
      AssemblyObject* assembly,
      App::DocumentObject* joint,
@@ -3568,7 +3568,7 @@ index 2f5b06dacf..d6663a51f7 100644
  )
  {
      auto gearJoint = std::dynamic_pointer_cast<ASMTGearJoint>(mbdJoint);
-@@ -224,26 +307,30 @@ void setGearJointCarrierMarkerIfAvailable(
+@@ -222,26 +305,30 @@ void setGearJointCarrierMarkerIfAvailable(
      RotationJointSide side1;
      RotationJointSide side2;
      const bool hasCarrier1
@@ -3606,7 +3606,7 @@ index 2f5b06dacf..d6663a51f7 100644
      );
      if (!fullMarkerNameK.empty()) {
          gearJoint->setMarkerK(fullMarkerNameK);
-@@ -292,7 +379,32 @@ App::DocumentObjectExecReturn* AssemblyObject::execute()
+@@ -290,7 +377,32 @@ App::DocumentObjectExecReturn* AssemblyObject::execute()
          "User parameter:BaseApp/Preferences/Mod/Assembly"
      );
      if (hGrp->GetBool("SolveOnRecompute", true)) {
@@ -3640,7 +3640,7 @@ index 2f5b06dacf..d6663a51f7 100644
      }
      return ret;
  }
-@@ -305,20 +417,153 @@ void AssemblyObject::onChanged(const App::Property* prop)
+@@ -303,20 +415,153 @@ void AssemblyObject::onChanged(const App::Property* prop)
                  assemblyLink->updateContents();
              }
          }
@@ -3795,7 +3795,7 @@ index 2f5b06dacf..d6663a51f7 100644
      mbdAssembly = makeMbdAssembly();
      objectPartMap.clear();
      rebuildRigidClusters();
-@@ -328,21 +573,65 @@ int AssemblyObject::solve(bool enableRedo)
+@@ -326,21 +571,65 @@ int AssemblyObject::solve(bool enableRedo)
      auto groundedObjs = fixGroundedParts();
      if (groundedObjs.empty()) {
          // If no part fixed we can't solve.
@@ -3864,7 +3864,7 @@ index 2f5b06dacf..d6663a51f7 100644
          lastSolverStatus = 0;
      }
      catch (const std::exception& e) {
-@@ -358,6 +647,45 @@ int AssemblyObject::solve(bool enableRedo)
+@@ -356,6 +645,45 @@ int AssemblyObject::solve(bool enableRedo)
          return -1;
      }
  
@@ -3910,7 +3910,7 @@ index 2f5b06dacf..d6663a51f7 100644
      setNewPlacements();
      updateRigidPlacementCache();
  
-@@ -365,6 +693,109 @@ int AssemblyObject::solve(bool enableRedo)
+@@ -363,6 +691,109 @@ int AssemblyObject::solve(bool enableRedo)
  
      updateSolveStatus();
  
@@ -4020,7 +4020,7 @@ index 2f5b06dacf..d6663a51f7 100644
      return 0;
  }
  
-@@ -391,7 +822,8 @@ void AssemblyObject::updateSolveStatus()
+@@ -389,7 +820,8 @@ void AssemblyObject::updateSolveStatus()
  
      // Solve on demand when queried before the system is solved, but not from within
      // a solve: solve() calls this, so a failed solve would recurse indefinitely.
@@ -4030,7 +4030,7 @@ index 2f5b06dacf..d6663a51f7 100644
          solve();
      }
  
-@@ -399,17 +831,19 @@ void AssemblyObject::updateSolveStatus()
+@@ -397,17 +829,19 @@ void AssemblyObject::updateSolveStatus()
          return;
      }
  
@@ -4060,7 +4060,7 @@ index 2f5b06dacf..d6663a51f7 100644
  
      // Iterate through all joints and motions in the MBD system
      mbdAssembly->mbdSystem->jointsMotionsDo([&](std::shared_ptr<MbD::Joint> jm) {
-@@ -428,13 +862,26 @@ void AssemblyObject::updateSolveStatus()
+@@ -426,13 +860,26 @@ void AssemblyObject::updateSolveStatus()
              // A constraint is redundant if its spec starts with "Redundant"
              if (spec.rfind("Redundant", 0) == 0) {
                  isJointRedundant = true;
@@ -4090,7 +4090,7 @@ index 2f5b06dacf..d6663a51f7 100644
  
          // We only care about objects that are actual joints in the FreeCAD document.
          // This effectively filters out the grounding joints, which are named after parts.
-@@ -443,8 +890,11 @@ void AssemblyObject::updateSolveStatus()
+@@ -441,8 +888,11 @@ void AssemblyObject::updateSolveStatus()
          }
  
          if (isJointRedundant) {
@@ -4104,7 +4104,7 @@ index 2f5b06dacf..d6663a51f7 100644
              if (std::find(lastRedundantJoints.begin(), lastRedundantJoints.end(), objName)
                  == lastRedundantJoints.end()) {
                  lastRedundantJoints.push_back(objName);
-@@ -452,16 +902,155 @@ void AssemblyObject::updateSolveStatus()
+@@ -450,16 +900,155 @@ void AssemblyObject::updateSolveStatus()
          }
      });
  
@@ -4263,7 +4263,7 @@ index 2f5b06dacf..d6663a51f7 100644
      mbdAssembly = makeMbdAssembly();
      objectPartMap.clear();
  
-@@ -473,21 +1062,72 @@ int AssemblyObject::generateSimulation(App::DocumentObject* sim)
+@@ -471,21 +1060,72 @@ int AssemblyObject::generateSimulation(App::DocumentObject* sim)
          return -6;
      }
  
@@ -4345,7 +4345,7 @@ index 2f5b06dacf..d6663a51f7 100644
      }
  
      motions.clear();
-@@ -522,7 +1162,7 @@ int Assembly::AssemblyObject::updateForFrame(size_t index)
+@@ -520,7 +1160,7 @@ int Assembly::AssemblyObject::updateForFrame(size_t index)
  
      mbdAssembly->updateForFrame(index);
      setNewPlacements();
@@ -4354,7 +4354,7 @@ index 2f5b06dacf..d6663a51f7 100644
      redrawJointPlacements(jointDocs);
      return 0;
  }
-@@ -544,19 +1184,43 @@ bool AssemblyObject::requiresRigidSolveForMove(const std::vector<App::DocumentOb
+@@ -542,19 +1182,43 @@ bool AssemblyObject::requiresRigidSolveForMove(const std::vector<App::DocumentOb
  void AssemblyObject::preDrag(std::vector<App::DocumentObject*> dragParts)
  {
      bundleFixed = true;
@@ -4402,7 +4402,7 @@ index 2f5b06dacf..d6663a51f7 100644
  
      for (auto part : dragParts) {
          const bool isRigidClustered = getRigidRepresentative(part) != nullptr;
-@@ -570,7 +1234,7 @@ void AssemblyObject::preDrag(std::vector<App::DocumentObject*> dragParts)
+@@ -568,7 +1232,7 @@ void AssemblyObject::preDrag(std::vector<App::DocumentObject*> dragParts)
          // During ungrounded island dragging, prepareMbdForIslandDrag seeds the MBD system from
          // the dragged parts, so objectPartMap is the source of truth instead.
          // - Active rigid-cluster members are solver-connected through the shared MbD part.
@@ -4411,7 +4411,7 @@ index 2f5b06dacf..d6663a51f7 100644
              continue;
          }
  
-@@ -591,11 +1255,33 @@ void AssemblyObject::preDrag(std::vector<App::DocumentObject*> dragParts)
+@@ -589,11 +1253,33 @@ void AssemblyObject::preDrag(std::vector<App::DocumentObject*> dragParts)
              // If not identity, then it's a bundled object. Some bundled objects may
              // have identity placement if they have the same position as the main object of
              // the bundle. But they're not going to be a problem.
@@ -4445,7 +4445,7 @@ index 2f5b06dacf..d6663a51f7 100644
  }
  
  void AssemblyObject::prepareMbdForIslandDrag(std::vector<App::DocumentObject*> dragParts)
-@@ -614,7 +1300,7 @@ void AssemblyObject::prepareMbdForIslandDrag(std::vector<App::DocumentObject*> d
+@@ -612,7 +1298,7 @@ void AssemblyObject::prepareMbdForIslandDrag(std::vector<App::DocumentObject*> d
          }
      }
  
@@ -4454,7 +4454,7 @@ index 2f5b06dacf..d6663a51f7 100644
      removeUnconnectedJoints(joints, seededParts);
      if (joints.empty()) {
          objectPartMap.clear();
-@@ -624,8 +1310,17 @@ void AssemblyObject::prepareMbdForIslandDrag(std::vector<App::DocumentObject*> d
+@@ -622,8 +1308,17 @@ void AssemblyObject::prepareMbdForIslandDrag(std::vector<App::DocumentObject*> d
  
      jointParts(joints);
  
@@ -4472,7 +4472,7 @@ index 2f5b06dacf..d6663a51f7 100644
      }
      catch (const std::exception& e) {
          FC_ERR("Drag setup failed: " << e.what());
-@@ -650,6 +1345,9 @@ void AssemblyObject::doDragStep()
+@@ -648,6 +1343,9 @@ void AssemblyObject::doDragStep()
      try {
          std::vector<std::shared_ptr<MbD::ASMTPart>> dragMbdParts;
          std::unordered_set<ASMTPart*> seenMbdParts;
@@ -4482,7 +4482,7 @@ index 2f5b06dacf..d6663a51f7 100644
  
          for (auto& part : draggedParts) {
              if (!part) {
-@@ -668,34 +1366,77 @@ void AssemblyObject::doDragStep()
+@@ -666,34 +1364,77 @@ void AssemblyObject::doDragStep()
              dragMbdParts.push_back(mbdPart);
  
              Base::Placement plc = getPlacementFromProp(part, "Placement");
@@ -4576,7 +4576,7 @@ index 2f5b06dacf..d6663a51f7 100644
              for (auto* joint : joints) {
                  if (joint->Visibility.getValue()) {
                      // redraw only the moving joint as its quite slow as its python code.
-@@ -743,6 +1484,23 @@ bool AssemblyObject::validateNewPlacements()
+@@ -741,6 +1482,23 @@ bool AssemblyObject::validateNewPlacements()
                      newPlacement = newPlacement * it->second.offsetPlc;
                  }
  
@@ -4600,7 +4600,7 @@ index 2f5b06dacf..d6663a51f7 100644
                  if (!oldPlc.isSame(newPlacement, Precision::Confusion())) {
                      Base::Console().warning(
                          "Assembly : Ignoring bad solve, a grounded object ({}) moved.\n",
-@@ -831,9 +1589,9 @@ void AssemblyObject::exportAsASMT(std::string fileName)
+@@ -829,9 +1587,9 @@ void AssemblyObject::exportAsASMT(std::string fileName)
      rebuildRigidClusters();
      fixGroundedParts();
  
@@ -4612,7 +4612,7 @@ index 2f5b06dacf..d6663a51f7 100644
  
      mbdAssembly->outputFile(fileName);
  }
-@@ -868,26 +1626,36 @@ void AssemblyObject::rebuildRigidClusters()
+@@ -866,26 +1624,36 @@ void AssemblyObject::rebuildRigidClusters()
          }
      };
  
@@ -4662,7 +4662,7 @@ index 2f5b06dacf..d6663a51f7 100644
          }
      }
  
-@@ -1058,8 +1826,49 @@ bool isFinitePlacement(const Base::Placement& plc)
+@@ -1056,8 +1824,49 @@ bool isFinitePlacement(const Base::Placement& plc)
  }
  }  // namespace
  
@@ -4712,7 +4712,7 @@ index 2f5b06dacf..d6663a51f7 100644
      for (auto& pair : objectPartMap) {
          App::DocumentObject* obj = pair.first;
          std::shared_ptr<ASMTPart> mbdPart = pair.second.part;
-@@ -1074,11 +1883,35 @@ void AssemblyObject::setNewPlacements()
+@@ -1072,11 +1881,35 @@ void AssemblyObject::setNewPlacements()
              continue;
          }
  
@@ -4748,7 +4748,7 @@ index 2f5b06dacf..d6663a51f7 100644
          if (!isFinitePlacement(newPlacement)) {
              Base::Console().warning(
                  "Assembly: solver returned a non-finite placement for '{}'; keeping its "
-@@ -1087,43 +1920,206 @@ void AssemblyObject::setNewPlacements()
+@@ -1085,43 +1918,206 @@ void AssemblyObject::setNewPlacements()
              );
              continue;
          }
@@ -4971,7 +4971,7 @@ index 2f5b06dacf..d6663a51f7 100644
          }
  
          Py::Object attr = jointPy.getAttr("redrawJointPlacements");
-@@ -1142,8 +2138,154 @@ void AssemblyObject::redrawJointPlacement(App::DocumentObject* joint)
+@@ -1140,8 +2136,157 @@ void AssemblyObject::redrawJointPlacement(App::DocumentObject* joint)
      }
  }
  
@@ -5034,7 +5034,10 @@ index 2f5b06dacf..d6663a51f7 100644
 +        if (!jr.joint) {
 +            continue;
 +        }
-+        const long rank = jr.joint->getDocument() == getDocument()
++        // FCPROJECT-PATCH (2026-11-24): "eigenes Gelenk" = ohne Verschachtelungspfad, nicht "im
++        // selben Dokument" - eine Unterbaugruppe kann in derselben Datei liegen (C7: deren
++        // Gelenke gelten vor den eigenen).
++        const long rank = jr.nestingPrefix.empty()
 +            ? 1000000L + static_cast<long>(jr.joint->getID())
 +            : 1L;
 +        mbdAssembly->jointPriority[jointInstanceName(jr.joint, jr.nestingPrefix)] = rank;
@@ -5126,7 +5129,7 @@ index 2f5b06dacf..d6663a51f7 100644
      auto assembly = CREATE<ASMTAssembly>::With();
      assembly->externalSystem->freecadAssemblyObject = this;
      assembly->setName("OndselAssembly");
-@@ -1159,16 +2301,39 @@ std::shared_ptr<ASMTAssembly> AssemblyObject::makeMbdAssembly()
+@@ -1157,16 +2302,39 @@ std::shared_ptr<ASMTAssembly> AssemblyObject::makeMbdAssembly()
  App::DocumentObject* AssemblyObject::getJointOfPartConnectingToGround(
      App::DocumentObject* part,
      std::string& name,
@@ -5169,7 +5172,7 @@ index 2f5b06dacf..d6663a51f7 100644
          if (!joint) {
              continue;
          }
-@@ -1177,18 +2342,28 @@ App::DocumentObject* AssemblyObject::getJointOfPartConnectingToGround(
+@@ -1175,18 +2343,28 @@ App::DocumentObject* AssemblyObject::getJointOfPartConnectingToGround(
              continue;
          }
  
@@ -5202,7 +5205,7 @@ index 2f5b06dacf..d6663a51f7 100644
              return joint;
          }
      }
-@@ -1204,8 +2379,13 @@ App::DocumentObject* AssemblyObject::getJointOfPartForUngroundedDrag(
+@@ -1202,8 +2380,13 @@ App::DocumentObject* AssemblyObject::getJointOfPartForUngroundedDrag(
          return nullptr;
      }
  
@@ -5218,7 +5221,7 @@ index 2f5b06dacf..d6663a51f7 100644
          if (!joint || !isJointTypeConnecting(joint)) {
              continue;
          }
-@@ -1275,15 +2455,43 @@ ViewGroup* AssemblyObject::getExplodedViewGroup() const
+@@ -1273,15 +2456,43 @@ ViewGroup* AssemblyObject::getExplodedViewGroup() const
      return nullptr;
  }
  
@@ -5264,7 +5267,7 @@ index 2f5b06dacf..d6663a51f7 100644
      Base::PyGILStateLocker lock;
      for (auto joint : jointGroup->getObjects()) {
          if (!joint) {
-@@ -1291,16 +2499,58 @@ std::vector<App::DocumentObject*> AssemblyObject::getJoints(bool delBadJoints, b
+@@ -1289,16 +2500,58 @@ std::vector<App::DocumentObject*> AssemblyObject::getJoints(bool delBadJoints, b
          }
  
          auto* prop = dynamic_cast<App::PropertyBool*>(joint->getPropertyByName("Suppressed"));
@@ -5323,7 +5326,7 @@ index 2f5b06dacf..d6663a51f7 100644
              if (delBadJoints) {
                  getDocument()->removeObject(joint->getNameInDocument());
              }
-@@ -1310,16 +2560,71 @@ std::vector<App::DocumentObject*> AssemblyObject::getJoints(bool delBadJoints, b
+@@ -1308,16 +2561,71 @@ std::vector<App::DocumentObject*> AssemblyObject::getJoints(bool delBadJoints, b
          auto proxy = dynamic_cast<App::PropertyPythonObject*>(joint->getPropertyByName("Proxy"));
          if (proxy) {
              if (proxy->getValue().hasAttr("setJointConnectors")) {
@@ -5399,7 +5402,7 @@ index 2f5b06dacf..d6663a51f7 100644
          }
      }
  
-@@ -1351,7 +2656,7 @@ std::vector<App::DocumentObject*> AssemblyObject::getGroundedJoints()
+@@ -1349,7 +2657,7 @@ std::vector<App::DocumentObject*> AssemblyObject::getGroundedJoints()
      return joints;
  }
  
@@ -5408,7 +5411,7 @@ index 2f5b06dacf..d6663a51f7 100644
  {
      std::vector<App::DocumentObject*> rigid_groups {};
  
-@@ -1402,7 +2707,7 @@ std::vector<App::DocumentObject*> AssemblyObject::getRigidGroups()
+@@ -1400,7 +2708,7 @@ std::vector<App::DocumentObject*> AssemblyObject::getRigidGroups()
                  continue;
              }
  
@@ -5417,7 +5420,7 @@ index 2f5b06dacf..d6663a51f7 100644
                  prop->setValue(validMembers);
              }
  
-@@ -1413,13 +2718,36 @@ std::vector<App::DocumentObject*> AssemblyObject::getRigidGroups()
+@@ -1411,13 +2719,36 @@ std::vector<App::DocumentObject*> AssemblyObject::getRigidGroups()
      return rigid_groups;
  }
  
@@ -5455,7 +5458,7 @@ index 2f5b06dacf..d6663a51f7 100644
      std::vector<App::DocumentObject*> jointsOf;
  
      for (auto joint : joints) {
-@@ -1433,26 +2761,119 @@ std::vector<App::DocumentObject*> AssemblyObject::getJointsOfObj(App::DocumentOb
+@@ -1431,26 +2762,119 @@ std::vector<App::DocumentObject*> AssemblyObject::getJointsOfObj(App::DocumentOb
      return jointsOf;
  }
  
@@ -5584,7 +5587,7 @@ index 2f5b06dacf..d6663a51f7 100644
  {
      std::unordered_set<App::DocumentObject*> groundedSet;
      std::vector<App::DocumentObject*> allParts = getAssemblyComponents(this);
-@@ -1482,10 +2903,310 @@ std::unordered_set<App::DocumentObject*> AssemblyObject::getGroundedParts()
+@@ -1480,10 +2904,310 @@ std::unordered_set<App::DocumentObject*> AssemblyObject::getGroundedParts()
          }
      }
  
@@ -5897,7 +5900,7 @@ index 2f5b06dacf..d6663a51f7 100644
      std::vector<App::DocumentObject*> groundedSnapshot(groundedSet.begin(), groundedSet.end());
      for (auto* groundedObj : groundedSnapshot) {
          if (!groundedObj) {
-@@ -1508,14 +3229,69 @@ std::unordered_set<App::DocumentObject*> AssemblyObject::fixGroundedParts()
+@@ -1506,14 +3230,69 @@ std::unordered_set<App::DocumentObject*> AssemblyObject::fixGroundedParts()
  {
      auto groundedParts = getGroundedParts();
  
@@ -5970,7 +5973,7 @@ index 2f5b06dacf..d6663a51f7 100644
      }
      return groundedParts;
  }
-@@ -1530,7 +3306,21 @@ void AssemblyObject::fixGroundedPart(App::DocumentObject* obj, Base::Placement&
+@@ -1528,7 +3307,21 @@ void AssemblyObject::fixGroundedPart(App::DocumentObject* obj, Base::Placement&
      auto mbdMarker1 = makeMbdMarker(markerName1, plc);
      mbdAssembly->addMarker(mbdMarker1);
  
@@ -5993,7 +5996,7 @@ index 2f5b06dacf..d6663a51f7 100644
  
      std::string markerName2 = "FixingMarker";
      Base::Placement basePlc = Base::Placement();
-@@ -1548,13 +3338,23 @@ void AssemblyObject::fixGroundedPart(App::DocumentObject* obj, Base::Placement&
+@@ -1546,13 +3339,23 @@ void AssemblyObject::fixGroundedPart(App::DocumentObject* obj, Base::Placement&
      mbdAssembly->addJoint(mbdJoint);
  }
  
@@ -6019,7 +6022,7 @@ index 2f5b06dacf..d6663a51f7 100644
      if (!part) {
          return false;
      }
-@@ -1572,31 +3372,17 @@ bool AssemblyObject::isJointConnectingPartToGround(App::DocumentObject* joint, c
+@@ -1570,31 +3373,17 @@ bool AssemblyObject::isJointConnectingPartToGround(App::DocumentObject* joint, c
      }
  
      // to know if a joint is connecting to ground we disable all the other joints
@@ -6060,7 +6063,7 @@ index 2f5b06dacf..d6663a51f7 100644
  }
  
  bool AssemblyObject::isJointTypeConnecting(App::DocumentObject* joint)
-@@ -1626,34 +3412,87 @@ bool AssemblyObject::isObjInSetOfObjRefs(App::DocumentObject* obj, const std::ve
+@@ -1624,34 +3413,87 @@ bool AssemblyObject::isObjInSetOfObjRefs(App::DocumentObject* obj, const std::ve
  }
  
  void AssemblyObject::removeUnconnectedJoints(
@@ -6158,7 +6161,7 @@ index 2f5b06dacf..d6663a51f7 100644
              }
          ),
          joints.end()
-@@ -1663,23 +3502,66 @@ void AssemblyObject::removeUnconnectedJoints(
+@@ -1661,23 +3503,66 @@ void AssemblyObject::removeUnconnectedJoints(
  void AssemblyObject::traverseAndMarkConnectedParts(
      App::DocumentObject* currentObj,
      std::vector<ObjRef>& connectedParts,
@@ -6234,7 +6237,7 @@ index 2f5b06dacf..d6663a51f7 100644
  )
  {
      if (!part) {
-@@ -1688,13 +3570,21 @@ std::vector<ObjRef> AssemblyObject::getConnectedParts(
+@@ -1686,13 +3571,21 @@ std::vector<ObjRef> AssemblyObject::getConnectedParts(
  
      std::vector<ObjRef> connectedParts;
  
@@ -6259,7 +6262,7 @@ index 2f5b06dacf..d6663a51f7 100644
  
          if (!obj1 || !obj2) {
              continue;
-@@ -1746,44 +3636,199 @@ bool AssemblyObject::isPartGrounded(App::DocumentObject* obj)
+@@ -1744,44 +3637,199 @@ bool AssemblyObject::isPartGrounded(App::DocumentObject* obj)
      return false;
  }
  
@@ -6469,7 +6472,7 @@ index 2f5b06dacf..d6663a51f7 100644
          for (auto& mbdJoint : mbdJoints) {
              mbdAssembly->addJoint(mbdJoint);
          }
-@@ -1811,8 +3856,14 @@ void Assembly::AssemblyObject::create_mbdSimulationParameters(App::DocumentObjec
+@@ -1809,8 +3857,14 @@ void Assembly::AssemblyObject::create_mbdSimulationParameters(App::DocumentObjec
      mbdSim->seterrorTol(valueOf(sim, "fGlobalErrorTolerance"));
  }
  
@@ -6485,7 +6488,7 @@ index 2f5b06dacf..d6663a51f7 100644
      switch (type) {
          case JointType::Fixed:
              if (bundleFixed) {
-@@ -1833,7 +3884,7 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointOfType(App::DocumentObjec
+@@ -1831,7 +3885,7 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointOfType(App::DocumentObjec
              return CREATE<ASMTSphericalJoint>::With();
  
          case JointType::Distance:
@@ -6494,7 +6497,7 @@ index 2f5b06dacf..d6663a51f7 100644
  
          case JointType::Parallel:
              return CREATE<ASMTParallelAxesJoint>::With();
-@@ -1858,14 +3909,12 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointOfType(App::DocumentObjec
+@@ -1856,14 +3910,12 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointOfType(App::DocumentObjec
          }
  
          case JointType::Screw: {
@@ -6511,7 +6514,7 @@ index 2f5b06dacf..d6663a51f7 100644
  
              auto mbdJoint = CREATE<ASMTScrewJoint>::With();
              mbdJoint->pitch = getJointDistance(joint);
-@@ -1886,19 +3935,196 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointOfType(App::DocumentObjec
+@@ -1884,19 +3936,196 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointOfType(App::DocumentObjec
              return mbdJoint;
          }
  
@@ -6714,7 +6717,7 @@ index 2f5b06dacf..d6663a51f7 100644
  
      switch (type) {
          case DistanceType::PointPoint: {
-@@ -2026,12 +4252,33 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointDistance(App::DocumentObj
+@@ -2024,12 +4253,33 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointDistance(App::DocumentObj
  
          // Point - Edge cases
          case DistanceType::PointLine: {
@@ -6748,7 +6751,7 @@ index 2f5b06dacf..d6663a51f7 100644
              // For other curves we do a point in plane-of-the-curve.
              // Maybe it would be best tangent / distance to the conic?
              // For arcs and circles we could use ASMTRevSphJoint. But is it better than
-@@ -2050,7 +4297,151 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointDistance(App::DocumentObj
+@@ -2048,7 +4298,151 @@ std::shared_ptr<ASMTJoint> AssemblyObject::makeMbdJointDistance(App::DocumentObj
      }
  }
  
@@ -6901,7 +6904,7 @@ index 2f5b06dacf..d6663a51f7 100644
  {
      if (!joint) {
          return {};
-@@ -2058,33 +4449,71 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2056,33 +4450,71 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
  
      JointType jointType = getJointType(joint);
  
@@ -6982,7 +6985,7 @@ index 2f5b06dacf..d6663a51f7 100644
          if (jointType == JointType::Slider || jointType == JointType::Cylindrical) {
              auto* pLenMin = dynamic_cast<App::PropertyFloat*>(joint->getPropertyByName("LengthMin"));
              auto* pLenMax = dynamic_cast<App::PropertyFloat*>(joint->getPropertyByName("LengthMax"));
-@@ -2103,22 +4532,21 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2101,22 +4533,21 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
                  double maxLength = pLenMax->getValue();
  
                  if ((minLength > maxLength) && minEnabled && maxEnabled) {
@@ -7016,7 +7019,7 @@ index 2f5b06dacf..d6663a51f7 100644
                      limit->settype("=>");
                      limit->setlimit(std::to_string(minLength));
                      limit->settol("1.0e-9");
-@@ -2127,9 +4555,9 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2125,9 +4556,9 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
  
                  if (maxEnabled) {
                      auto limit2 = ASMTTranslationLimit::With();
@@ -7029,7 +7032,7 @@ index 2f5b06dacf..d6663a51f7 100644
                      limit2->settype("=<");
                      limit2->setlimit(std::to_string(maxLength));
                      limit2->settol("1.0e-9");
-@@ -2154,22 +4582,21 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2152,22 +4583,21 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
                  double minAngle = pRotMin->getValue();
                  double maxAngle = pRotMax->getValue();
                  if ((minAngle > maxAngle) && minEnabled && maxEnabled) {
@@ -7063,7 +7066,7 @@ index 2f5b06dacf..d6663a51f7 100644
                      limit->settype("=>");
                      limit->setlimit(std::to_string(minAngle) + "*pi/180.0");
                      limit->settol("1.0e-9");
-@@ -2178,9 +4605,9 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2176,9 +4606,9 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
  
                  if (maxEnabled) {
                      auto limit2 = ASMTRotationLimit::With();
@@ -7076,7 +7079,7 @@ index 2f5b06dacf..d6663a51f7 100644
                      limit2->settype("=<");
                      limit2->setlimit(std::to_string(maxAngle) + "*pi/180.0");
                      limit2->settol("1.0e-9");
-@@ -2191,10 +4618,26 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2189,10 +4619,26 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
      }
      std::vector<App::DocumentObject*> done;
  
@@ -7105,7 +7108,7 @@ index 2f5b06dacf..d6663a51f7 100644
  
                  std::ostringstream out;
                  out.precision(10);
-@@ -2219,7 +4662,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2217,7 +4663,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
              continue;
          }
          App::DocumentObject* motionJoint = pJoint->getValue();
@@ -7114,7 +7117,7 @@ index 2f5b06dacf..d6663a51f7 100644
              continue;
          }
  
-@@ -2244,7 +4687,8 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2242,7 +4688,8 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
                  continue;
              }
              motionJoint = pJoint->getValue();
@@ -7124,7 +7127,7 @@ index 2f5b06dacf..d6663a51f7 100644
                  continue;
              }
  
-@@ -2267,7 +4711,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2265,7 +4712,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
              replaceInitialValue(formula2, joint, motionType2);
  
              auto ASMTmotion = CREATE<ASMTGeneralMotion>::With();
@@ -7133,7 +7136,7 @@ index 2f5b06dacf..d6663a51f7 100644
              ASMTmotion->setMarkerI(fullMarkerNameI);
              ASMTmotion->setMarkerJ(fullMarkerNameJ);
              ASMTmotion->rIJI->atiput(2, motionType == "Angular" ? formula2 : formula);
-@@ -2279,7 +4723,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2277,7 +4724,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
  
          if (motionType == "Angular") {
              auto ASMTmotion = CREATE<ASMTRotationalMotion>::With();
@@ -7142,7 +7145,7 @@ index 2f5b06dacf..d6663a51f7 100644
              ASMTmotion->setMarkerI(fullMarkerNameI);
              ASMTmotion->setMarkerJ(fullMarkerNameJ);
              ASMTmotion->setRotationZ(formula);
-@@ -2287,7 +4731,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2285,7 +4732,7 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
          }
          else if (motionType == "Linear") {
              auto ASMTmotion = CREATE<ASMTTranslationalMotion>::With();
@@ -7151,7 +7154,7 @@ index 2f5b06dacf..d6663a51f7 100644
              ASMTmotion->setMarkerI(fullMarkerNameI);
              ASMTmotion->setMarkerJ(fullMarkerNameJ);
              ASMTmotion->setTranslationZ(formula);
-@@ -2298,14 +4742,223 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
+@@ -2296,14 +4743,223 @@ std::vector<std::shared_ptr<MbD::ASMTJoint>> AssemblyObject::makeMbdJoint(App::D
      return {mbdJoint};
  }
  
@@ -7377,7 +7380,7 @@ index 2f5b06dacf..d6663a51f7 100644
      App::DocumentObject* obj = getObjFromJointRef(joint, propRefName);
  
      if (!part || !obj) {
-@@ -2314,31 +4967,23 @@ std::string AssemblyObject::handleOneSideOfJoint(
+@@ -2312,31 +4968,23 @@ std::string AssemblyObject::handleOneSideOfJoint(
          return "";
      }
  
@@ -7415,7 +7418,7 @@ index 2f5b06dacf..d6663a51f7 100644
      auto mbdMarker = makeMbdMarker(markerNameCopy, plc);
      mbdPart->addMarker(mbdMarker);
  
-@@ -2348,7 +4993,8 @@ std::string AssemblyObject::handleOneSideOfJoint(
+@@ -2346,7 +4994,8 @@ std::string AssemblyObject::handleOneSideOfJoint(
  void AssemblyObject::getRackPinionMarkers(
      App::DocumentObject* joint,
      std::string& markerNameI,
@@ -7425,7 +7428,7 @@ index 2f5b06dacf..d6663a51f7 100644
  )
  {
      // ASMT rack pinion joint must get the rack as I and pinion as J.
-@@ -2357,21 +5003,30 @@ void AssemblyObject::getRackPinionMarkers(
+@@ -2355,21 +5004,30 @@ void AssemblyObject::getRackPinionMarkers(
      // The user will have selected the sliding marker so we need to transform it.
      // And we need to detect which marker is the rack.
  
@@ -7465,7 +7468,7 @@ index 2f5b06dacf..d6663a51f7 100644
  
      if (!part1 || !obj1) {
          Base::Console().warning("Reference1 of Joint {} is bad.\n", joint->getFullName());
-@@ -2379,12 +5034,12 @@ void AssemblyObject::getRackPinionMarkers(
+@@ -2377,12 +5035,12 @@ void AssemblyObject::getRackPinionMarkers(
      }
  
      // For the pinion nothing special needed :
@@ -7481,7 +7484,7 @@ index 2f5b06dacf..d6663a51f7 100644
      if (!ref1 || !ref2) {
          return;
      }
-@@ -2418,7 +5073,9 @@ void AssemblyObject::getRackPinionMarkers(
+@@ -2416,7 +5074,9 @@ void AssemblyObject::getRackPinionMarkers(
      plc1.setRotation(adjustedRotation);
  
      // Then end of processing similar to handleOneSideOfJoint :
@@ -7492,7 +7495,7 @@ index 2f5b06dacf..d6663a51f7 100644
      std::shared_ptr<ASMTPart> mbdPart = data1.part;
      if (obj1->getNameInDocument() != part1->getNameInDocument()) {
          plc1 = rack_global_plc * plc1;
-@@ -2431,17 +5088,51 @@ void AssemblyObject::getRackPinionMarkers(
+@@ -2429,17 +5089,51 @@ void AssemblyObject::getRackPinionMarkers(
          plc1 = data1.offsetPlc * plc1;
      }
  
@@ -7548,7 +7551,7 @@ index 2f5b06dacf..d6663a51f7 100644
  
      // Compare the JCS in global coordinates: the slider and this joint may reference
      // different sub-objects of the same part.
-@@ -2449,64 +5140,411 @@ int AssemblyObject::slidingPartIndex(App::DocumentObject* joint)
+@@ -2447,64 +5141,411 @@ int AssemblyObject::slidingPartIndex(App::DocumentObject* joint)
      Base::Placement plc2 = getJointSideGlobalPlacement(joint, "Reference2", "Placement2");
  
      int slidingFound = 0;
@@ -7995,7 +7998,7 @@ index 2f5b06dacf..d6663a51f7 100644
      auto it = objectPartMap.find(part);
      if (it != objectPartMap.end()) {
          // part has been associated with an ASMTPart before
-@@ -2515,18 +5553,34 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
+@@ -2513,18 +5554,34 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
  
      // Associate objects that belong to an active rigid cluster.
      if (auto* rep = getRigidRepresentative(part)) {
@@ -8033,7 +8036,7 @@ index 2f5b06dacf..d6663a51f7 100644
          }
  
          if (const auto* members = getRigidMembers(rep)) {
-@@ -2535,8 +5589,9 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
+@@ -2533,8 +5590,9 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
                      continue;
                  }
  
@@ -8045,7 +8048,7 @@ index 2f5b06dacf..d6663a51f7 100644
              }
          }
  
-@@ -2548,21 +5603,77 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
+@@ -2546,21 +5604,77 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
  
      // part has not been associated with an ASMTPart before
      std::string str = part->getFullName();
@@ -8129,7 +8132,7 @@ index 2f5b06dacf..d6663a51f7 100644
                      App::DocumentObject* partToAdd = currentPart == part1 ? part2 : part1;
  
                      if (objectPartMap.find(partToAdd) != objectPartMap.end()) {
-@@ -2570,12 +5681,74 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
+@@ -2568,12 +5682,74 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
                          continue;
                      }
  
@@ -8208,7 +8211,7 @@ index 2f5b06dacf..d6663a51f7 100644
                  }
              }
          };
-@@ -2585,12 +5758,12 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
+@@ -2583,12 +5759,12 @@ AssemblyObject::MbDPartData AssemblyObject::getMbDData(App::DocumentObject* part
      return data;
  }
  
@@ -8223,7 +8226,7 @@ index 2f5b06dacf..d6663a51f7 100644
  }
  
  std::shared_ptr<ASMTPart> AssemblyObject::makeMbdPart(std::string& name, Base::Placement plc, double mass)
-@@ -2641,32 +5814,96 @@ std::shared_ptr<ASMTMarker> AssemblyObject::makeMbdMarker(std::string& name, Bas
+@@ -2639,32 +5815,96 @@ std::shared_ptr<ASMTMarker> AssemblyObject::makeMbdMarker(std::string& name, Bas
  
  std::vector<ObjRef> AssemblyObject::getDownstreamParts(
      App::DocumentObject* part,
@@ -8325,7 +8328,7 @@ index 2f5b06dacf..d6663a51f7 100644
      if (joint) {
          setJointActivated(joint, state);
      }
-@@ -2674,6 +5911,18 @@ std::vector<ObjRef> AssemblyObject::getDownstreamParts(
+@@ -2672,6 +5912,18 @@ std::vector<ObjRef> AssemblyObject::getDownstreamParts(
      return downstreamParts;
  }
  
@@ -8344,7 +8347,7 @@ index 2f5b06dacf..d6663a51f7 100644
  App::DocumentObject* AssemblyObject::getUpstreamMovingPart(
      App::DocumentObject* part,
      App::DocumentObject*& joint,
-@@ -2681,23 +5930,146 @@ App::DocumentObject* AssemblyObject::getUpstreamMovingPart(
+@@ -2679,23 +5931,146 @@ App::DocumentObject* AssemblyObject::getUpstreamMovingPart(
      std::vector<App::DocumentObject*> excludeJoints
  )
  {
@@ -8493,7 +8496,7 @@ index 2f5b06dacf..d6663a51f7 100644
  double AssemblyObject::getObjMass(App::DocumentObject* obj)
  {
      if (!obj) {
-@@ -2717,22 +6089,129 @@ void AssemblyObject::setObjMasses(std::vector<std::pair<App::DocumentObject*, do
+@@ -2715,22 +6090,129 @@ void AssemblyObject::setObjMasses(std::vector<std::pair<App::DocumentObject*, do
      objMasses = objectMasses;
  }
  
@@ -8633,7 +8636,7 @@ index 2f5b06dacf..d6663a51f7 100644
  }
  
  void AssemblyObject::ensureIdentityPlacements()
-@@ -2781,6 +6260,30 @@ void AssemblyObject::syncGroundedJoints()
+@@ -2779,6 +6261,30 @@ void AssemblyObject::syncGroundedJoints()
          }
      }
  
@@ -8664,7 +8667,7 @@ index 2f5b06dacf..d6663a51f7 100644
      std::vector<App::DocumentObject*> allParts = getAssemblyComponents(this);
  
      for (auto part : allParts) {
-@@ -2794,13 +6297,46 @@ void AssemblyObject::syncGroundedJoints()
+@@ -2792,13 +6298,46 @@ void AssemblyObject::syncGroundedJoints()
  
          bool isReadOnly = propPlc->isReadOnly();
          auto it = groundedMap.find(part);
@@ -8714,7 +8717,7 @@ index 2f5b06dacf..d6663a51f7 100644
                  std::string asmName = getNameInDocument();
                  std::string partName = part->getNameInDocument();
                  std::string code = "import FreeCAD\n"
-@@ -2809,11 +6345,14 @@ void AssemblyObject::syncGroundedJoints()
+@@ -2807,11 +6346,14 @@ void AssemblyObject::syncGroundedJoints()
                                     "    import UtilsAssembly\n"
                                     "    doc = FreeCAD.getDocument('"
                      + docName
@@ -8730,7 +8733,7 @@ index 2f5b06dacf..d6663a51f7 100644
                      + partName
                      + "')\n"
                        "    jg = UtilsAssembly.getJointGroup(asm)\n"
-@@ -2831,10 +6370,18 @@ void AssemblyObject::syncGroundedJoints()
+@@ -2829,10 +6371,18 @@ void AssemblyObject::syncGroundedJoints()
              catch (...) {
              }
          }
@@ -8754,10 +8757,10 @@ index 2f5b06dacf..d6663a51f7 100644
  }
  
 diff --git a/src/Mod/Assembly/App/AssemblyObject.h b/src/Mod/Assembly/App/AssemblyObject.h
-index 63bb7168d8..c19b84f0ee 100644
+index 158468ce9af..1f65ca64c2b 100644
 --- a/src/Mod/Assembly/App/AssemblyObject.h
 +++ b/src/Mod/Assembly/App/AssemblyObject.h
-@@ -25,7 +25,10 @@
+@@ -23,7 +23,10 @@
  #pragma once
  
  #include <boost/signals2.hpp>
@@ -8768,7 +8771,7 @@ index 63bb7168d8..c19b84f0ee 100644
  #include <vector>
  
  #include <Mod/Assembly/AssemblyGlobal.h>
-@@ -62,6 +65,7 @@ namespace Assembly
+@@ -60,6 +63,7 @@ namespace Assembly
  
  class AssemblyLink;
  class JointGroup;
@@ -8776,7 +8779,7 @@ index 63bb7168d8..c19b84f0ee 100644
  class ViewGroup;
  enum class JointType;
  
-@@ -72,6 +76,34 @@ struct ObjRef
+@@ -70,6 +74,34 @@ struct ObjRef
      App::PropertyXLinkSub* ref;
  };
  
@@ -8811,7 +8814,7 @@ index 63bb7168d8..c19b84f0ee 100644
  class AssemblyExport AssemblyObject: public App::Part
  {
      PROPERTY_HEADER_WITH_OVERRIDE(Assembly::AssemblyObject);
-@@ -109,6 +141,16 @@ public:
+@@ -107,6 +139,16 @@ public:
  
      Base::Placement getMbdPlacement(std::shared_ptr<MbD::ASMTPart> mbdPart);
      bool validateNewPlacements();
@@ -8828,7 +8831,7 @@ index 63bb7168d8..c19b84f0ee 100644
      void setNewPlacements();
      static void redrawJointPlacements(std::vector<App::DocumentObject*> joints);
      static void redrawJointPlacement(App::DocumentObject* joint);
-@@ -126,7 +168,23 @@ public:
+@@ -124,7 +166,23 @@ public:
          Base::Placement plc = Base::Placement(),
          double mass = 1.0
      );
@@ -8853,7 +8856,7 @@ index 63bb7168d8..c19b84f0ee 100644
      // To help the solver, during dragging, we are bundling parts connected by a fixed joint.
      // So several assembly components are bundled in a single ASMTPart.
      // So we need to store the plc of each bundled object relative to the bundle origin (first obj
-@@ -135,69 +193,279 @@ public:
+@@ -133,69 +191,279 @@ public:
      {
          std::shared_ptr<MbD::ASMTPart> part;
          Base::Placement offsetPlc;  // This is the offset within the bundled parts
@@ -9153,7 +9156,7 @@ index 63bb7168d8..c19b84f0ee 100644
      );
      App::DocumentObject* getUpstreamMovingPart(
          App::DocumentObject* part,
-@@ -205,15 +473,98 @@ public:
+@@ -203,15 +471,98 @@ public:
          std::string& name,
          std::vector<App::DocumentObject*> excludeJoints = {}
      );
@@ -9254,7 +9257,7 @@ index 63bb7168d8..c19b84f0ee 100644
  
      bool isEmpty() const;
      int numberOfComponents() const;
-@@ -251,6 +602,21 @@ public:
+@@ -249,6 +600,21 @@ public:
      {
          return lastRedundantJoints;
      }
@@ -9276,7 +9279,7 @@ index 63bb7168d8..c19b84f0ee 100644
      inline const std::vector<std::string>& getLastPartiallyRedundant() const
      {
          return lastPartialRedundantJoints;
-@@ -261,7 +627,30 @@ public:
+@@ -259,7 +625,30 @@ public:
      }
      fastsignals::signal<void()> signalSolverUpdate;
  
@@ -9307,7 +9310,7 @@ index 63bb7168d8..c19b84f0ee 100644
      void rebuildRigidClusters();
      App::DocumentObject* getRigidRepresentative(App::DocumentObject* part) const;
      const std::vector<App::DocumentObject*>* getRigidMembers(App::DocumentObject* part) const;
-@@ -269,9 +658,102 @@ private:
+@@ -267,9 +656,102 @@ private:
      void updateRigidPlacementCache();
      void prepareMbdForIslandDrag(std::vector<App::DocumentObject*> dragParts);
  
@@ -9410,7 +9413,7 @@ index 63bb7168d8..c19b84f0ee 100644
      std::unordered_map<App::DocumentObject*, App::DocumentObject*> rigidRepByPart;
      std::unordered_map<App::DocumentObject*, std::vector<App::DocumentObject*>> rigidMembersByRep;
      std::unordered_map<App::DocumentObject*, Base::Placement> rigidPlacementCache;
-@@ -283,6 +765,9 @@ private:
+@@ -281,6 +763,9 @@ private:
  
      bool bundleFixed;
  
@@ -9420,7 +9423,7 @@ index 63bb7168d8..c19b84f0ee 100644
      // True while solve() is running; breaks the solve()/updateSolveStatus() cycle.
      bool solveInProgress {false};
  
-@@ -294,6 +779,65 @@ private:
+@@ -292,6 +777,65 @@ private:
      int lastSolverStatus;
  
      std::vector<std::string> lastRedundantJoints;
@@ -9487,10 +9490,10 @@ index 63bb7168d8..c19b84f0ee 100644
      std::vector<std::string> lastPartialRedundantJoints;
      std::vector<std::string> lastMalformedJoints;
 diff --git a/src/Mod/Assembly/App/AssemblyObject.pyi b/src/Mod/Assembly/App/AssemblyObject.pyi
-index b8bfe4fb77..4ef9286e94 100644
+index 4bd24aa278f..13d259bc085 100644
 --- a/src/Mod/Assembly/App/AssemblyObject.pyi
 +++ b/src/Mod/Assembly/App/AssemblyObject.pyi
-@@ -101,12 +101,44 @@ class AssemblyObject(Part):
+@@ -102,12 +102,44 @@ class AssemblyObject(Part):
          """
  
      @constmethod
@@ -9536,7 +9539,7 @@ index b8bfe4fb77..4ef9286e94 100644
      @constmethod
      def isJointConnectingPartToGround(self, joint: DocumentObject, prop_name: str, /) -> Any:
          """
-@@ -130,6 +162,19 @@ class AssemblyObject(Part):
+@@ -131,6 +163,19 @@ class AssemblyObject(Part):
          Returns: True if part has grounded joint.
          """
  
@@ -9556,7 +9559,7 @@ index b8bfe4fb77..4ef9286e94 100644
      @constmethod
      def exportAsASMT(self, file_name: str, /) -> None:
          """
-@@ -139,9 +184,67 @@ class AssemblyObject(Part):
+@@ -140,9 +185,67 @@ class AssemblyObject(Part):
          - fileName: The name of the file where the ASMT will be exported.
          """
  
@@ -9625,7 +9628,7 @@ index b8bfe4fb77..4ef9286e94 100644
      ) -> list[DocumentObject]:
          """
          Finds all parts connected to a start_part that are not connected to ground
-@@ -154,9 +257,61 @@ class AssemblyObject(Part):
+@@ -155,9 +258,61 @@ class AssemblyObject(Part):
              start_part: The App.DocumentObject to begin the search from.
              joint_to_ignore: The App.DocumentObject (a joint) to temporarily
                               suppress during the connectivity check.
@@ -9688,10 +9691,10 @@ index b8bfe4fb77..4ef9286e94 100644
      Joints: Final[list]
      """A list of all joints this assembly has."""
 diff --git a/src/Mod/Assembly/App/AssemblyObjectPyImp.cpp b/src/Mod/Assembly/App/AssemblyObjectPyImp.cpp
-index ddd002de8a..1ad455d0c3 100644
+index a93a1d68e50..15f4e2c9c5c 100644
 --- a/src/Mod/Assembly/App/AssemblyObjectPyImp.cpp
 +++ b/src/Mod/Assembly/App/AssemblyObjectPyImp.cpp
-@@ -143,15 +143,36 @@ PyObject* AssemblyObjectPy::clearUndo(PyObject* args) const
+@@ -141,15 +141,36 @@ PyObject* AssemblyObjectPy::clearUndo(PyObject* args) const
  PyObject* AssemblyObjectPy::isPartConnected(PyObject* args) const
  {
      PyObject* pyobj;
@@ -9730,7 +9733,7 @@ index ddd002de8a..1ad455d0c3 100644
  PyObject* AssemblyObjectPy::isPartGrounded(PyObject* args) const
  {
      PyObject* pyobj;
-@@ -197,10 +218,46 @@ PyObject* AssemblyObjectPy::exportAsASMT(PyObject* args) const
+@@ -195,10 +216,46 @@ PyObject* AssemblyObjectPy::exportAsASMT(PyObject* args) const
      Py_Return;
  }
  
@@ -9778,7 +9781,7 @@ index ddd002de8a..1ad455d0c3 100644
  
      for (auto It : list) {
          ret.append(Py::Object(It->getPyObject(), true));
-@@ -213,25 +270,40 @@ PyObject* AssemblyObjectPy::getDownstreamParts(PyObject* args) const
+@@ -211,25 +268,40 @@ PyObject* AssemblyObjectPy::getDownstreamParts(PyObject* args) const
  {
      PyObject* pyPart;
      PyObject* pyJoint;
@@ -9823,7 +9826,7 @@ index ddd002de8a..1ad455d0c3 100644
  
      // Convert the result into a Python list of DocumentObjects
      Py::List ret;
-@@ -243,3 +315,175 @@ PyObject* AssemblyObjectPy::getDownstreamParts(PyObject* args) const
+@@ -241,3 +313,175 @@ PyObject* AssemblyObjectPy::getDownstreamParts(PyObject* args) const
  
      return Py::new_reference_to(ret);
  }
@@ -10000,10 +10003,10 @@ index ddd002de8a..1ad455d0c3 100644
 +    Py_Return;
 +}
 diff --git a/src/Mod/Assembly/App/AssemblyUtils.cpp b/src/Mod/Assembly/App/AssemblyUtils.cpp
-index 3e0b804b8f..f0d5c98b48 100644
+index 3e617ba6959..8e718834cb9 100644
 --- a/src/Mod/Assembly/App/AssemblyUtils.cpp
 +++ b/src/Mod/Assembly/App/AssemblyUtils.cpp
-@@ -23,6 +23,17 @@
+@@ -21,6 +21,17 @@
  
  #include <BRepAdaptor_Curve.hxx>
  #include <BRepAdaptor_Surface.hxx>
@@ -10021,7 +10024,7 @@ index 3e0b804b8f..f0d5c98b48 100644
  #include <TopoDS.hxx>
  #include <TopoDS_Face.hxx>
  #include <gp_Circ.hxx>
-@@ -37,6 +48,7 @@
+@@ -35,6 +46,7 @@
  #include <App/PropertyStandard.h>
  #include <App/Link.h>
  
@@ -10029,7 +10032,7 @@ index 3e0b804b8f..f0d5c98b48 100644
  #include <Base/Placement.h>
  #include <Base/Tools.h>
  #include <Base/Interpreter.h>
-@@ -161,7 +173,186 @@ double getEdgeRadius(const App::DocumentObject* obj, const std::string& elt)
+@@ -159,7 +171,186 @@ double getEdgeRadius(const App::DocumentObject* obj, const std::string& elt)
      return sf.GetType() == GeomAbs_Circle ? sf.Circle().Radius() : 0.0;
  }
  
@@ -10217,7 +10220,7 @@ index 3e0b804b8f..f0d5c98b48 100644
  {
      if (!joint) {
          return DistanceType::Other;
-@@ -180,7 +371,7 @@ DistanceType getDistanceType(App::DocumentObject* joint)
+@@ -178,7 +369,7 @@ DistanceType getDistanceType(App::DocumentObject* joint)
      else if (type1 == "Edge" && type2 == "Edge") {
          if (isEdgeType(obj1, elt1, GeomAbs_Line) || isEdgeType(obj2, elt2, GeomAbs_Line)) {
              if (!isEdgeType(obj1, elt1, GeomAbs_Line)) {
@@ -10226,7 +10229,7 @@ index 3e0b804b8f..f0d5c98b48 100644
                  std::swap(elt1, elt2);
                  std::swap(obj1, obj2);
              }
-@@ -196,7 +387,7 @@ DistanceType getDistanceType(App::DocumentObject* joint)
+@@ -194,7 +385,7 @@ DistanceType getDistanceType(App::DocumentObject* joint)
  
          else if (isEdgeType(obj1, elt1, GeomAbs_Circle) || isEdgeType(obj2, elt2, GeomAbs_Circle)) {
              if (!isEdgeType(obj1, elt1, GeomAbs_Circle)) {
@@ -10235,7 +10238,7 @@ index 3e0b804b8f..f0d5c98b48 100644
                  std::swap(elt1, elt2);
                  std::swap(obj1, obj2);
              }
-@@ -210,7 +401,7 @@ DistanceType getDistanceType(App::DocumentObject* joint)
+@@ -208,7 +399,7 @@ DistanceType getDistanceType(App::DocumentObject* joint)
      else if (type1 == "Face" && type2 == "Face") {
          if (isFaceType(obj1, elt1, GeomAbs_Plane) || isFaceType(obj2, elt2, GeomAbs_Plane)) {
              if (!isFaceType(obj1, elt1, GeomAbs_Plane)) {
@@ -10244,7 +10247,7 @@ index 3e0b804b8f..f0d5c98b48 100644
                  std::swap(elt1, elt2);
                  std::swap(obj1, obj2);
              }
-@@ -234,7 +425,7 @@ DistanceType getDistanceType(App::DocumentObject* joint)
+@@ -232,7 +423,7 @@ DistanceType getDistanceType(App::DocumentObject* joint)
  
          else if (isFaceType(obj1, elt1, GeomAbs_Cylinder) || isFaceType(obj2, elt2, GeomAbs_Cylinder)) {
              if (!isFaceType(obj1, elt1, GeomAbs_Cylinder)) {
@@ -10253,7 +10256,7 @@ index 3e0b804b8f..f0d5c98b48 100644
                  std::swap(elt1, elt2);
                  std::swap(obj1, obj2);
              }
-@@ -255,7 +446,7 @@ DistanceType getDistanceType(App::DocumentObject* joint)
+@@ -253,7 +444,7 @@ DistanceType getDistanceType(App::DocumentObject* joint)
  
          else if (isFaceType(obj1, elt1, GeomAbs_Cone) || isFaceType(obj2, elt2, GeomAbs_Cone)) {
              if (!isFaceType(obj1, elt1, GeomAbs_Cone)) {
@@ -10262,7 +10265,7 @@ index 3e0b804b8f..f0d5c98b48 100644
                  std::swap(elt1, elt2);
                  std::swap(obj1, obj2);
              }
-@@ -273,7 +464,7 @@ DistanceType getDistanceType(App::DocumentObject* joint)
+@@ -271,7 +462,7 @@ DistanceType getDistanceType(App::DocumentObject* joint)
  
          else if (isFaceType(obj1, elt1, GeomAbs_Torus) || isFaceType(obj2, elt2, GeomAbs_Torus)) {
              if (!isFaceType(obj1, elt1, GeomAbs_Torus)) {
@@ -10271,7 +10274,7 @@ index 3e0b804b8f..f0d5c98b48 100644
                  std::swap(elt1, elt2);
                  std::swap(obj1, obj2);
              }
-@@ -288,7 +479,7 @@ DistanceType getDistanceType(App::DocumentObject* joint)
+@@ -286,7 +477,7 @@ DistanceType getDistanceType(App::DocumentObject* joint)
  
          else if (isFaceType(obj1, elt1, GeomAbs_Sphere) || isFaceType(obj2, elt2, GeomAbs_Sphere)) {
              if (!isFaceType(obj1, elt1, GeomAbs_Sphere)) {
@@ -10280,7 +10283,7 @@ index 3e0b804b8f..f0d5c98b48 100644
                  std::swap(elt1, elt2);
                  std::swap(obj1, obj2);
              }
-@@ -300,7 +491,7 @@ DistanceType getDistanceType(App::DocumentObject* joint)
+@@ -298,7 +489,7 @@ DistanceType getDistanceType(App::DocumentObject* joint)
      }
      else if ((type1 == "Vertex" && type2 == "Face") || (type1 == "Face" && type2 == "Vertex")) {
          if (type1 == "Vertex") {  // Make sure face is the first.
@@ -10289,7 +10292,7 @@ index 3e0b804b8f..f0d5c98b48 100644
              std::swap(elt1, elt2);
              std::swap(obj1, obj2);
          }
-@@ -322,7 +513,7 @@ DistanceType getDistanceType(App::DocumentObject* joint)
+@@ -320,7 +511,7 @@ DistanceType getDistanceType(App::DocumentObject* joint)
      }
      else if ((type1 == "Edge" && type2 == "Face") || (type1 == "Face" && type2 == "Edge")) {
          if (type1 == "Edge") {  // Make sure face is the first.
@@ -10298,7 +10301,7 @@ index 3e0b804b8f..f0d5c98b48 100644
              std::swap(elt1, elt2);
              std::swap(obj1, obj2);
          }
-@@ -364,7 +555,7 @@ DistanceType getDistanceType(App::DocumentObject* joint)
+@@ -362,7 +553,7 @@ DistanceType getDistanceType(App::DocumentObject* joint)
      }
      else if ((type1 == "Vertex" && type2 == "Edge") || (type1 == "Edge" && type2 == "Vertex")) {
          if (type1 == "Vertex") {  // Make sure edge is the first.
@@ -10307,7 +10310,7 @@ index 3e0b804b8f..f0d5c98b48 100644
              std::swap(elt1, elt2);
              std::swap(obj1, obj2);
          }
-@@ -381,6 +572,16 @@ DistanceType getDistanceType(App::DocumentObject* joint)
+@@ -379,6 +570,16 @@ DistanceType getDistanceType(App::DocumentObject* joint)
      return DistanceType::Other;
  }
  
@@ -10324,7 +10327,7 @@ index 3e0b804b8f..f0d5c98b48 100644
  JointGroup* getJointGroup(const App::Part* part)
  {
      if (!part) {
-@@ -648,6 +849,18 @@ App::DocumentObject* getObjFromRef(const App::PropertyXLinkSub* prop)
+@@ -646,6 +847,18 @@ App::DocumentObject* getObjFromRef(const App::PropertyXLinkSub* prop)
      return getObjFromRef(obj, subs[0]);
  }
  
@@ -10343,7 +10346,7 @@ index 3e0b804b8f..f0d5c98b48 100644
  App::DocumentObject* getObjFromJointRef(const App::DocumentObject* joint, const char* pName)
  {
      if (!joint) {
-@@ -670,10 +883,163 @@ App::DocumentObject* getLinkedObjFromRef(const App::DocumentObject* joint, const
+@@ -668,10 +881,163 @@ App::DocumentObject* getLinkedObjFromRef(const App::DocumentObject* joint, const
      return nullptr;
  }
  
@@ -10508,7 +10511,7 @@ index 3e0b804b8f..f0d5c98b48 100644
  )
  {
      if (!obj) {
-@@ -687,14 +1053,98 @@ App::DocumentObject* getMovingPartFromSel(
+@@ -685,14 +1051,98 @@ App::DocumentObject* getMovingPartFromSel(
  
      bool assemblyPassed = false;
  
@@ -10607,7 +10610,7 @@ index 3e0b804b8f..f0d5c98b48 100644
          }
  
          if (obj == assemblyObject) {
-@@ -718,12 +1168,98 @@ App::DocumentObject* getMovingPartFromSel(
+@@ -716,12 +1166,98 @@ App::DocumentObject* getMovingPartFromSel(
          if (obj->isDerivedFrom<Assembly::AssemblyLink>()) {
              const auto* pRigid = obj->getPropertyByName<App::PropertyBool>("Rigid");
              if (pRigid && !pRigid->getValue()) {
@@ -10707,7 +10710,7 @@ index 3e0b804b8f..f0d5c98b48 100644
      return nullptr;
  }
  
-@@ -746,6 +1282,156 @@ App::DocumentObject* getMovingPartFromRef(App::DocumentObject* joint, const char
+@@ -744,6 +1280,156 @@ App::DocumentObject* getMovingPartFromRef(App::DocumentObject* joint, const char
      return getMovingPartFromRef(prop);
  }
  
@@ -10864,7 +10867,7 @@ index 3e0b804b8f..f0d5c98b48 100644
  void syncPlacements(App::DocumentObject* src, App::DocumentObject* to)
  {
      auto* plcPropSource = dynamic_cast<App::PropertyPlacement*>(src->getPropertyByName("Placement"));
-@@ -842,12 +1528,20 @@ double getJointCurrentValue(App::DocumentObject* joint, bool isAngle)
+@@ -840,12 +1526,20 @@ double getJointCurrentValue(App::DocumentObject* joint, bool isAngle)
      if (!ref1 || !ref2) {
          return 0.0;
      }
@@ -10888,10 +10891,10 @@ index 3e0b804b8f..f0d5c98b48 100644
  
      if (isAngle) {
 diff --git a/src/Mod/Assembly/App/AssemblyUtils.h b/src/Mod/Assembly/App/AssemblyUtils.h
-index 5296675ffa..e5733429c5 100644
+index 33a44203cb0..752b69159e0 100644
 --- a/src/Mod/Assembly/App/AssemblyUtils.h
 +++ b/src/Mod/Assembly/App/AssemblyUtils.h
-@@ -24,6 +24,8 @@
+@@ -22,6 +22,8 @@
  
  #pragma once
  
@@ -10900,7 +10903,7 @@ index 5296675ffa..e5733429c5 100644
  #include <GeomAbs_CurveType.hxx>
  #include <GeomAbs_SurfaceType.hxx>
  
-@@ -64,6 +66,9 @@ enum class JointType
+@@ -62,6 +64,9 @@ enum class JointType
      Screw,
      Gears,
      Belt,
@@ -10910,7 +10913,7 @@ index 5296675ffa..e5733429c5 100644
  };
  
  enum class GeometryType
-@@ -132,6 +137,7 @@ enum class DistanceType
+@@ -130,6 +135,7 @@ enum class DistanceType
  };
  
  class AssemblyObject;
@@ -10918,7 +10921,7 @@ index 5296675ffa..e5733429c5 100644
  class JointGroup;
  
  AssemblyExport void swapJCS(const App::DocumentObject* joint);
-@@ -149,7 +155,53 @@ AssemblyExport bool isFaceType(
+@@ -147,7 +153,53 @@ AssemblyExport bool isFaceType(
  AssemblyExport double getFaceRadius(const App::DocumentObject* obj, const std::string& elName);
  AssemblyExport double getEdgeRadius(const App::DocumentObject* obj, const std::string& elName);
  
@@ -10973,7 +10976,7 @@ index 5296675ffa..e5733429c5 100644
  AssemblyExport JointGroup* getJointGroup(const App::Part* part);
  
  AssemblyExport std::vector<App::DocumentObject*> getAssemblyComponents(const AssemblyObject* assembly);
-@@ -169,6 +221,9 @@ AssemblyExport App::DocumentObject* getObjFromProp(
+@@ -167,6 +219,9 @@ AssemblyExport App::DocumentObject* getObjFromProp(
  );
  AssemblyExport App::DocumentObject* getObjFromRef(App::DocumentObject* obj, const std::string& sub);
  AssemblyExport App::DocumentObject* getObjFromRef(const App::PropertyXLinkSub* prop);
@@ -10983,7 +10986,7 @@ index 5296675ffa..e5733429c5 100644
  AssemblyExport App::DocumentObject* getObjFromJointRef(
      const App::DocumentObject* joint,
      const char* propName
-@@ -178,13 +233,98 @@ AssemblyExport App::DocumentObject* getLinkedObjFromRef(
+@@ -176,13 +231,98 @@ AssemblyExport App::DocumentObject* getLinkedObjFromRef(
      const char* propName
  );
  // Get the moving part from a selection, which has the full path.
@@ -11083,7 +11086,7 @@ index 5296675ffa..e5733429c5 100644
  AssemblyExport std::vector<std::string> getSubAsList(const App::PropertyXLinkSub* prop);
  AssemblyExport std::vector<std::string> getSubAsList(
      const App::DocumentObject* joint,
-@@ -192,5 +332,10 @@ AssemblyExport std::vector<std::string> getSubAsList(
+@@ -190,5 +330,10 @@ AssemblyExport std::vector<std::string> getSubAsList(
  );
  AssemblyExport void syncPlacements(App::DocumentObject* src, App::DocumentObject* to);
  AssemblyExport double getJointCurrentValue(App::DocumentObject* joint, bool isAngle);
@@ -11095,10 +11098,10 @@ index 5296675ffa..e5733429c5 100644
  
  }  // namespace Assembly
 diff --git a/src/Mod/Assembly/App/CMakeLists.txt b/src/Mod/Assembly/App/CMakeLists.txt
-index bd52b9d881..bc53f2b69d 100644
+index 3d3ad145c05..af6916317b9 100644
 --- a/src/Mod/Assembly/App/CMakeLists.txt
 +++ b/src/Mod/Assembly/App/CMakeLists.txt
-@@ -52,6 +52,8 @@ SET(Assembly_SRCS
+@@ -53,6 +53,8 @@ SET(Assembly_SRCS
      AssemblyLink.h
      AssemblyUtils.cpp
      AssemblyUtils.h
@@ -11109,7 +11112,7 @@ index bd52b9d881..bc53f2b69d 100644
      Groups.cpp
 diff --git a/src/Mod/Assembly/AssemblySandboxSaveCheck.py b/src/Mod/Assembly/AssemblySandboxSaveCheck.py
 new file mode 100644
-index 0000000000..bb83811623
+index 00000000000..bb838116233
 --- /dev/null
 +++ b/src/Mod/Assembly/AssemblySandboxSaveCheck.py
 @@ -0,0 +1,128 @@
@@ -11242,10 +11245,10 @@ index 0000000000..bb83811623
 +        _observer = SandboxSaveCheck()
 +        App.addDocumentObserver(_observer)
 diff --git a/src/Mod/Assembly/CMakeLists.txt b/src/Mod/Assembly/CMakeLists.txt
-index 975da1c334..d66b88584e 100644
+index e9d3c4643f6..324262ef73a 100644
 --- a/src/Mod/Assembly/CMakeLists.txt
 +++ b/src/Mod/Assembly/CMakeLists.txt
-@@ -31,12 +31,18 @@ set(Assembly_Scripts
+@@ -32,12 +32,18 @@ set(Assembly_Scripts
      CommandCreateSimulation.py
      CommandCreateSnapshot.py
      CommandExportASMT.py
@@ -11265,10 +11268,10 @@ index 975da1c334..d66b88584e 100644
  
  if(BUILD_GUI)
 diff --git a/src/Mod/Assembly/CommandCreateJoint.py b/src/Mod/Assembly/CommandCreateJoint.py
-index b5e2164074..36668cdf2f 100644
+index 3803a1e4124..447abf165ba 100644
 --- a/src/Mod/Assembly/CommandCreateJoint.py
 +++ b/src/Mod/Assembly/CommandCreateJoint.py
-@@ -379,6 +379,32 @@ class CommandCreateJointBelt:
+@@ -377,6 +377,32 @@ class CommandCreateJointBelt:
          activateJoint(12)
  
  
@@ -11301,17 +11304,17 @@ index b5e2164074..36668cdf2f 100644
  class CommandGroupGearBelt:
      def GetCommands(self):
          return ("Assembly_CreateJointGears", "Assembly_CreateJointBelt")
-@@ -590,4 +616,5 @@ if App.GuiUp:
+@@ -588,4 +614,5 @@ if App.GuiUp:
      Gui.addCommand("Assembly_CreateJointGears", CommandCreateJointGears())
      Gui.addCommand("Assembly_CreateJointBelt", CommandCreateJointBelt())
      Gui.addCommand("Assembly_CreateJointGearBelt", CommandGroupGearBelt())
 +    Gui.addCommand("Assembly_CreateJointTangent", CommandCreateJointTangent())
      Gui.addCommand("Assembly_CreateJointRigidGroup", CommandCreateJointRigidGroup())
 diff --git a/src/Mod/Assembly/CommandCreateSimulation.py b/src/Mod/Assembly/CommandCreateSimulation.py
-index 3c89d4a40e..299dcf8ef5 100644
+index 8952cbc4c23..b4644f843e4 100644
 --- a/src/Mod/Assembly/CommandCreateSimulation.py
 +++ b/src/Mod/Assembly/CommandCreateSimulation.py
-@@ -422,13 +422,18 @@ class ViewProviderMotion:
+@@ -420,13 +420,18 @@ class ViewProviderMotion:
              return False
  
          joint = None
@@ -11332,7 +11335,7 @@ index 3c89d4a40e..299dcf8ef5 100644
              self.app_obj.Formula = dialog.formula
  
              self.updateLabel()
-@@ -439,8 +444,10 @@ class ViewProviderMotion:
+@@ -437,8 +442,10 @@ class ViewProviderMotion:
  
          typeStr = "Linear" if self.app_obj.MotionType == "Linear" else "Angular"
  
@@ -11344,7 +11347,7 @@ index 3c89d4a40e..299dcf8ef5 100644
          )
  
      def getAssembly(self):
-@@ -457,11 +464,19 @@ class ViewProviderMotion:
+@@ -455,11 +462,19 @@ class ViewProviderMotion:
  
  class MotionEditDialog:
      def __init__(
@@ -11365,7 +11368,7 @@ index 3c89d4a40e..299dcf8ef5 100644
          self.formula = formula
  
          # Create a non-modal, frameless dialog
-@@ -484,7 +499,8 @@ class MotionEditDialog:
+@@ -482,7 +497,8 @@ class MotionEditDialog:
          self.motion_type_combo.currentTextChanged.connect(on_motion_type_changed)
  
          def on_joint_changed(index):
@@ -11375,7 +11378,7 @@ index 3c89d4a40e..299dcf8ef5 100644
              self.setup_motiontype_combo()  # Refresh the motion combo box based on the new joint type
  
          self.joint_combo.currentIndexChanged.connect(on_joint_changed)
-@@ -735,19 +751,43 @@ SLOPE defines the steepness of the transition between 0 and H1 and H2 to 0 about
+@@ -733,19 +749,43 @@ SLOPE defines the steepness of the transition between 0 and H1 and H2 to 0 about
  
          jointTypes = ["Revolute", "Slider", "Cylindrical"]
  
@@ -11428,7 +11431,7 @@ index 3c89d4a40e..299dcf8ef5 100644
  
      def setup_motiontype_combo(self):
          self.motion_type_combo.clear()  # Clear existing items
-@@ -1007,7 +1047,7 @@ class TaskAssemblyCreateSimulation(QtCore.QObject):
+@@ -1005,7 +1045,7 @@ class TaskAssemblyCreateSimulation(QtCore.QObject):
      def addMotionClicked(self):
          dialog = MotionEditDialog(self.assembly)
          if dialog.exec_():
@@ -11438,10 +11441,10 @@ index 3c89d4a40e..299dcf8ef5 100644
      # Taskbox keyboard event handler
      def eventFilter(self, watched, event):
 diff --git a/src/Mod/Assembly/CommandCreateView.py b/src/Mod/Assembly/CommandCreateView.py
-index 170b6a4d43..1124b5e062 100644
+index ad85b18dcca..159a62c6a31 100644
 --- a/src/Mod/Assembly/CommandCreateView.py
 +++ b/src/Mod/Assembly/CommandCreateView.py
-@@ -1353,8 +1353,8 @@ class TaskAssemblyCreateView(QtCore.QObject):
+@@ -1351,8 +1351,8 @@ class TaskAssemblyCreateView(QtCore.QObject):
          ref = UtilsAssembly.addVertexToReference(ref, vertex_name)
  
          plc = UtilsAssembly.findPlacement(ref)
@@ -11453,10 +11456,10 @@ index 170b6a4d43..1124b5e062 100644
          self.blockDraggerMove = True
          self.assembly.ViewObject.DraggerPlacement = plc
 diff --git a/src/Mod/Assembly/CommandInsertLink.py b/src/Mod/Assembly/CommandInsertLink.py
-index 6586e36715..ebf7b717ec 100644
+index 5f5dd43ed0d..eecfef9971e 100644
 --- a/src/Mod/Assembly/CommandInsertLink.py
 +++ b/src/Mod/Assembly/CommandInsertLink.py
-@@ -683,8 +683,12 @@ class TaskAssemblyInsertLink(QtCore.QObject):
+@@ -681,8 +681,12 @@ class TaskAssemblyInsertLink(QtCore.QObject):
          self.buildPartList()
  
      def getTranslationVec(self, part):
@@ -11473,7 +11476,7 @@ index 6586e36715..ebf7b717ec 100644
              translation = 10
 diff --git a/src/Mod/Assembly/CommandSandboxCompat.py b/src/Mod/Assembly/CommandSandboxCompat.py
 new file mode 100644
-index 0000000000..4c38687566
+index 00000000000..4c386875669
 --- /dev/null
 +++ b/src/Mod/Assembly/CommandSandboxCompat.py
 @@ -0,0 +1,245 @@
@@ -11724,7 +11727,7 @@ index 0000000000..4c38687566
 +    Gui.addCommand("Assembly_SandboxNormalize", CommandSandboxNormalize())
 diff --git a/src/Mod/Assembly/CommandShowIdentityGraph.py b/src/Mod/Assembly/CommandShowIdentityGraph.py
 new file mode 100644
-index 0000000000..e5d30ab642
+index 00000000000..e5d30ab6424
 --- /dev/null
 +++ b/src/Mod/Assembly/CommandShowIdentityGraph.py
 @@ -0,0 +1,114 @@
@@ -11843,10 +11846,10 @@ index 0000000000..e5d30ab642
 +if App.GuiUp:
 +    Gui.addCommand("Assembly_ShowIdentityGraph", CommandShowIdentityGraph())
 diff --git a/src/Mod/Assembly/CommandSolveAssembly.py b/src/Mod/Assembly/CommandSolveAssembly.py
-index 52820a8566..53a4f004b0 100644
+index 1ed96f8c9c6..139277019fd 100644
 --- a/src/Mod/Assembly/CommandSolveAssembly.py
 +++ b/src/Mod/Assembly/CommandSolveAssembly.py
-@@ -63,6 +63,17 @@ class CommandSolveAssembly:
+@@ -61,6 +61,17 @@ class CommandSolveAssembly:
              return
  
          App.setActiveTransaction("Solve assembly")
@@ -11865,10 +11868,10 @@ index 52820a8566..53a4f004b0 100644
          Gui.ActiveDocument.commitCommand()
  
 diff --git a/src/Mod/Assembly/Gui/CMakeLists.txt b/src/Mod/Assembly/Gui/CMakeLists.txt
-index 25d0db6d39..00e86e8087 100644
+index 85cc4aa2aae..410393f9fd1 100644
 --- a/src/Mod/Assembly/Gui/CMakeLists.txt
 +++ b/src/Mod/Assembly/Gui/CMakeLists.txt
-@@ -94,7 +94,7 @@ endif(WIN32)
+@@ -95,7 +95,7 @@ endif(WIN32)
  target_link_libraries(AssemblyGui ${AssemblyGui_LIBS})
  target_compile_warn_error(AssemblyGui)
  
@@ -11878,10 +11881,10 @@ index 25d0db6d39..00e86e8087 100644
  
  fc_copy_sources(AssemblyGui "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_DATADIR}/Mod/Assembly" ${AssemblyGuiIcon_SVG})
 diff --git a/src/Mod/Assembly/Gui/Commands.cpp b/src/Mod/Assembly/Gui/Commands.cpp
-index 401387c64b..ebe913f472 100644
+index 1c2491e68fb..62b6da364d0 100644
 --- a/src/Mod/Assembly/Gui/Commands.cpp
 +++ b/src/Mod/Assembly/Gui/Commands.cpp
-@@ -71,6 +71,22 @@ void selectObjects(const std::vector<App::DocumentObject*>& objectsToSelect)
+@@ -69,6 +69,22 @@ void selectObjects(const std::vector<App::DocumentObject*>& objectsToSelect)
      }
  }
  
@@ -11904,7 +11907,7 @@ index 401387c64b..ebe913f472 100644
  void selectObjectsByName(AssemblyObject* assembly, const std::vector<std::string>& names)
  {
      if (!assembly || names.empty()) {
-@@ -81,7 +97,7 @@ void selectObjectsByName(AssemblyObject* assembly, const std::vector<std::string
+@@ -79,7 +95,7 @@ void selectObjectsByName(AssemblyObject* assembly, const std::vector<std::string
      App::Document* doc = assembly->getDocument();
  
      for (const auto& name : names) {
@@ -11913,7 +11916,7 @@ index 401387c64b..ebe913f472 100644
              objectsToSelect.push_back(obj);
          }
      }
-@@ -178,9 +194,9 @@ void CmdAssemblySelectConflictingConstraints::activated(int iMsg)
+@@ -176,9 +192,9 @@ void CmdAssemblySelectConflictingConstraints::activated(int iMsg)
          return;
      }
  
@@ -11926,7 +11929,7 @@ index 401387c64b..ebe913f472 100644
  }
  
  bool CmdAssemblySelectConflictingConstraints::isActive()
-@@ -350,8 +366,12 @@ void CmdAssemblySelectJointsOfComponent::activated(int iMsg)
+@@ -348,8 +364,12 @@ void CmdAssemblySelectJointsOfComponent::activated(int iMsg)
  
      std::vector<App::DocumentObject*> jointsToSelect;
      for (auto* comp : components) {
@@ -11942,7 +11945,7 @@ index 401387c64b..ebe913f472 100644
  
      selectObjects(jointsToSelect);
 diff --git a/src/Mod/Assembly/Gui/Resources/Assembly.qrc b/src/Mod/Assembly/Gui/Resources/Assembly.qrc
-index 9381256f56..bbff0d4301 100644
+index 9381256f562..bbff0d43012 100644
 --- a/src/Mod/Assembly/Gui/Resources/Assembly.qrc
 +++ b/src/Mod/Assembly/Gui/Resources/Assembly.qrc
 @@ -8,6 +8,7 @@
@@ -11955,7 +11958,7 @@ index 9381256f56..bbff0d4301 100644
          <file>icons/Assembly_CreateJointCylindrical.svg</file>
 diff --git a/src/Mod/Assembly/Gui/Resources/icons/Assembly_ShowIdentityGraph.svg b/src/Mod/Assembly/Gui/Resources/icons/Assembly_ShowIdentityGraph.svg
 new file mode 100644
-index 0000000000..5149eeefb4
+index 00000000000..5149eeefb47
 --- /dev/null
 +++ b/src/Mod/Assembly/Gui/Resources/icons/Assembly_ShowIdentityGraph.svg
 @@ -0,0 +1,21 @@
@@ -11981,7 +11984,7 @@ index 0000000000..5149eeefb4
 +  <circle cx="49" cy="45" r="12.5" fill="none" stroke="#0b1521" stroke-width="1.5" />
 +</svg>
 diff --git a/src/Mod/Assembly/Gui/Resources/preferences/Assembly.ui b/src/Mod/Assembly/Gui/Resources/preferences/Assembly.ui
-index 10ebe705fe..22633cc4df 100644
+index 10ebe705fe6..22633cc4dfb 100644
 --- a/src/Mod/Assembly/Gui/Resources/preferences/Assembly.ui
 +++ b/src/Mod/Assembly/Gui/Resources/preferences/Assembly.ui
 @@ -84,6 +84,58 @@ The files are named "runPreDrag.asmt" and "dragging.log" and are located in the
@@ -12044,10 +12047,10 @@ index 10ebe705fe..22633cc4df 100644
       <property name="orientation">
        <enum>Qt::Vertical</enum>
 diff --git a/src/Mod/Assembly/Gui/ViewProviderAssembly.cpp b/src/Mod/Assembly/Gui/ViewProviderAssembly.cpp
-index 4a27e98291..a10408ffcb 100644
+index 6423a19673b..74bf26d421f 100644
 --- a/src/Mod/Assembly/Gui/ViewProviderAssembly.cpp
 +++ b/src/Mod/Assembly/Gui/ViewProviderAssembly.cpp
-@@ -53,6 +53,7 @@
+@@ -51,6 +51,7 @@
  
  #include <Base/Tools.h>
  
@@ -12055,7 +12058,7 @@ index 4a27e98291..a10408ffcb 100644
  #include <Gui/ActionFunction.h>
  #include <Gui/Application.h>
  #include <Gui/BitmapFactory.h>
-@@ -68,6 +69,7 @@
+@@ -66,6 +67,7 @@
  #include <Gui/ViewParams.h>
  #include <Gui/Selection/SoFCSelectionAction.h>
  
@@ -12063,7 +12066,7 @@ index 4a27e98291..a10408ffcb 100644
  #include <Mod/Assembly/App/AssemblyLink.h>
  #include <Mod/Assembly/App/AssemblyObject.h>
  #include <Mod/Assembly/App/AssemblyUtils.h>
-@@ -206,14 +208,35 @@ bool ViewProviderAssembly::canDragObjectToTarget(App::DocumentObject* obj, App::
+@@ -204,14 +206,35 @@ bool ViewProviderAssembly::canDragObjectToTarget(App::DocumentObject* obj, App::
      }
  
      // Combine the joints and groundedJoints vectors into one for simplicity.
@@ -12102,7 +12105,7 @@ index 4a27e98291..a10408ffcb 100644
          App::DocumentObject* obj1 = getObjFromJointRef(joint, "Reference1");
          App::DocumentObject* obj2 = getObjFromJointRef(joint, "Reference2");
          App::DocumentObject* obj3 = getObjFromProp(joint, "ObjectToGround");
-@@ -275,7 +298,7 @@ void ViewProviderAssembly::updateData(const App::Property* prop)
+@@ -273,7 +296,7 @@ void ViewProviderAssembly::updateData(const App::Property* prop)
                  return;
              }
  
@@ -12111,7 +12114,7 @@ index 4a27e98291..a10408ffcb 100644
              for (auto* joint : joints) {
                  Gui::ViewProvider* jointVp = Gui::Application::Instance->getViewProvider(joint);
                  if (jointVp) {
-@@ -313,6 +336,22 @@ bool ViewProviderAssembly::setEdit(int mode)
+@@ -311,6 +334,22 @@ bool ViewProviderAssembly::setEdit(int mode)
          updateTaskPanel(true);
  
          auto* assembly = getObject<AssemblyObject>();
@@ -12134,7 +12137,7 @@ index 4a27e98291..a10408ffcb 100644
          connectSolverUpdate = assembly->signalSolverUpdate.connect([this] {
              UpdateSolverInformation();
          });
-@@ -346,6 +385,16 @@ void ViewProviderAssembly::unsetEdit(int mode)
+@@ -344,6 +383,16 @@ void ViewProviderAssembly::unsetEdit(int mode)
          partMoving = false;
          docsToMove.clear();
  
@@ -12151,7 +12154,7 @@ index 4a27e98291..a10408ffcb 100644
          unsetDragger();
          detachSelection();
  
-@@ -543,11 +592,33 @@ bool ViewProviderAssembly::tryMouseMove(const SbVec2s& cursorPos, Gui::View3DInv
+@@ -541,11 +590,33 @@ bool ViewProviderAssembly::tryMouseMove(const SbVec2s& cursorPos, Gui::View3DInv
          Base::Rotation asmInvRot
              = App::GeoFeature::getGlobalPlacement(getObject<AssemblyObject>()).getRotation().inverse();
  
@@ -12185,7 +12188,7 @@ index 4a27e98291..a10408ffcb 100644
                  if (ungroundedJointDrag) {
                      plc.setPosition(plc.getPosition() + ungroundedDragTranslation);
                      if (obj != docsToMove[0].obj) {
-@@ -566,8 +637,9 @@ bool ViewProviderAssembly::tryMouseMove(const SbVec2s& cursorPos, Gui::View3DInv
+@@ -564,8 +635,9 @@ bool ViewProviderAssembly::tryMouseMove(const SbVec2s& cursorPos, Gui::View3DInv
                      Base::Rotation zRotation = Base::Rotation(Base::Vector3d(0., 0., 1.), angle);
                      Base::Placement rotatedGlovalJcsPlc = dragJcsGlobalPlc
                          * Base::Placement(Base::Vector3d(), zRotation);
@@ -12197,7 +12200,7 @@ index 4a27e98291..a10408ffcb 100644
                  }
                  else if (dragMode == DragMode::Ball) {
                      Base::Vector3d center = jcsGlobalPlc.getPosition();
-@@ -587,18 +659,21 @@ bool ViewProviderAssembly::tryMouseMove(const SbVec2s& cursorPos, Gui::View3DInv
+@@ -585,18 +657,21 @@ bool ViewProviderAssembly::tryMouseMove(const SbVec2s& cursorPos, Gui::View3DInv
  
                          // Calculate the initial offset of the part relative to the joint
                          // and apply the new global joint placement to find the new part placement.
@@ -12224,7 +12227,7 @@ index 4a27e98291..a10408ffcb 100644
  
                      Base::Placement newJcsGlobalPlc = dragJcsGlobalPlc;
                      newJcsGlobalPlc.setPosition(dragJcsGlobalPlc.getPosition() + delta);
-@@ -616,15 +691,18 @@ bool ViewProviderAssembly::tryMouseMove(const SbVec2s& cursorPos, Gui::View3DInv
+@@ -614,15 +689,18 @@ bool ViewProviderAssembly::tryMouseMove(const SbVec2s& cursorPos, Gui::View3DInv
                      Base::Rotation zRotation = Base::Rotation(Base::Vector3d(0., 0., 1.), angle);
                      Base::Placement rotatedGlovalJcsPlc = newJcsGlobalPlc
                          * Base::Placement(Base::Vector3d(), zRotation);
@@ -12247,7 +12250,7 @@ index 4a27e98291..a10408ffcb 100644
  
                      Base::Vector3d pos = propPlacement->getValue().getPosition() + delta;
                      plc.setPosition(pos);
-@@ -641,8 +719,13 @@ bool ViewProviderAssembly::tryMouseMove(const SbVec2s& cursorPos, Gui::View3DInv
+@@ -639,8 +717,13 @@ bool ViewProviderAssembly::tryMouseMove(const SbVec2s& cursorPos, Gui::View3DInv
          );
          bool solveOnMove = hGrp->GetBool("SolveOnMove", true);
          // HACK: Re-solve assembly to update rigid groups while dragging.
@@ -12262,7 +12265,7 @@ index 4a27e98291..a10408ffcb 100644
                  assemblyPart->solve();
              }
              else {
-@@ -650,7 +733,7 @@ bool ViewProviderAssembly::tryMouseMove(const SbVec2s& cursorPos, Gui::View3DInv
+@@ -648,7 +731,7 @@ bool ViewProviderAssembly::tryMouseMove(const SbVec2s& cursorPos, Gui::View3DInv
              }
          }
          else {
@@ -12271,7 +12274,7 @@ index 4a27e98291..a10408ffcb 100644
          }
      }
      return false;
-@@ -729,29 +812,89 @@ void ViewProviderAssembly::doubleClickedIn3dView()
+@@ -727,29 +810,89 @@ void ViewProviderAssembly::doubleClickedIn3dView()
      }
  }
  
@@ -12367,7 +12370,7 @@ index 4a27e98291..a10408ffcb 100644
                  return true;
              }
          }
-@@ -845,7 +988,12 @@ bool ViewProviderAssembly::getSelectedObjectsWithinAssembly(bool addPreselection
+@@ -843,7 +986,12 @@ bool ViewProviderAssembly::getSelectedObjectsWithinAssembly(bool addPreselection
          App::DocumentObject* selRoot = Gui::Selection().getPreselection().Object.getObject();
          std::string sub = Gui::Selection().getPreselection().pSubName;
  
@@ -12381,7 +12384,7 @@ index 4a27e98291..a10408ffcb 100644
          if (canDragObjectIn3d(obj)) {
  
              bool alreadyIn = false;
-@@ -882,8 +1030,26 @@ void ViewProviderAssembly::collectMovableObjects(
+@@ -880,8 +1028,26 @@ void ViewProviderAssembly::collectMovableObjects(
      auto* assemblyPart = getObject<AssemblyObject>();
  
      // Handling of special case: flexible AssemblyLink
@@ -12409,7 +12412,7 @@ index 4a27e98291..a10408ffcb 100644
          std::vector<App::DocumentObject*> children = asmLink->Group.getValues();
          for (auto* child : children) {
              // Recurse on children, appending the child's name to the subName prefix
-@@ -913,7 +1079,12 @@ void ViewProviderAssembly::collectMovableObjects(
+@@ -911,7 +1077,12 @@ void ViewProviderAssembly::collectMovableObjects(
          return;
      }
  
@@ -12423,7 +12426,7 @@ index 4a27e98291..a10408ffcb 100644
  
      if (onlySolids && assemblyPart->isPartConnected(part)) {
          return;  // No dragger for connected parts.
-@@ -981,7 +1152,41 @@ ViewProviderAssembly::DragMode ViewProviderAssembly::findDragMode()
+@@ -979,7 +1150,41 @@ ViewProviderAssembly::DragMode ViewProviderAssembly::findDragMode()
              addPartsToMove(connectedParts);
          }
  
@@ -12465,7 +12468,7 @@ index 4a27e98291..a10408ffcb 100644
          if (jointType == JointType::Fixed) {
              // If fixed joint we need to find the upstream joint to find move mode.
              // For example : Gnd -(revolute)- A -(fixed)- B : if user try to move B, then we should
-@@ -1028,14 +1233,44 @@ ViewProviderAssembly::DragMode ViewProviderAssembly::findDragMode()
+@@ -1026,14 +1231,44 @@ ViewProviderAssembly::DragMode ViewProviderAssembly::findDragMode()
          if (!ref) {
              return DragMode::Translation;
          }
@@ -12514,7 +12517,7 @@ index 4a27e98291..a10408ffcb 100644
              addPartsToMove(downstreamParts);
          }
  
-@@ -1074,6 +1309,12 @@ void ViewProviderAssembly::initMove(const SbVec2s& cursorPos, Gui::View3DInvento
+@@ -1072,6 +1307,12 @@ void ViewProviderAssembly::initMove(const SbVec2s& cursorPos, Gui::View3DInvento
  
  void ViewProviderAssembly::tryInitMove(const SbVec2s& cursorPos, Gui::View3DInventorViewer* viewer)
  {
@@ -12527,7 +12530,7 @@ index 4a27e98291..a10408ffcb 100644
      dragMode = findDragMode();
      if (dragMode == DragMode::None) {
          return;
-@@ -1082,7 +1323,7 @@ void ViewProviderAssembly::tryInitMove(const SbVec2s& cursorPos, Gui::View3DInve
+@@ -1080,7 +1321,7 @@ void ViewProviderAssembly::tryInitMove(const SbVec2s& cursorPos, Gui::View3DInve
      auto* assemblyPart = getObject<AssemblyObject>();
      // When the user drag parts, we switch off all joints visibility and only show the movingjoint
      jointVisibilitiesBackup.clear();
@@ -12536,7 +12539,7 @@ index 4a27e98291..a10408ffcb 100644
      for (auto* joint : joints) {
          if (!joint) {
              continue;
-@@ -1167,7 +1408,7 @@ void ViewProviderAssembly::tryInitMove(const SbVec2s& cursorPos, Gui::View3DInve
+@@ -1165,7 +1406,7 @@ void ViewProviderAssembly::tryInitMove(const SbVec2s& cursorPos, Gui::View3DInve
          assemblyPart->preDrag(dragParts);
      }
      else {
@@ -12545,7 +12548,7 @@ index 4a27e98291..a10408ffcb 100644
      }
  }
  
-@@ -1368,7 +1609,16 @@ bool ViewProviderAssembly::canDelete(App::DocumentObject* objBeingDeleted) const
+@@ -1366,7 +1607,16 @@ bool ViewProviderAssembly::canDelete(App::DocumentObject* objBeingDeleted) const
                  if (subAsmLink || link) {
                      if (std::ranges::find(objs, obj) == objs.end()) {
                          objs.push_back(obj);
@@ -12563,7 +12566,7 @@ index 4a27e98291..a10408ffcb 100644
                              addSubComponents(subAsmLink, objs);
                          }
                      }
-@@ -1381,17 +1631,40 @@ bool ViewProviderAssembly::canDelete(App::DocumentObject* objBeingDeleted) const
+@@ -1379,17 +1629,40 @@ bool ViewProviderAssembly::canDelete(App::DocumentObject* objBeingDeleted) const
              addSubComponents(asmLink, objsBeingDeleted);
          }
  
@@ -12608,7 +12611,7 @@ index 4a27e98291..a10408ffcb 100644
                      objToDel.push_back(joint);
                  }
              }
-@@ -1399,7 +1672,7 @@ bool ViewProviderAssembly::canDelete(App::DocumentObject* objBeingDeleted) const
+@@ -1397,7 +1670,7 @@ bool ViewProviderAssembly::canDelete(App::DocumentObject* objBeingDeleted) const
              // List its grounded joints
              std::vector<App::DocumentObject*> inList = obj->getInList();
              for (auto* parent : inList) {
@@ -12617,7 +12620,7 @@ index 4a27e98291..a10408ffcb 100644
                      continue;
                  }
  
-@@ -1486,22 +1759,46 @@ void ViewProviderAssembly::applyIsolationRecursively(
+@@ -1484,22 +1757,46 @@ void ViewProviderAssembly::applyIsolationRecursively(
          }
          return;
      }
@@ -12672,7 +12675,7 @@ index 4a27e98291..a10408ffcb 100644
  
      auto* vp = Gui::Application::Instance->getViewProvider(current);
      auto* vpl = dynamic_cast<Gui::ViewProviderLink*>(vp);
-@@ -1589,8 +1886,29 @@ void ViewProviderAssembly::isolateJointReferences(App::DocumentObject* joint, Is
+@@ -1587,8 +1884,29 @@ void ViewProviderAssembly::isolateJointReferences(App::DocumentObject* joint, Is
          return;
      }
  
@@ -12704,7 +12707,7 @@ index 4a27e98291..a10408ffcb 100644
      if (!part1 || !part2) {
          return;
      }
-@@ -1847,6 +2165,22 @@ Base::Vector3d ViewProviderAssembly::getCenterOfBoundingBox(const std::vector<Mo
+@@ -1845,6 +2163,22 @@ Base::Vector3d ViewProviderAssembly::getCenterOfBoundingBox(const std::vector<Mo
      return center;
  }
  
@@ -12727,7 +12730,7 @@ index 4a27e98291..a10408ffcb 100644
  inline QString objListHelper(const AssemblyObject* assembly, const std::vector<std::string>& names)
  {
      if (!assembly) {
-@@ -1856,7 +2190,7 @@ inline QString objListHelper(const AssemblyObject* assembly, const std::vector<s
+@@ -1854,7 +2188,7 @@ inline QString objListHelper(const AssemblyObject* assembly, const std::vector<s
  
      std::vector<App::DocumentObject*> joints;
      for (const auto& name : names) {
@@ -12736,7 +12739,7 @@ index 4a27e98291..a10408ffcb 100644
              joints.push_back(obj);
          }
      }
-@@ -1890,6 +2224,17 @@ void ViewProviderAssembly::UpdateSolverInformation()
+@@ -1888,6 +2222,17 @@ void ViewProviderAssembly::UpdateSolverInformation()
      // Updates Solver Information with the Last solver execution at AssemblyObject level
      auto* assembly = getObject<AssemblyObject>();
  
@@ -12754,7 +12757,7 @@ index 4a27e98291..a10408ffcb 100644
      int dofs = assembly->getLastDoF();
      bool hasRedundancies = assembly->getLastHasRedundancies();
      bool hasMalformed = assembly->getLastHasMalformedConstraints();
-@@ -1905,11 +2250,14 @@ void ViewProviderAssembly::UpdateSolverInformation()
+@@ -1903,11 +2248,14 @@ void ViewProviderAssembly::UpdateSolverInformation()
                      QStringLiteral("(%1)").arg(objListHelper(assembly,
             assembly->getLastConflicting())));*/
          // So for now we report like follows:
@@ -12770,7 +12773,7 @@ index 4a27e98291..a10408ffcb 100644
          );
      }
      else if (hasMalformed) {  // malformed joints
-@@ -1970,13 +2318,25 @@ void ViewProviderAssembly::updateTaskPanel(bool show)
+@@ -1968,13 +2316,25 @@ void ViewProviderAssembly::updateTaskPanel(bool show)
          return;
      }
  
@@ -12799,10 +12802,10 @@ index 4a27e98291..a10408ffcb 100644
      }
  }
 diff --git a/src/Mod/Assembly/Gui/ViewProviderAssemblyLink.cpp b/src/Mod/Assembly/Gui/ViewProviderAssemblyLink.cpp
-index 63038e5360..44205e3e2c 100644
+index 1187af55092..b6f27667aed 100644
 --- a/src/Mod/Assembly/Gui/ViewProviderAssemblyLink.cpp
 +++ b/src/Mod/Assembly/Gui/ViewProviderAssemblyLink.cpp
-@@ -43,6 +43,8 @@
+@@ -41,6 +41,8 @@
  
  #include <Mod/Assembly/App/AssemblyObject.h>
  #include <Mod/Assembly/App/AssemblyLink.h>
@@ -12811,7 +12814,7 @@ index 63038e5360..44205e3e2c 100644
  
  #include "ViewProviderAssembly.h"
  #include "ViewProviderAssemblyLink.h"
-@@ -171,6 +173,20 @@ void ViewProviderAssemblyLink::setupContextMenu(QMenu* menu, QObject* receiver,
+@@ -169,6 +171,20 @@ void ViewProviderAssemblyLink::setupContextMenu(QMenu* menu, QObject* receiver,
              "Rigid = %s",
              assemblyLink->Rigid.getValue() ? "False" : "True"
          );
@@ -12832,7 +12835,7 @@ index 63038e5360..44205e3e2c 100644
  
          getDocument()->commitCommand();
          Gui::Selection().clearSelection();
-@@ -188,3 +204,28 @@ void ViewProviderAssemblyLink::setupContextMenu(QMenu* menu, QObject* receiver,
+@@ -186,3 +202,28 @@ void ViewProviderAssemblyLink::setupContextMenu(QMenu* menu, QObject* receiver,
      Q_UNUSED(receiver)
      Q_UNUSED(member)
  }
@@ -12862,10 +12865,10 @@ index 63038e5360..44205e3e2c 100644
 +    return children;
 +}
 diff --git a/src/Mod/Assembly/Gui/ViewProviderAssemblyLink.h b/src/Mod/Assembly/Gui/ViewProviderAssemblyLink.h
-index 948b806f0f..e790636569 100644
+index d0264e62874..df8c1921229 100644
 --- a/src/Mod/Assembly/Gui/ViewProviderAssemblyLink.h
 +++ b/src/Mod/Assembly/Gui/ViewProviderAssemblyLink.h
-@@ -73,6 +73,16 @@ public:
+@@ -71,6 +71,16 @@ public:
      };
  
      void setupContextMenu(QMenu*, QObject*, const char*) override;
@@ -12883,10 +12886,10 @@ index 948b806f0f..e790636569 100644
  
  }  // namespace AssemblyGui
 diff --git a/src/Mod/Assembly/Init.py b/src/Mod/Assembly/Init.py
-index 350b5238a1..ecf7326bee 100644
+index de243f4966d..132b2dac81b 100644
 --- a/src/Mod/Assembly/Init.py
 +++ b/src/Mod/Assembly/Init.py
-@@ -35,3 +35,10 @@ FreeCAD.__unit_test__ += ["TestAssemblyWorkbench"]
+@@ -33,3 +33,10 @@ FreeCAD.__unit_test__ += ["TestAssemblyWorkbench"]
  # The correct format for assembly interoperability is a research topic. ASMT is a placeholder.
  FreeCAD.addImportType("Assembly Format (*.asmt *.ASMT)", "AssemblyImport")
  # FreeCAD.addExportType()
@@ -12898,10 +12901,10 @@ index 350b5238a1..ecf7326bee 100644
 +AssemblySandboxSaveCheck.install()
 +
 diff --git a/src/Mod/Assembly/InitGui.py b/src/Mod/Assembly/InitGui.py
-index e2ac92c0eb..ec898c019a 100644
+index 850bfd8cda9..9d5fae09dad 100644
 --- a/src/Mod/Assembly/InitGui.py
 +++ b/src/Mod/Assembly/InitGui.py
-@@ -60,6 +60,12 @@ class AssemblyWorkbench(Workbench):
+@@ -58,6 +58,12 @@ class AssemblyWorkbench(Workbench):
  
          # load the builtin modules
          import AssemblyGui
@@ -12914,7 +12917,7 @@ index e2ac92c0eb..ec898c019a 100644
          from PySide import QtCore, QtGui
          from PySide.QtCore import QT_TRANSLATE_NOOP
          import CommandCreateAssembly
-@@ -72,6 +78,8 @@ class AssemblyWorkbench(Workbench):
+@@ -70,6 +76,8 @@ class AssemblyWorkbench(Workbench):
          import CommandCreateSimulation
          import CommandCreateSnapshot
          import CommandCreateBom
@@ -12923,7 +12926,7 @@ index e2ac92c0eb..ec898c019a 100644
          import Preferences
  
          FreeCADGui.addLanguagePath(":/translations")
-@@ -91,6 +99,7 @@ class AssemblyWorkbench(Workbench):
+@@ -89,6 +97,7 @@ class AssemblyWorkbench(Workbench):
              "Assembly_CreateSnapshot",
              "Assembly_CreateSimulation",
              "Assembly_CreateBom",
@@ -12931,7 +12934,7 @@ index e2ac92c0eb..ec898c019a 100644
          ]
  
          cmdListMenuOnly = [
-@@ -113,6 +122,7 @@ class AssemblyWorkbench(Workbench):
+@@ -111,6 +120,7 @@ class AssemblyWorkbench(Workbench):
              "Assembly_CreateJointParallel",
              "Assembly_CreateJointPerpendicular",
              "Assembly_CreateJointAngle",
@@ -12939,7 +12942,7 @@ index e2ac92c0eb..ec898c019a 100644
              "Separator",
              "Assembly_CreateJointRackPinion",
              "Assembly_CreateJointScrew",
-@@ -126,6 +136,12 @@ class AssemblyWorkbench(Workbench):
+@@ -124,6 +134,12 @@ class AssemblyWorkbench(Workbench):
              [QT_TRANSLATE_NOOP("Workbench", "&Assembly")],
              cmdList + cmdListMenuOnly + ["Separator"] + cmdListJoints,
          )
@@ -12952,7 +12955,7 @@ index e2ac92c0eb..ec898c019a 100644
  
      def Activated(self):
          # update the translation engine
-@@ -252,6 +268,8 @@ class AssemblyWorkbench(Workbench):
+@@ -250,6 +266,8 @@ class AssemblyWorkbench(Workbench):
                      "Assembly_CreateJointParallel",
                      "Assembly_CreateJointPerpendicular",
                      "Assembly_CreateJointAngle",
@@ -12962,10 +12965,10 @@ index e2ac92c0eb..ec898c019a 100644
                  self.title = translate("Assembly", "Constraints")
  
 diff --git a/src/Mod/Assembly/JointObject.py b/src/Mod/Assembly/JointObject.py
-index aa338781fe..0583070bda 100644
+index 75e694172b9..4f578b4da3d 100644
 --- a/src/Mod/Assembly/JointObject.py
 +++ b/src/Mod/Assembly/JointObject.py
-@@ -60,6 +60,7 @@ TranslatedJointTypes = [
+@@ -58,6 +58,7 @@ TranslatedJointTypes = [
      translate("Assembly", "Screw"),
      translate("Assembly", "Gears"),
      translate("Assembly", "Belt"),
@@ -12973,7 +12976,7 @@ index aa338781fe..0583070bda 100644
  ]
  
  JointTypes = [
-@@ -76,8 +77,78 @@ JointTypes = [
+@@ -74,8 +75,78 @@ JointTypes = [
      "Screw",
      "Gears",
      "Belt",
@@ -13052,7 +13055,7 @@ index aa338781fe..0583070bda 100644
  JointUsingAngle = [
      "Angle",
  ]
-@@ -88,6 +159,8 @@ JointUsingDistance = [
+@@ -86,6 +157,8 @@ JointUsingDistance = [
      "Screw",
      "Gears",
      "Belt",
@@ -13061,7 +13064,7 @@ index aa338781fe..0583070bda 100644
  ]
  
  JointUsingDistance2 = [
-@@ -143,21 +216,51 @@ JointParallelForbidden = [
+@@ -141,21 +214,51 @@ JointParallelForbidden = [
  ]
  
  
@@ -13117,7 +13120,7 @@ index aa338781fe..0583070bda 100644
          # Get the immediate parent object
          parents = getattr(current, "InList", [])
          current = parents[0] if parents else None
-@@ -760,6 +863,12 @@ class Joint:
+@@ -758,6 +861,12 @@ class Joint:
      def setJointType(self, joint, newType):
          oldType = joint.JointType
          if newType != oldType:
@@ -13130,7 +13133,7 @@ index aa338781fe..0583070bda 100644
              joint.JointType = newType
  
      def onChanged(self, joint, prop):
-@@ -800,7 +909,8 @@ class Joint:
+@@ -798,7 +907,8 @@ class Joint:
              presolved = joint.JointType in JointUsingPreSolve and self.preSolve(joint, False)
  
              assembly = self.getAssembly(joint)
@@ -13140,7 +13143,7 @@ index aa338781fe..0583070bda 100644
              if isAssembly and not presolved:
                  solveIfAllowed(assembly)
              else:
-@@ -839,7 +949,8 @@ class Joint:
+@@ -837,7 +947,8 @@ class Joint:
      def setJointConnectors(self, joint, refs):
          # current selection is a vector of strings like "Assembly.Assembly1.Assembly2.Body.Pad.Edge16" including both what selection return as obj_name and obj_sub
          assembly = self.getAssembly(joint)
@@ -13150,7 +13153,7 @@ index aa338781fe..0583070bda 100644
  
          if len(refs) >= 1:
              joint.Reference1 = refs[0]
-@@ -857,6 +968,8 @@ class Joint:
+@@ -855,6 +966,8 @@ class Joint:
                  self.preSolve(joint)
              elif joint.JointType in JointParallelForbidden:
                  self.preventParallel(joint)
@@ -13159,7 +13162,7 @@ index aa338781fe..0583070bda 100644
  
              if isAssembly:
                  solveIfAllowed(assembly, True)
-@@ -882,7 +995,21 @@ class Joint:
+@@ -880,7 +993,21 @@ class Joint:
      def redrawJointPlacements(self, joint):
          if joint.ViewObject:
              proxy = joint.ViewObject.Proxy
@@ -13182,7 +13185,7 @@ index aa338781fe..0583070bda 100644
                  proxy.redrawJointPlacements(joint)
  
      """
-@@ -910,6 +1037,54 @@ class Joint:
+@@ -908,6 +1035,54 @@ class Joint:
      def flipOnePart(self, joint):
          self.matchJCS(joint, False, True)
  
@@ -13237,7 +13240,7 @@ index aa338781fe..0583070bda 100644
      def preSolve(self, joint, savePlc=True):
          # The goal of this is to put the part in the correct position to avoid wrong placement by the solve.
  
-@@ -929,7 +1104,8 @@ class Joint:
+@@ -927,7 +1102,8 @@ class Joint:
          if not part1 or not part2:
              return False
  
@@ -13247,7 +13250,7 @@ index aa338781fe..0583070bda 100644
          if isAssembly:
              joint.Suppressed = True
              part1Connected = assembly.isPartConnected(part1)
-@@ -974,13 +1150,74 @@ class Joint:
+@@ -972,13 +1148,74 @@ class Joint:
          if not sameDir:
              moving_part_global_jcs = UtilsAssembly.flipPlacement(moving_part_global_jcs)
  
@@ -13323,7 +13326,7 @@ index aa338781fe..0583070bda 100644
      def undoPreSolve(self, joint):
          if hasattr(self, "partsMovedByPresolved") and self.partsMovedByPresolved:
              for part, plc in self.partsMovedByPresolved.items():
-@@ -989,7 +1226,12 @@ class Joint:
+@@ -987,7 +1224,12 @@ class Joint:
              self.partsMovedByPresolved = {}
  
              if joint.ViewObject:
@@ -13337,7 +13340,7 @@ index aa338781fe..0583070bda 100644
  
      def preventParallel(self, joint):
          # Angle and perpendicular joints in the solver cannot handle the situation where both JCS are Parallel
-@@ -1002,7 +1244,8 @@ class Joint:
+@@ -1000,7 +1242,8 @@ class Joint:
          part1 = UtilsAssembly.getMovingPart(joint.Reference1)
          part2 = UtilsAssembly.getMovingPart(joint.Reference2)
  
@@ -13347,7 +13350,7 @@ index aa338781fe..0583070bda 100644
          if isAssembly:
              part1ConnectedByJoint = assembly.isJointConnectingPartToGround(joint, "Reference1")
              part2ConnectedByJoint = assembly.isJointConnectingPartToGround(joint, "Reference2")
-@@ -1041,7 +1284,17 @@ class Joint:
+@@ -1039,7 +1282,17 @@ class Joint:
          # See https://github.com/FreeCAD/FreeCAD/issues/29355 for instance.
          # This function swap the references if possible to avoid those issues.
          assembly = self.getAssembly(joint)
@@ -13366,7 +13369,7 @@ index aa338781fe..0583070bda 100644
              return
  
          part1 = UtilsAssembly.getMovingPart(joint.Reference1)
-@@ -1213,6 +1466,8 @@ class ViewProviderJoint:
+@@ -1211,6 +1464,8 @@ class ViewProviderJoint:
              return ":/icons/Assembly_CreateJointGears.svg"
          elif self.app_obj.JointType == "Belt":
              return ":/icons/Assembly_CreateJointPulleys.svg"
@@ -13375,7 +13378,7 @@ index aa338781fe..0583070bda 100644
  
          return ":/icons/Assembly_CreateJoint.svg"
  
-@@ -1714,7 +1969,15 @@ class MakeJointSelGate:
+@@ -1712,7 +1967,15 @@ class MakeJointSelGate:
                  if parent.isDerivedFrom("App::LocalCoordinateSystem"):
                      datum = parent
  
@@ -13392,7 +13395,7 @@ index aa338781fe..0583070bda 100644
                  # accept only datum that are not attached
                  return datum.MapMode == "Deactivated"
  
-@@ -1778,6 +2041,25 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -1776,6 +2039,25 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
              self.jForm.jointType.hide()
              self.jForm.isolateType.hide()
  
@@ -13418,7 +13421,7 @@ index aa338781fe..0583070bda 100644
          self.jForm.jointType.addItems(TranslatedJointTypes)
  
          self.jForm.jointType.setCurrentIndex(jointTypeIndex)
-@@ -1809,11 +2091,18 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -1807,11 +2089,18 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
              self.createJointObject()
              self.visibilityBackup = False
  
@@ -13442,7 +13445,7 @@ index aa338781fe..0583070bda 100644
          bind = Gui.ExpressionBinding(self.jForm.angleSpinbox).bind(self.joint, "Angle")
          bind = Gui.ExpressionBinding(self.jForm.distanceSpinbox).bind(self.joint, "Distance")
          bind = Gui.ExpressionBinding(self.jForm.distanceSpinbox2).bind(self.joint, "Distance2")
-@@ -1837,10 +2126,12 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -1835,10 +2124,12 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
          self.jForm.limitCheckbox3.stateChanged.connect(self.adaptUi)
          self.jForm.limitCheckbox4.stateChanged.connect(self.adaptUi)
  
@@ -13459,7 +13462,7 @@ index aa338781fe..0583070bda 100644
          bind = Gui.ExpressionBinding(self.jForm.limitLenMinSpinbox).bind(self.joint, "LengthMin")
          bind = Gui.ExpressionBinding(self.jForm.limitLenMaxSpinbox).bind(self.joint, "LengthMax")
          bind = Gui.ExpressionBinding(self.jForm.limitRotMinSpinbox).bind(self.joint, "AngleMin")
-@@ -1890,13 +2181,65 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -1888,13 +2179,65 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
  
          self.assembly.recompute(True)
  
@@ -13525,7 +13528,7 @@ index aa338781fe..0583070bda 100644
          return True
  
      def autoClosedOnTransactionChange(self):
-@@ -1919,6 +2262,25 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -1917,6 +2260,25 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
              self.assembly.ViewObject.MoveOnlyPreselected = False
              self.assembly.ViewObject.MoveInCommand = True
  
@@ -13551,7 +13554,7 @@ index aa338781fe..0583070bda 100644
          Gui.Selection.removeSelectionGate()
          Gui.Selection.removeObserver(self)
          Gui.Selection.setSelectionStyle(Gui.Selection.SelectionStyle.NormalSelection)
-@@ -2036,6 +2398,9 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -2034,6 +2396,9 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
              self.joint.AngleMax = self.jForm.limitRotMaxSpinbox.property("rawValue")
  
      def onReverseClicked(self):
@@ -13561,7 +13564,7 @@ index aa338781fe..0583070bda 100644
          self.joint.Proxy.flipOnePart(self.joint)
  
      def onRotate90Clicked(self):
-@@ -2066,7 +2431,7 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -2064,7 +2429,7 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
          self.jForm.distanceLabel.setVisible(needDistance)
          self.jForm.distanceSpinbox.setVisible(needDistance)
          if needDistance:
@@ -13570,7 +13573,7 @@ index aa338781fe..0583070bda 100644
                  self.jForm.distanceLabel.setText(translate("Assembly", "Distance"))
              elif jType == "Gears" or jType == "Belt":
                  self.jForm.distanceLabel.setText(translate("Assembly", "Radius 1"))
-@@ -2108,8 +2473,9 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -2106,8 +2471,9 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
  
          self.jForm.PushButtonReverse.setVisible(jType in JointUsingReverse)
          self.jForm.PushButtonRotate90.setVisible(jType in JointUsingReverse)
@@ -13581,7 +13584,7 @@ index aa338781fe..0583070bda 100644
          needAngleLimits = jType in JointUsingLimitAngle
          needLimits = needLengthLimits or needAngleLimits
          self.jForm.groupBox_limits.setVisible(needLimits)
-@@ -2154,9 +2520,22 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -2152,9 +2518,22 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
  
          self.blockOffsetRotation = True
          self.jForm.offsetSpinbox.setProperty("rawValue", pos.z)
@@ -13607,7 +13610,7 @@ index aa338781fe..0583070bda 100644
          self.blockOffsetRotation = False
  
      def advancedOffsetToggled(self, on):
-@@ -2246,10 +2625,49 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -2244,10 +2623,49 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
          self.joint.Proxy.setJointConnectors(self.joint, self.refs)
  
          self.updateIsolation()
@@ -13657,7 +13660,7 @@ index aa338781fe..0583070bda 100644
          for ref in self.refs:
  
              sname = UtilsAssembly.getObject(ref).Label
-@@ -2258,13 +2676,40 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -2256,13 +2674,40 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
              if element_name != "":
                  sname = sname + "." + element_name
              simplified_names.append(sname)
@@ -13700,7 +13703,7 @@ index aa338781fe..0583070bda 100644
              if (
                  not self.jForm.limitCheckbox1.isChecked()
                  and self.jForm.limitLenMinSpinbox.property("expression") == ""
-@@ -2426,6 +2871,10 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -2424,6 +2869,10 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
                  # Can't join a solid to itself. So the user need to select 2 different parts.
                  acceptable = False
  
@@ -13711,7 +13714,7 @@ index aa338781fe..0583070bda 100644
          if not acceptable:
              self.addition_rejected = True
              Gui.Selection.removeSelection(doc_name, obj_name, sub_name)
-@@ -2445,6 +2894,37 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -2443,6 +2892,37 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
          # We hide the preview JCS if we just added to the selection
          self.joint.ViewObject.Proxy.showPreviewJCS(False)
  
@@ -13749,7 +13752,7 @@ index aa338781fe..0583070bda 100644
      def removeSelection(self, doc_name, obj_name, sub_name, mousePos=None):
          if self.addition_rejected:
              self.addition_rejected = False
-@@ -2483,5 +2963,19 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
+@@ -2481,5 +2961,19 @@ class TaskAssemblyCreateJoint(QtCore.QObject):
          self.presel_ref = [comp, [new_sub]]
  
      def clearSelection(self, doc_name):
@@ -13770,10 +13773,10 @@ index aa338781fe..0583070bda 100644
          self.refs.clear()
          self.updateJoint()
 diff --git a/src/Mod/Assembly/Preferences.py b/src/Mod/Assembly/Preferences.py
-index 5bb07ccea6..40c7c6232a 100644
+index 708a8e3fc37..e4db29e2cc0 100644
 --- a/src/Mod/Assembly/Preferences.py
 +++ b/src/Mod/Assembly/Preferences.py
-@@ -40,6 +40,10 @@ class PreferencesPage:
+@@ -38,6 +38,10 @@ class PreferencesPage:
          pref.SetBool("LeaveEditWithEscape", self.form.checkBoxEnableEscape.isChecked())
          pref.SetBool("LogSolverDebug", self.form.checkBoxSolverDebug.isChecked())
          pref.SetInt("GroundFirstPart", self.form.groundFirstPart.currentIndex())
@@ -13784,7 +13787,7 @@ index 5bb07ccea6..40c7c6232a 100644
  
      def loadSettings(self):
          pref = preferences()
-@@ -50,3 +54,5 @@ class PreferencesPage:
+@@ -48,3 +52,5 @@ class PreferencesPage:
          self.form.groundFirstPart.addItem(translate("Assembly", "Always"))
          self.form.groundFirstPart.addItem(translate("Assembly", "Never"))
          self.form.groundFirstPart.setCurrentIndex(pref.GetInt("GroundFirstPart", 0))
@@ -13792,7 +13795,7 @@ index 5bb07ccea6..40c7c6232a 100644
 +        self.form.redundancyToleranceAngle.setValue(pref.GetFloat("RedundancyToleranceAngle", 0.01))
 diff --git a/src/Mod/Assembly/SandboxAssemblyMarker.py b/src/Mod/Assembly/SandboxAssemblyMarker.py
 new file mode 100644
-index 0000000000..a4eaf47881
+index 00000000000..a4eaf478819
 --- /dev/null
 +++ b/src/Mod/Assembly/SandboxAssemblyMarker.py
 @@ -0,0 +1,144 @@
@@ -13942,7 +13945,7 @@ index 0000000000..a4eaf47881
 +        setTreeVisible(getattr(obj, "ViewObject", None), visible)
 diff --git a/src/Mod/Assembly/SandboxCompat.py b/src/Mod/Assembly/SandboxCompat.py
 new file mode 100644
-index 0000000000..e7497274dc
+index 00000000000..e7497274dc3
 --- /dev/null
 +++ b/src/Mod/Assembly/SandboxCompat.py
 @@ -0,0 +1,644 @@
@@ -14592,7 +14595,7 @@ index 0000000000..e7497274dc
 +    return "\n".join(html)
 diff --git a/src/Mod/Assembly/SandboxCompatWorker.py b/src/Mod/Assembly/SandboxCompatWorker.py
 new file mode 100644
-index 0000000000..45d5e6674d
+index 00000000000..45d5e6674d4
 --- /dev/null
 +++ b/src/Mod/Assembly/SandboxCompatWorker.py
 @@ -0,0 +1,229 @@
@@ -14826,10 +14829,10 @@ index 0000000000..45d5e6674d
 +
 +run()
 diff --git a/src/Mod/Assembly/SoSwitchMarker.py b/src/Mod/Assembly/SoSwitchMarker.py
-index 841105d295..52a553489c 100644
+index 196a2b58265..b7ab939fe9a 100644
 --- a/src/Mod/Assembly/SoSwitchMarker.py
 +++ b/src/Mod/Assembly/SoSwitchMarker.py
-@@ -145,8 +145,8 @@ class SoSwitchMarker(coin.SoSwitch):
+@@ -143,8 +143,8 @@ class SoSwitchMarker(coin.SoSwitch):
  
      def set_marker_placement(self, placement, ref):
          # change plc to be relative to the origin of the document.
@@ -14841,10 +14844,10 @@ index 841105d295..52a553489c 100644
          t = placement.Base
          self.transform.translation.setValue(t.x, t.y, t.z)
 diff --git a/src/Mod/Assembly/UtilsAssembly.py b/src/Mod/Assembly/UtilsAssembly.py
-index f53a58fce9..2309607f51 100644
+index 90df247dec7..9894b283a98 100644
 --- a/src/Mod/Assembly/UtilsAssembly.py
 +++ b/src/Mod/Assembly/UtilsAssembly.py
-@@ -379,7 +379,12 @@ def getRootPath(obj, part):
+@@ -377,7 +377,12 @@ def getRootPath(obj, part):
  
  # Return the jcs global placement
  def getJcsGlobalPlc(jcsPlc, ref):
@@ -14858,7 +14861,7 @@ index f53a58fce9..2309607f51 100644
      return obj_global_plc * jcsPlc
  
  
-@@ -488,7 +493,7 @@ def findElementClosestVertex(ref, mousePos):
+@@ -486,7 +491,7 @@ def findElementClosestVertex(ref, mousePos):
      # We need mousePos to be in the same lcs as obj
      plc = App.Placement()
      plc.Base = mousePos
@@ -14867,7 +14870,7 @@ index f53a58fce9..2309607f51 100644
      plc = global_plc.inverse() * plc  # We make it relative to obj Origin
      plc = obj.Placement * plc  # Make plc in the same lcs as obj
      mousePos = plc.Base
-@@ -658,6 +663,25 @@ def getJointsOfType(asm, jointTypes):
+@@ -656,6 +661,25 @@ def getJointsOfType(asm, jointTypes):
      return joints
  
  
@@ -14893,7 +14896,7 @@ index f53a58fce9..2309607f51 100644
  def getBomGroup(assembly):
      bom_group = None
  
-@@ -1181,7 +1205,11 @@ def findPlacement(ref, ignoreVertex=False):
+@@ -1179,7 +1203,11 @@ def findPlacement(ref, ignoreVertex=False):
              plc.Rotation = App.Rotation(surface.Rotation)
  
      if useLive:
@@ -14906,7 +14909,7 @@ index f53a58fce9..2309607f51 100644
      else:
          if hasattr(obj, "ExpandArray"):
              # For draft arrays, the Shape has both the array placement and the base placement.
-@@ -1359,6 +1387,22 @@ def getComponentReference(assembly, root_obj, sub_string):
+@@ -1357,6 +1385,22 @@ def getComponentReference(assembly, root_obj, sub_string):
              continue
          if obj.isDerivedFrom("Assembly::AssemblyLink"):
              if hasattr(obj, "Rigid") and not obj.Rigid:
