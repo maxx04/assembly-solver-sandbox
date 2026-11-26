@@ -1020,10 +1020,10 @@ index 1bd8b2b..336f8c8 100644
          DiagMatDsptr qsuWeights;
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/AxisAngleConstraintIqcJqc.cpp b/src/3rdParty/OndselSolver/OndselSolver/AxisAngleConstraintIqcJqc.cpp
 new file mode 100644
-index 0000000..6ea1203
+index 0000000..2aa0a78
 --- /dev/null
 +++ b/src/3rdParty/OndselSolver/OndselSolver/AxisAngleConstraintIqcJqc.cpp
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,56 @@
 +/***************************************************************************
 + *   Copyright (c) 2023 Ondsel, Inc.                                       *
 + *                                                                         *
@@ -1048,6 +1048,12 @@ index 0000000..6ea1203
 +	con->initialize();
 +	con->setConstant(0.0);
 +	return con;
++}
++
++std::shared_ptr<AxisAngleConstraintIqcJqc> MbD::AxisAngleConstraintIqcJqc::AngleAboutZ(EndFrmsptr frmi, EndFrmsptr frmj)
++{
++	// wie AngleZConstraintIqcJqc (cos xI.xJ, sin yI.xJ), aber mit der Form aus AxisAngleIeqcJeqc
++	return With(frmi, frmj, 0, 0, 1, 0, "AngleZConstraintIJ");
 +}
 +
 +std::shared_ptr<AxisAngleConstraintIqcJqc> MbD::AxisAngleConstraintIqcJqc::AngleAboutX(EndFrmsptr frmi, EndFrmsptr frmj)
@@ -1076,10 +1082,10 @@ index 0000000..6ea1203
 +}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/AxisAngleConstraintIqcJqc.h b/src/3rdParty/OndselSolver/OndselSolver/AxisAngleConstraintIqcJqc.h
 new file mode 100644
-index 0000000..48ee838
+index 0000000..bd28b07
 --- /dev/null
 +++ b/src/3rdParty/OndselSolver/OndselSolver/AxisAngleConstraintIqcJqc.h
-@@ -0,0 +1,33 @@
+@@ -0,0 +1,34 @@
 +/***************************************************************************
 + *   Copyright (c) 2023 Ondsel, Inc.                                       *
 + *                                                                         *
@@ -1101,6 +1107,7 @@ index 0000000..48ee838
 +        AxisAngleConstraintIqcJqc(EndFrmsptr frmi, EndFrmsptr frmj, size_t cosI, size_t cosJ, size_t sinI, size_t sinJ, const char* spec);
 +        static std::shared_ptr<AxisAngleConstraintIqcJqc> With(EndFrmsptr frmi, EndFrmsptr frmj, size_t cosI, size_t cosJ, size_t sinI, size_t sinJ, const char* spec);
 +        // Common uses, all with target angle 0.
++        static std::shared_ptr<AxisAngleConstraintIqcJqc> AngleAboutZ(EndFrmsptr frmi, EndFrmsptr frmj);
 +        static std::shared_ptr<AxisAngleConstraintIqcJqc> AngleAboutX(EndFrmsptr frmi, EndFrmsptr frmj);
 +        static std::shared_ptr<AxisAngleConstraintIqcJqc> TiltZAboutX(EndFrmsptr frmi, EndFrmsptr frmj);
 +        static std::shared_ptr<AxisAngleConstraintIqcJqc> TiltZAboutY(EndFrmsptr frmi, EndFrmsptr frmj);
@@ -1251,10 +1258,10 @@ index 0000000..32fbe79
 +}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/AxisAngleIeqcJeqc.cpp b/src/3rdParty/OndselSolver/OndselSolver/AxisAngleIeqcJeqc.cpp
 new file mode 100644
-index 0000000..575e81d
+index 0000000..aee34fd
 --- /dev/null
 +++ b/src/3rdParty/OndselSolver/OndselSolver/AxisAngleIeqcJeqc.cpp
-@@ -0,0 +1,24 @@
+@@ -0,0 +1,76 @@
 +/***************************************************************************
 + *   Copyright (c) 2023 Ondsel, Inc.                                       *
 + *                                                                         *
@@ -1279,12 +1286,64 @@ index 0000000..575e81d
 +	aA00IeJe = CREATE<DirectionCosineIeqcJeqc>::With(frmI, frmJ, cosAxisI, cosAxisJ);
 +	aA10IeJe = CREATE<DirectionCosineIeqcJeqc>::With(frmI, frmJ, sinAxisI, sinAxisJ);
 +}
++
++void MbD::AxisAngleIeqcJeqc::calcPostDynCorrectorIteration()
++{
++	const double c = aA00IeJe->value();
++	const double sv = aA10IeJe->value();
++	if (sv * sv + c * c >= 0.25) {
++		// atan2-Zweig (wie vorher): die Rechnung der Basisklassen, Koeffizienten fuer die
++		// Zeitableitungen merken
++		AngleZIeqcJeqc::calcPostDynCorrectorIteration();
++		fS = cosOverSSq;
++		fC = -sinOverSSq;
++		fCC = twoCosSinOverSSqSq;
++		fSS = -twoCosSinOverSSqSq;
++		fSC = dSqOverSSqSq;
++		return;
++	}
++	const double d = 1.0 + c;
++	thez = 2.0 * sv / d;
++	fS = 2.0 / d;
++	fC = -2.0 * sv / (d * d);
++	fSS = 0.0;
++	fCC = 4.0 * sv / (d * d * d);
++	fSC = -2.0 / (d * d);
++
++	pcthezpEI = aA00IeJe->pvaluepEI();
++	psthezpEI = aA10IeJe->pvaluepEI();
++	auto pcEJ = aA00IeJe->pvaluepEJ();
++	auto psEJ = aA10IeJe->pvaluepEJ();
++	auto ppcII = aA00IeJe->ppvaluepEIpEI();
++	auto ppsII = aA10IeJe->ppvaluepEIpEI();
++	auto ppcIJ = aA00IeJe->ppvaluepEIpEJ();
++	auto ppsIJ = aA10IeJe->ppvaluepEIpEJ();
++	auto ppcJJ = aA00IeJe->ppvaluepEJpEJ();
++	auto ppsJJ = aA10IeJe->ppvaluepEJpEJ();
++	auto second = [&](double ca, double sa, double cb, double sb, double cab, double sab) {
++		return sab * fS + cab * fC + sa * sb * fSS + ca * cb * fCC + (sa * cb + ca * sb) * fSC;
++	};
++	for (size_t i = 0; i < 4; i++) {
++		pthezpEI->atiput(i, psthezpEI->at(i) * fS + pcthezpEI->at(i) * fC);
++		pthezpEJ->atiput(i, psEJ->at(i) * fS + pcEJ->at(i) * fC);
++	}
++	for (size_t i = 0; i < 4; i++) {
++		for (size_t j = 0; j < 4; j++) {
++			ppthezpEIpEI->atijput(i, j, second(pcthezpEI->at(i), psthezpEI->at(i), pcthezpEI->at(j),
++				psthezpEI->at(j), ppcII->at(i)->at(j), ppsII->at(i)->at(j)));
++			ppthezpEIpEJ->atijput(i, j, second(pcthezpEI->at(i), psthezpEI->at(i), pcEJ->at(j),
++				psEJ->at(j), ppcIJ->at(i)->at(j), ppsIJ->at(i)->at(j)));
++			ppthezpEJpEJ->atijput(i, j, second(pcEJ->at(i), psEJ->at(i), pcEJ->at(j), psEJ->at(j),
++				ppcJJ->at(i)->at(j), ppsJJ->at(i)->at(j)));
++		}
++	}
++}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/AxisAngleIeqcJeqc.h b/src/3rdParty/OndselSolver/OndselSolver/AxisAngleIeqcJeqc.h
 new file mode 100644
-index 0000000..2bb85c4
+index 0000000..6aa38d0
 --- /dev/null
 +++ b/src/3rdParty/OndselSolver/OndselSolver/AxisAngleIeqcJeqc.h
-@@ -0,0 +1,28 @@
+@@ -0,0 +1,38 @@
 +/***************************************************************************
 + *   Copyright (c) 2023 Ondsel, Inc.                                       *
 + *                                                                         *
@@ -1306,6 +1365,16 @@ index 0000000..2bb85c4
 +    {
 +    public:
 +        AxisAngleIeqcJeqc(EndFrmsptr frmi, EndFrmsptr frmj, size_t cosI, size_t cosJ, size_t sinI, size_t sinJ);
++        // Sandbox (2026-11-26): Wert f(s, c) statt immer atan2(s, c). atan2 ist bei s = c = 0 (Achse
++        // genau 90 Grad gekippt) unbestimmt: Wert 0 (gilt als erfuellt) und keine Ableitung - der
++        // Loeser strich die Bedingung als redundant (still falsches Ergebnis) oder stuerzte ab.
++        // Nur in dieser Naehe (s^2 + c^2 < 1/4, dort |c| < 1/2) deshalb stereografisch
++        // f = 2s/(1+c): glatt, eindeutig bei 90 Grad, Nenner zwischen 1/2 und 3/2. Sonst wie
++        // bisher atan2 - unveraenderte Ergebnisse ausserhalb der Entartung. Zusammen bleiben die
++        // Gelenke eindeutig: beide Formen eines Gelenks sind nur bei zJ = +zI gleichzeitig null.
++        void calcPostDynCorrectorIteration() override;
++        // Koeffizienten der Kettenregel: df/ds, df/dc, d2f/ds2, d2f/dc2, d2f/dsdc
++        double fS = 0.0, fC = 0.0, fSS = 0.0, fCC = 0.0, fSC = 0.0;
 +
 +        void init_aAijIeJe() override;
 +
@@ -1315,10 +1384,10 @@ index 0000000..2bb85c4
 +}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/AxisAngleIeqctJeqc.cpp b/src/3rdParty/OndselSolver/OndselSolver/AxisAngleIeqctJeqc.cpp
 new file mode 100644
-index 0000000..b9a1d79
+index 0000000..8970afb
 --- /dev/null
 +++ b/src/3rdParty/OndselSolver/OndselSolver/AxisAngleIeqctJeqc.cpp
-@@ -0,0 +1,70 @@
+@@ -0,0 +1,69 @@
 +/***************************************************************************
 + *   Copyright (c) 2023 Ondsel, Inc.                                       *
 + *                                                                         *
@@ -1358,21 +1427,20 @@ index 0000000..b9a1d79
 +	AxisAngleIeqcJeqc::preVelIC();
 +	auto c = std::static_pointer_cast<DirectionCosineIeqctJeqc>(aA00IeJe);
 +	auto s = std::static_pointer_cast<DirectionCosineIeqctJeqc>(aA10IeJe);
-+	pthezpt = s->pvaluept() * cosOverSSq - c->pvaluept() * sinOverSSq;
++	pthezpt = s->pvaluept() * fS + c->pvaluept() * fC;
 +}
 +
 +void MbD::AxisAngleIeqctJeqc::preAccIC()
 +{
-+	// d2(atan2(s, c))/da db = (c s_ab - s c_ab)/S + (c_a c_b - s_a s_b) 2cs/S^2
-+	//                         + (s_a c_b + c_a s_b) (s^2 - c^2)/S^2,  S = c^2 + s^2
++	// d2 f(s, c)/da db = f_s s_ab + f_c c_ab + f_ss s_a s_b + f_cc c_a c_b + f_sc (s_a c_b + c_a s_b)
++	// (Koeffizienten aus AxisAngleIeqcJeqc: atan2 oder stereografisch)
 +	AxisAngleIeqcJeqc::preAccIC();
 +	auto c = std::static_pointer_cast<DirectionCosineIeqctJeqc>(aA00IeJe);
 +	auto s = std::static_pointer_cast<DirectionCosineIeqctJeqc>(aA10IeJe);
 +	const double ct = c->pvaluept();
 +	const double st = s->pvaluept();
 +	auto second = [&](double ca, double sa, double cb, double sb, double cab, double sab) {
-+		return (ca * cb - sa * sb) * twoCosSinOverSSqSq + (sa * cb + ca * sb) * dSqOverSSqSq
-+			+ sab * cosOverSSq - cab * sinOverSSq;
++		return sab * fS + cab * fC + sa * sb * fSS + ca * cb * fCC + (sa * cb + ca * sb) * fSC;
 +	};
 +	auto cEI = c->pvaluepEI();
 +	auto sEI = s->pvaluepEI();
@@ -1386,7 +1454,7 @@ index 0000000..b9a1d79
 +		ppthezpEIpt->atiput(i, second(cEI->at(i), sEI->at(i), ct, st, cEIt->at(i), sEIt->at(i)));
 +		ppthezpEJpt->atiput(i, second(cEJ->at(i), sEJ->at(i), ct, st, cEJt->at(i), sEJt->at(i)));
 +	}
-+	pthezpt = st * cosOverSSq - ct * sinOverSSq;
++	pthezpt = st * fS + ct * fC;
 +	ppthezptpt = second(ct, st, ct, st, c->ppvalueptpt(), s->ppvalueptpt());
 +}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/AxisAngleIeqctJeqc.h b/src/3rdParty/OndselSolver/OndselSolver/AxisAngleIeqctJeqc.h
@@ -2243,7 +2311,7 @@ index ea9e34a..9ad7bae 100644
      }
      else if (freecadAssemblyObject) {
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/FixedJoint.cpp b/src/3rdParty/OndselSolver/OndselSolver/FixedJoint.cpp
-index 2884e80..20afd51 100644
+index 2884e80..cb5e4e6 100644
 --- a/src/3rdParty/OndselSolver/OndselSolver/FixedJoint.cpp
 +++ b/src/3rdParty/OndselSolver/OndselSolver/FixedJoint.cpp
 @@ -9,6 +9,10 @@
@@ -2277,9 +2345,9 @@ index 2884e80..20afd51 100644
 +			// lands on whichever root is closest to the start. zI.xJ = 0 plus the angles of J about
 +			// the z and x axes of I (atan2, continuous) allow only the identity.
 +			addConstraint(CREATE<DirectionCosineConstraintIqcJqc>::ConstraintWith(frmI, frmJ, 2, 0));
-+			auto angleZ = CREATE<AngleZConstraintIqcJqc>::With(frmI, frmJ);
-+			angleZ->setConstant(0.0);
-+			addConstraint(angleZ);
++			// 2026-11-26: AngleAboutZ statt AngleZConstraintIqcJqc - reines atan2 ist bei genau
++			// 90 Grad Kippung unbestimmt (siehe AxisAngleIeqcJeqc).
++			addConstraint(AxisAngleConstraintIqcJqc::AngleAboutZ(frmI, frmJ));
 +			addConstraint(AxisAngleConstraintIqcJqc::AngleAboutX(frmI, frmJ));
 +		}
  		this->root()->hasChanged = true;
@@ -3832,10 +3900,16 @@ index 0000000..1ab2dd3
 +    };
 +}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/PosICNewtonRaphson.cpp b/src/3rdParty/OndselSolver/OndselSolver/PosICNewtonRaphson.cpp
-index 41963a1..55a7a2e 100644
+index 41963a1..12f701e 100644
 --- a/src/3rdParty/OndselSolver/OndselSolver/PosICNewtonRaphson.cpp
 +++ b/src/3rdParty/OndselSolver/OndselSolver/PosICNewtonRaphson.cpp
-@@ -16,7 +16,14 @@
+@@ -11,12 +11,20 @@
+ 
+ #include "PosICNewtonRaphson.h"
+ #include "SingularMatrixError.h"
++#include "SimulationStoppingError.h"
+ #include "SystemSolver.h"
+ #include "Part.h"
  #include "Constraint.h"
  #include "CREATE.h"
  #include "GESpMatParPvPrecise.h"
@@ -3850,7 +3924,23 @@ index 41963a1..55a7a2e 100644
  
  using namespace MbD;
  
-@@ -96,7 +103,8 @@ void PosICNewtonRaphson::assignEquationNumbers()
+@@ -34,6 +42,15 @@ void PosICNewtonRaphson::run()
+ 		}
+ 		catch (const SingularMatrixError& ex) {
+ 			auto redundantEqnNos = ex.getRedundantEqnNos();
++			// Sandbox (2026-11-26): eine Nullzeile der Jacobi-Matrix (Bedingung ohne Ableitung)
++			// meldet der Loeser OHNE Gleichungsliste - vorher Nullzeiger in
++			// PartFrame::removeRedundantConstraints() und Absturz (FreeCADMbD-Beispiel
++			// mateproblembobcat). Jetzt ein sauberer Abbruch mit Meldung.
++			if (!redundantEqnNos) {
++				throw SimulationStoppingError(
++					"Singular matrix without identifiable redundant equations (a constraint has no "
++					"derivative in the current position).");
++			}
+ 			system->partsJointsMotionsDo([&](std::shared_ptr<Item> item) { item->removeRedundantConstraints(redundantEqnNos); });
+ 			system->partsJointsMotionsDo([&](std::shared_ptr<Item> item) { item->constraintsReport(); });
+ 			system->partsJointsMotionsDo([&](std::shared_ptr<Item> item) { item->setqsu(qsuOld); });
+@@ -96,7 +113,8 @@ void PosICNewtonRaphson::assignEquationNumbers()
  
  bool PosICNewtonRaphson::isConverged()
  {
@@ -3860,7 +3950,7 @@ index 41963a1..55a7a2e 100644
  }
  
  void PosICNewtonRaphson::handleSingularMatrix()
-@@ -127,11 +135,310 @@ void PosICNewtonRaphson::handleSingularMatrix()
+@@ -127,11 +145,310 @@ void PosICNewtonRaphson::handleSingularMatrix()
  	}
  }
  
@@ -5230,7 +5320,7 @@ index 0000000..2e0a598
 +	};
 +}
 diff --git a/src/3rdParty/OndselSolver/OndselSolver/TranslationalJoint.cpp b/src/3rdParty/OndselSolver/OndselSolver/TranslationalJoint.cpp
-index f4af4cc..fe63f9e 100644
+index f4af4cc..92b6aba 100644
 --- a/src/3rdParty/OndselSolver/OndselSolver/TranslationalJoint.cpp
 +++ b/src/3rdParty/OndselSolver/OndselSolver/TranslationalJoint.cpp
 @@ -11,6 +11,10 @@
@@ -5262,9 +5352,9 @@ index f4af4cc..fe63f9e 100644
 +			// Unique relative rotation, as in FixedJoint (FreeCAD issue #32477): the three direction
 +			// cosines also allow 180 degree turns about x, y or z.
 +			addConstraint(CREATE<DirectionCosineConstraintIqcJqc>::ConstraintWith(frmI, frmJ, 2, 0));
-+			auto angleZ = CREATE<AngleZConstraintIqcJqc>::With(frmI, frmJ);
-+			angleZ->setConstant(0.0);
-+			addConstraint(angleZ);
++			// 2026-11-26: AngleAboutZ statt AngleZConstraintIqcJqc - reines atan2 ist bei genau
++			// 90 Grad Kippung unbestimmt (siehe AxisAngleIeqcJeqc).
++			addConstraint(AxisAngleConstraintIqcJqc::AngleAboutZ(frmI, frmJ));
 +			addConstraint(AxisAngleConstraintIqcJqc::AngleAboutX(frmI, frmJ));
 +		}
  		this->root()->hasChanged = true;

@@ -181,6 +181,10 @@
 # Seit 2026-11-22: Tangent-Abstand (TangentContact::target, NurbsPointOnCurveConstraintIqcJqc
 # offset/sided, EndFrameqcCurve planeNormal/radial, ASMT-Feld offset) und Grenzen entlang der Kurve
 # (NurbsCurve::arcLength()/parameterAtLength(), ASMTNurbsPointOnCurveJoint lengthMin/lengthMax).
+# Seit 2026-11-26: AxisAngleIeqcJeqc stereografisch in der Naehe der 90-Grad-Entartung von atan2
+# (allgemeine Kettenregel-Koeffizienten, auch AxisAngleIeqctJeqc), AxisAngleConstraintIqcJqc::
+# AngleAboutZ fuer Fixed/Translational; PosICNewtonRaphson::run() faengt SingularMatrixError ohne
+# Gleichungsliste ab (vorher Nullzeiger/Absturz).
 2026.10.11-ondselsolver-redundancy-groups.patch
 
 # Build-Baum-Patches aus dem Dev-Build (/home/maxx/freecad/freecad-source), seit 2026-10-27 aktiv

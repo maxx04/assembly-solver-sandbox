@@ -394,6 +394,29 @@ Statt Bündeln (§2.1c) wird die Mehrdeutigkeit dort beseitigt, wo sie entsteht:
     / `setqsulam()`: Euler-Parameter nach jedem Newton-Schritt auf |e| = 1 projizieren (wirkt in
     jedem Solve, Testreihe unverändert grün). Test `test_planar_parallel_sweep_flat`: 4 Achsen ×
     11 Winkel × Seitenreihenfolge × {Abstand, Parallel} = 176 Fälle, vorher 37 Fehler, jetzt 0.
+  - **Entartung bei 90 Grad (2026-11-26):** die Winkel der eindeutigen Gelenke (Kippwinkel von zJ,
+    Winkel um X und - seit diesem Datum ebenfalls ueber `AxisAngleConstraintIqcJqc::AngleAboutZ`
+    statt `AngleZConstraintIqcJqc` - um Z bei Fixed/Translational) waren `atan2(s, c)` zweier
+    Richtungskosinusse. Steht die Achse genau 90 Grad gekippt (s = c = 0), ist der Wert 0 - die
+    Bedingung gilt als erfuellt - und sie hat keine Ableitung. Folge: der Loeser strich sie als
+    redundant und das Gelenk blieb **still verletzt** (rc = 0; Probe 6 Gelenktypen x 5
+    Startdrehungen: 10 von 30 falsch), ausserhalb von FreeCAD eine Nullzeile in der Jacobi-Matrix
+    und Absturz (FreeCADMbD-Beispiel mateproblembobcat). `AxisAngleIeqcJeqc` rechnet deshalb fuer
+    s^2 + c^2 < 1/4 stereografisch f = 2s/(1+c) (glatt, Nenner 1/2..3/2, nahe 0 = Winkel im
+    Bogenmass), sonst unveraendert atan2; die Kettenregel laeuft ueber allgemeine Koeffizienten
+    f_s, f_c, f_ss, f_cc, f_sc (auch in der zeitabhaengigen Variante). Beide Formen eines Gelenks
+    sind nur bei zJ = +zI zugleich null - die Eindeutigkeit bleibt. Jetzt 29 von 30
+    (`test_tilt90_start_flat`); bekannt offen: Revolute aus 120 Grad um (1,1,1) mit 25 mm Abstand,
+    Newton divergiert im Zusammenspiel mit der Euler-Normierung (ohne sie loest er). In der
+    Oberflaeche richtet `preSolve()` beim Anlegen vorher aus.
+  - **Absturzschutz:** eine `SingularMatrixError` ohne Gleichungsliste (Nullzeile) fuehrte in
+    `PosICNewtonRaphson::run()` zu `removeRedundantConstraints(nullptr)` und Absturz; jetzt
+    `SimulationStoppingError` mit Meldung.
+  - **Fremde ASMT-Dateien:** Dateien aus dem Original-OndselSolver duerfen Gelenke gegensinnig
+    (zI.zJ = -1) verwenden; mit den eindeutigen Gelenken ist das eine andere Bedeutung, in
+    geschlossenen Ketten unloesbar (FreeCADMbD-Beispiele Schmidt-Kupplung, Backhoe) - gewollt
+    (#32477), FreeCAD selbst waehlt die Seite per `jointVariant()`. Vergleich:
+    `/home/maxx/Dokumente/FreeCAD-Development/mbd-vergleich/ERGEBNIS.md`.
   - C8 setzt das Anlegen durch: `JointObject.preSolveFlush()` (in `setJointConnectors()` für
     Abstand Ebene-Ebene und Parallel) klappt das bewegliche Teil um 180 Grad um die X-Achse
     seiner JCS, wenn es auf der Gegenseite, aber nicht sauber gegeneinander (über 10 Grad) steht -
